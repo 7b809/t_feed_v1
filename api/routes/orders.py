@@ -12,7 +12,6 @@ from core.config import (
     ORDERS_DATA_DIR,
 )
 from core.logger import get_logger
-from core.token_service import fetch_access_token
 from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderRequest
 from repositories.order_repository import OrderRepository
 from services.order_service import OrderService, OrderServiceError, TradingDisabledError
