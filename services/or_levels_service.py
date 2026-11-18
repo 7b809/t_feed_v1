@@ -45,11 +45,38 @@ class ORLevelsService:
 
         existing = self._load_from_mongo()
         if existing and existing.get("trade_date_ist") == today:
-            logger.info(
-                "OR levels present in Mongo for %s; using existing", today
+            existing_indexes = existing.get("indexes") or {}
+            missing_keys = [key for key in INSTRUMENT_KEYS if key not in existing_indexes]
+            if not missing_keys:
+                logger.info(
+                    "OR levels present in Mongo for %s; all %d indexes are available",
+                    today, len(existing_indexes),
+                )
+                self._save_local(existing)
+                return existing
+
+            logger.warning(
+                "Today's pivot_levels is incomplete; attempting repair for %d index(es): %s",
+                len(missing_keys), missing_keys,
             )
-            self._save_local(existing)
-            return existing
+            repaired = self._compute_fresh(today)
+            merged = dict(existing)
+            merged_indexes = dict(existing_indexes)
+            merged_indexes.update(repaired.get("indexes") or {})
+            merged["indexes"] = merged_indexes
+            merged["computed_at"] = repaired.get("computed_at")
+            merged["updated_at"] = repaired.get("updated_at")
+            merged["trigger"] = "missing_index_repair"
+            if all(key in merged_indexes for key in INSTRUMENT_KEYS):
+                self._save_mongo(merged)
+                self._save_local(merged)
+                logger.info("Today's pivot_levels repaired with all %d indexes", len(merged_indexes))
+                return merged
+
+            still_missing = [key for key in INSTRUMENT_KEYS if key not in merged_indexes]
+            logger.error("OR levels remain incomplete after repair; missing=%s", still_missing)
+            self._save_local(merged)
+            return merged
 
         if existing:
             logger.warning(
