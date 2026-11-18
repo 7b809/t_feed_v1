@@ -1,6 +1,7 @@
 """Environment-backed configuration for the Upstox order sandbox service."""
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -24,7 +25,25 @@ TOKEN_DOC_ID = os.getenv("TOKEN_DOC_ID", "upstox_access_token")
 ORDERS_COLLECTION = os.getenv("ORDERS_COLLECTION", "sandbox_orders")
 
 # Upstox SDK and trade-safety controls.
-UPSTOX_API_VERSION = os.getenv("UPSTOX_API_VERSION", "2.0")
+# UPSTOX_API_VERSION must be "1.0" or "2.0". An empty value from .env
+# (e.g. a line `UPSTOX_API_VERSION=` with nothing after the '=') is
+# silently returned by os.getenv as "" rather than falling back to the
+# default; the Upstox SDK then raises ValueError from UserApi.get_profile
+# before any HTTP request is made. Sanitize here so the rest of the app
+# can trust the value.
+_RAW_UPSTOX_API_VERSION = (os.getenv("UPSTOX_API_VERSION") or "2.0").strip()
+if _RAW_UPSTOX_API_VERSION not in {"1.0", "2.0"}:
+    # Logging before core.logger is importable (circular import) — use the
+    # standard library logger so the warning at least reaches stderr if
+    # anything is configured.
+    logging.getLogger(__name__).warning(
+        "Invalid UPSTOX_API_VERSION=%r in .env; falling back to '2.0' "
+        "(valid values: '1.0', '2.0')",
+        _RAW_UPSTOX_API_VERSION,
+    )
+    _RAW_UPSTOX_API_VERSION = "2.0"
+UPSTOX_API_VERSION = _RAW_UPSTOX_API_VERSION
+
 UPSTOX_SANDBOX = env_bool("UPSTOX_SANDBOX", True)
 TRADING_ENABLED = env_bool("TRADING_ENABLED", False)
 DEFAULT_ORDER_QUANTITY = int(os.getenv("DEFAULT_ORDER_QUANTITY", "65"))
@@ -47,11 +66,7 @@ ENABLE_IP_BINDING = env_bool("ENABLE_IP_BINDING", False)
 BIND_IP = os.getenv("BIND_IP", "127.0.0.1").strip()
 API_HOST = BIND_IP if ENABLE_IP_BINDING else "0.0.0.0"
 
-# Port is controlled by API_PORT (the documented name in .env.example and
-# README). APP_PORT is accepted as a backward-compatible alias so that existing
-# .env files written for start.sh / run.bat keep working. Precedence:
-#   API_PORT  >  APP_PORT  >  8004
-# start.sh and run.bat must read the same precedence; update them together.
+# Port precedence: API_PORT > APP_PORT > 8004.
 API_PORT = int(
     os.getenv("API_PORT", os.getenv("APP_PORT", "8004"))
 )
@@ -88,10 +103,6 @@ UPSTOX_INSTRUMENT_CACHE_MAX_STALE_SECONDS = max(
 )
 
 # Periodic Upstox token validation.
-# Loads the token from MongoDB and validates it via Upstox UserApi.get_profile
-# every TOKEN_CHECK_INTERVAL_MINUTES minutes. Emits a log line on every check,
-# and a Telegram alert only on valid<->invalid transitions (or invalid at
-# startup). The interval is clamped to >= 1 to guard against typo'd values.
 TOKEN_CHECK_ENABLED = env_bool("TOKEN_CHECK_ENABLED", True)
 TOKEN_CHECK_INTERVAL_MINUTES = max(
     1, int(os.getenv("TOKEN_CHECK_INTERVAL_MINUTES", "30"))
