@@ -113,6 +113,7 @@ class OptionChainCaptureService:
         self._active_date: str | None = None
         self._contract_meta: dict[str, dict] = {}
         self._subscribed: set[str] = set()
+        self._owned_subscriptions: set[str] = set()
         self._processed_indexes: set[str] = set()
         self._last_summary: dict = {}
         self._write_queue: queue.Queue = queue.Queue(
@@ -233,6 +234,7 @@ class OptionChainCaptureService:
             new_meta = {row["instrument_key"]: row for row in all_contracts}
             keys = list(new_meta)
             subscribed = set()
+            owned_subscriptions = set()
             # Subscribe in bounded chunks so one oversized request does not
             # prevent other selected contracts from being added.
             for offset in range(0, len(keys), 100):
@@ -240,12 +242,15 @@ class OptionChainCaptureService:
                 present = set(feed.instrument_keys)
                 to_add = [key for key in batch if key not in present]
                 if to_add:
-                    subscribed.update(feed.subscribe(to_add))
+                    newly_added = set(feed.subscribe(to_add))
+                    subscribed.update(newly_added)
+                    owned_subscriptions.update(newly_added)
                 subscribed.update(key for key in batch if key in feed.instrument_keys)
 
             with self._lock:
                 self._contract_meta.update(new_meta)
                 self._subscribed.update(subscribed)
+                self._owned_subscriptions.update(owned_subscriptions)
                 self._last_summary = {
                     "enabled": True,
                     "state": "running" if self._contract_meta.keys() <= self._subscribed else "partially_subscribed",
@@ -268,7 +273,9 @@ class OptionChainCaptureService:
             return {"enabled": True, "state": "error"}
 
     def _roll_date(self, date_key: str, feed) -> None:
-        old = set(self._subscribed)
+        # Only unsubscribe keys this service added. A selected contract may
+        # already be used by the isolation legs or another feed consumer.
+        old = set(self._owned_subscriptions)
         if old:
             try:
                 feed.unsubscribe(list(old))
@@ -277,6 +284,7 @@ class OptionChainCaptureService:
         self._active_date = date_key
         self._contract_meta.clear()
         self._subscribed.clear()
+        self._owned_subscriptions.clear()
         self._processed_indexes.clear()
         self._last_summary = {"enabled": True, "state": "preparing", "trade_date_ist": date_key}
 
