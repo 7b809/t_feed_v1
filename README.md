@@ -36,6 +36,18 @@ The dashboard order-entry workflow is BUY-only. The API model also rejects SELL 
 4. Run `./start.sh` on Linux or `run.bat` on Windows.
 5. Open the service at port 8004.
 
+## Telegram notifications
+
+Telegram uses the same environment-variable pattern as the isolation project:
+
+- `TELEGRAM_ENABLED=true` enables the notification pipeline (default true).
+- `TELEGRAM_BOT_TOKEN` is the bot token from BotFather.
+- `TELEGRAM_CHAT_ID` is the destination chat or group ID.
+
+Set the credentials in the server's private `.env` file; never commit real credentials. If the token or chat ID is missing, notifications are skipped. Telegram HTTP/network errors are logged and never interrupt order execution.
+
+Events include service startup/shutdown, successful and blocked/failed order placement, cancellation, individual exit, exit-all, and project update progress/failures.
+
 ## Order history APIs
 
 - `GET /api/v1/orders/today`
