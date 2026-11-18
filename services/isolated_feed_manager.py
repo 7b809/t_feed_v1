@@ -139,10 +139,10 @@ class IsolatedFeedManager:
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
                     connected_at = _now().isoformat()
                     self._status[task_key] = {"state": "connected", "file": str(path), "connected_at": connected_at}
-                    from services.isolation_telegram_service import notify_runtime_event
-                    await asyncio.to_thread(notify_runtime_event,
-                        f"{indicator.upper()} FEED CONNECTED",
-                        f"{symbol} · {role} leg · {connected_at}", "🟢")
+                    logger.info(
+                        "%s feed connected | role=%s | instrument=%s | at=%s",
+                        indicator.upper(), role, symbol, connected_at,
+                    )
                     backoff = 1
                     async for raw in ws:
                         received_at = _now().isoformat()
@@ -185,11 +185,11 @@ class IsolatedFeedManager:
                 self._status[task_key] = {"state": "reconnecting", "file": str(path), "error": str(exc)}
                 logger.warning("%s WS error role=%s key=%s: %s; retry=%ss",
                                indicator.upper(), role, key, exc, backoff)
-                from services.isolation_telegram_service import notify_runtime_event
                 if backoff == 1:
-                    await asyncio.to_thread(notify_runtime_event,
-                        f"{indicator.upper()} FEED INTERRUPTED",
-                        f"{symbol} · {role} leg · {type(exc).__name__}: {exc}", "⚠️")
+                    logger.warning(
+                        "%s feed interrupted | role=%s | instrument=%s | error=%s",
+                        indicator.upper(), role, symbol, exc,
+                    )
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, int(os.getenv("ISOLATED_WS_MAX_BACKOFF_SECONDS", "30")))
 
