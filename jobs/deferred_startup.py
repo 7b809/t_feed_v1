@@ -50,6 +50,12 @@ def run_deferred_startup_sequence() -> None:
     except Exception:
         logger.exception("[STARTUP-GATE] Deferred backfill failed.")
 
+    try:
+        from main import _restore_isolation_capture
+        _restore_isolation_capture()
+    except Exception:
+        logger.exception("[STARTUP-GATE] Isolation capture restore failed.")
+
     logger.warning(
         "[STARTUP-GATE] Deferred startup sequence fully complete."
     )
