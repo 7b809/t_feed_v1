@@ -16,6 +16,20 @@ The browser calls `GET /api/v1/instruments/search?query=NIFTY&records=20`. The s
 
 Search supports Upstox's `query`, `exchanges`, `segments`, `instrument_types`, `expiry`, `page_number` and `records` parameters. Results are capped at 30 by Upstox.
 
+## Instrument search reliability and Cloudflare blocks
+
+Instrument search uses the Python `requests` HTTP client with a configurable, descriptive application User-Agent (`UPSTOX_USER_AGENT`) and bounded connect/read timeouts. It does not spoof a browser User-Agent.
+
+Successful Upstox search responses are cached as JSON under `data/instruments/search_cache/`, keyed by the complete search parameter set. If the upstream API is unavailable, the service can return the last cached response up to `UPSTOX_INSTRUMENT_CACHE_MAX_STALE_SECONDS` old. Responses include a `cache` object indicating whether results came from Upstox or the local cache and whether the result is stale. Cache files are runtime data under `DATA_DIR` and are included in the existing daily data backup.
+
+Cloudflare Error 1010 (`browser_signature_banned`) is treated as a non-retryable upstream access block. The service logs the Cloudflare Ray ID and returns a structured error when no usable cache entry exists; it does not repeatedly retry or disguise the client. This error requires Upstox/API-owner review. Share the Ray ID, timestamp, and the server's actual outbound public IP with Upstox support. A cached result may still be served when available.
+
+Settings:
+- `UPSTOX_USER_AGENT=sandbox_v1/1.0 (Upstox instrument-search integration)`
+- `UPSTOX_HTTP_TIMEOUT_SECONDS=12`
+- `UPSTOX_INSTRUMENT_CACHE_ENABLED=true`
+- `UPSTOX_INSTRUMENT_CACHE_MAX_STALE_SECONDS=604800` (7 days)
+
 ## Defaults and safety
 
 - API port: **8004**
