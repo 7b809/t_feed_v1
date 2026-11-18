@@ -48,6 +48,22 @@ Set the credentials in the server's private `.env` file; never commit real crede
 
 Events include service startup/shutdown, successful and blocked/failed order placement, cancellation, individual exit, exit-all, and project update progress/failures.
 
+## Daily MEGA data backup
+
+The service mirrors the daily data backup flow used by `isolation_v1`. It ZIPs the complete `data/` directory (including `data/orders/YYYY-MM-DD.json` ledgers), verifies the ZIP, calculates SHA-256, uploads it to MEGA and records the result in MongoDB collection `daily_data_backup_state`. The temporary ZIP is removed after upload.
+
+Default schedule: weekdays at **16:05 Asia/Kolkata**. Remote archive naming is `sandbox_v1/YYYYMMDD_data.zip`; configure a different remote folder with `MEGA_BACKUP_ROOT`. Backup staging defaults to `./backups`, outside `DATA_DIR`, and is git-ignored.
+
+Required private `.env` settings: `DAILY_DATA_BACKUP_ENABLED=true`, `MEGA_ENABLED=true`, `MEGA_EMAIL`, `MEGA_PASSWORD`, and `MEGA_BACKUP_ROOT=sandbox_v1`. Configure the schedule with `DAILY_DATA_BACKUP_HOUR`, `DAILY_DATA_BACKUP_MINUTE`, and `DAILY_DATA_BACKUP_DAYS`.
+
+Backup endpoints:
+
+- `GET /api/v1/backups/mega/status` — configuration, next run and latest result
+- `GET /api/v1/backups/mega/history?limit=30` — recent daily backup records
+- `POST /api/v1/backups/mega/run` — trigger a manual full `data/` backup
+
+Telegram notifications report backup start, completion and failure when Telegram is configured. Missing MEGA credentials do not prevent the order service from starting.
+
 ## Order history APIs
 
 - `GET /api/v1/orders/today`
