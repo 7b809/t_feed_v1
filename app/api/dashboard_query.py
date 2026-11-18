@@ -150,15 +150,15 @@ def _flatten_orders(states: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for state in states or []:
         isolation_id = state.get("isolation_id")
         for order in state.get("order_history") or []:
-            if isinstance(order, dict):
+            if isinstance(order, dict) and "SUPERTREND" in str(order.get("indicator") or order.get("strategy") or "").upper():
                 item = {**order, "isolation_id": isolation_id or order.get("isolation_id")}
-                item["strategy"] = str(item.get("indicator") or item.get("strategy") or "unknown").upper()
+                item["strategy"] = "SUPERTREND"
                 identity = str(item.get("order_id") or f"{isolation_id}:{item['strategy']}:{item.get('entry_time_ist')}")
                 flattened[identity] = item
         for indicator, order in (state.get("orders") or {}).items():
-            if isinstance(order, dict):
+            if indicator == "supertrend" and isinstance(order, dict):
                 item = {**order, "isolation_id": isolation_id or order.get("isolation_id")}
-                item["strategy"] = str(item.get("indicator") or indicator or "unknown").upper()
+                item["strategy"] = "SUPERTREND"
                 identity = str(item.get("order_id") or f"{isolation_id}:{indicator}:{item.get('entry_time_ist')}")
                 flattened[identity] = item
     result = list(flattened.values())
