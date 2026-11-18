@@ -166,7 +166,7 @@ class OptionChainCaptureService:
             configuration = upstox_client.Configuration()
             configuration.access_token = token
             api = upstox_client.OptionsApi(upstox_client.ApiClient(configuration))
-            pivot_doc = self._load_pivot_document()
+            pivot_doc = self._load_pivot_document(token)
             index_docs = pivot_doc.get("indexes") or {}
             with self._lock:
                 all_contracts: list[dict] = list(self._contract_meta.values())
@@ -280,7 +280,7 @@ class OptionChainCaptureService:
         self._processed_indexes.clear()
         self._last_summary = {"enabled": True, "state": "preparing", "trade_date_ist": date_key}
 
-    def _load_pivot_document(self) -> dict:
+    def _load_pivot_document(self, access_token: str) -> dict:
         from core.config import PIVOT_DOC_ID, PROJECT_INFO_COLLECTION
         from core.mongo_client import get_mongo_db
         today = datetime.now(IST).date().isoformat()
@@ -304,6 +304,23 @@ class OptionChainCaptureService:
 
         if doc is None:
             raise RuntimeError("Today's pivot_levels document is not available")
+
+        missing_indexes = [
+            key for key in INSTRUMENT_KEYS
+            if key not in (doc.get("indexes") or {})
+        ]
+        if missing_indexes:
+            logger.warning(
+                "Option-chain capture found missing pivot indexes; requesting OR-level repair: %s",
+                missing_indexes,
+            )
+            try:
+                from services.or_levels_service import ORLevelsService
+                repaired = ORLevelsService(access_token).ensure_or_levels()
+                if repaired and repaired.get("trade_date_ist") == today:
+                    doc = repaired
+            except Exception:
+                logger.exception("Automatic same-day OR-level repair failed")
         return doc
 
     def _write_manifests(self, contracts: list[dict], pivot_doc: dict, skipped: list) -> None:
