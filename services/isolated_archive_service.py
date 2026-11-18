@@ -107,7 +107,10 @@ class IsolatedArchiveService:
         if not path.is_file():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            document = json.loads(path.read_text(encoding="utf-8"))
+            if document.get("trade_date_ist") != datetime.now(IST).date().isoformat():
+                return None
+            return document
         except Exception:
             logger.exception("Could not load isolation archive %s", path)
             return None
