@@ -5,3 +5,4 @@ apscheduler
 python-dotenv
 uvicorn[standard]
 fastapi
+websockets>=12.0
