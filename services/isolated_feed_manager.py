@@ -167,6 +167,9 @@ class IsolatedFeedManager:
                         event = payload.get("event")
                         if event in ("connection_ack", "snapshot", "sr_update", "supertrend_signal"):
                             logger.info("%s WS event=%s role=%s symbol=%s", indicator.upper(), event, role, symbol)
+                        if event == "supertrend_signal" or (indicator == "sr" and event == "sr_update"):
+                            from services.isolation_telegram_service import notify_indicator_event
+                            await asyncio.to_thread(notify_indicator_event, indicator, payload, symbol, role)
                         self._status[task_key] = {
                             "state": "connected", "file": str(path), "last_event": event,
                             "last_frame_at": received_at,
