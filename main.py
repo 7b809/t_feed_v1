@@ -75,8 +75,8 @@ from services.isolated_feed_manager import (
     start_isolated_feeds, get_isolated_feed_status, stop_isolated_feeds,
 )
 from services.isolation_telegram_service import notify_runtime_event
-from services.option_chain_capture_service import (
-    get_option_chain_capture_status, stop_option_chain_capture,
+from services.isolated_live_feed_capture_service import (
+    start_isolated_live_feed, get_isolated_live_feed_status, stop_isolated_live_feed,
 )
 from services.log_file_service import (
     DEFAULT_TAIL_LINES,
@@ -99,6 +99,15 @@ async def lifespan(app: FastAPI):
     global _scheduler, _startup_mode, _startup_cutoff_iso
 
     logger.info("Project starting…")
+
+    # Mandatory runtime cleanup runs before daily refresh/backfill. This is
+    # deliberately independent of the deferred market-startup gate.
+    try:
+        from services.daily_startup_cleanup_service import run_daily_startup_cleanup
+        cleanup_result = run_daily_startup_cleanup()
+        logger.info("Startup cleanup state: %s", cleanup_result.get("state"))
+    except Exception:
+        logger.exception("Daily startup cleanup failed; continuing with isolation startup")
 
     # ------------------------------------------------------------------ #
     # TEST_FLAG visibility line — printed exactly once, on every startup.
@@ -205,9 +214,9 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down…")
 
     try:
-        stop_option_chain_capture()
+        stop_isolated_live_feed()
     except Exception:
-        logger.exception("Option-chain capture shutdown failed")
+        logger.exception("Isolated live-feed capture shutdown failed")
 
     try:
         stop_isolated_feeds()
@@ -260,7 +269,7 @@ def health():
     return {
         "status": "ok",
         "isolated_feeds": get_isolated_feed_status(),
-        "option_chain_capture": get_option_chain_capture_status(),
+        "isolated_live_feed": get_isolated_live_feed_status(),
     }
 
 
@@ -280,6 +289,7 @@ def _restore_isolation_capture() -> None:
                 and record.get("instrument_key")):
             if not archive:
                 IsolatedArchiveService().save_isolation(record)
+            start_isolated_live_feed(record)
             start_isolated_feeds(record)
             notify_runtime_event(
                 "ISOLATION CAPTURE RESTORED",
@@ -303,7 +313,7 @@ def status():
             )
     return {"scheduler_running": _scheduler is not None, "jobs": jobs,
             "isolated_feeds": get_isolated_feed_status(),
-            "option_chain_capture": get_option_chain_capture_status()}
+            "isolated_live_feed": get_isolated_live_feed_status()}
 
 @app.get("/startup-state")
 def startup_state():
