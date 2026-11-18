@@ -4,9 +4,6 @@ from __future__ import annotations
 import json
 from datetime import date
 from pathlib import Path
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -19,6 +16,7 @@ from core.token_service import fetch_access_token
 from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderRequest
 from repositories.order_repository import OrderRepository
 from services.order_service import OrderService, OrderServiceError, TradingDisabledError
+from services.instrument_search_service import InstrumentSearchError, search_upstox_instruments
 
 logger = get_logger(__file__)
 router = APIRouter(prefix="/api/v1", tags=["orders"])
@@ -57,10 +55,13 @@ def search_instruments(
     page_number: int = Query(default=1, ge=1),
     records: int = Query(default=15, ge=1, le=30),
 ):
-    """Proxy Upstox's official instrument search without exposing the access token."""
+    """Search Upstox and fall back to a bounded-age local cache on upstream failures."""
     params = {
-        "query": query.strip(), "exchanges": exchanges, "segments": segments,
-        "page_number": page_number, "records": records,
+        "query": query.strip(),
+        "exchanges": exchanges,
+        "segments": segments,
+        "page_number": page_number,
+        "records": records,
     }
     if instrument_types:
         params["instrument_types"] = instrument_types
@@ -68,29 +69,16 @@ def search_instruments(
         params["expiry"] = expiry
     if atm_offset is not None:
         params["atm_offset"] = atm_offset
-    request = Request(
-        "https://api.upstox.com/v2/instruments/search?" + urlencode(params),
-        headers={
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {fetch_access_token()}",
-        },
-        method="GET",
-    )
     try:
-        with urlopen(request, timeout=12) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        return {
-            "status": payload.get("status", "success"),
-            "data": payload.get("data", []),
-            "meta_data": payload.get("meta_data", {}),
-        }
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:1200]
-        raise HTTPException(status_code=exc.code, detail=detail)
-    except (URLError, TimeoutError) as exc:
-        logger.exception("Upstox instrument search failed")
-        raise HTTPException(status_code=502, detail=f"Upstox instrument search failed: {exc}")
+        return search_upstox_instruments(params)
+    except InstrumentSearchError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"message": str(exc), **exc.details},
+        ) from exc
+    except RuntimeError as exc:
+        logger.exception("Instrument search could not load the Upstox access token")
+        raise HTTPException(status_code=503, detail="Upstox access token is unavailable") from exc
 
 
 @router.get("/orders/dates")
