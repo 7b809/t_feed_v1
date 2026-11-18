@@ -17,6 +17,7 @@ runs the startup pipeline. Both the deferred kickoff and the recurring
 pipeline.
 """
 
+import asyncio
 import os
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -158,10 +159,21 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
         replace_existing=True,
     )
 
+    # BackgroundScheduler uses worker threads, so bridge the async
+    # backup service through asyncio.run instead of scheduling a bare
+    # coroutine function (which would otherwise never be awaited).
+    def _run_daily_mega_backup(reason: str = "scheduled") -> None:
+        if backup_service is None:
+            return
+        try:
+            asyncio.run(backup_service.run_daily_backup(reason=reason))
+        except Exception:
+            logger.exception("Daily isolation MEGA backup job failed")
+
     # Daily data ZIP upload to the dedicated MEGA folder.
     if backup_service is not None:
         scheduler.add_job(
-            backup_service.run_daily_backup,
+            _run_daily_mega_backup,
             CronTrigger(
                 day_of_week=DAILY_DATA_BACKUP_DAYS,
                 hour=DAILY_DATA_BACKUP_HOUR,
