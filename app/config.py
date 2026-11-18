@@ -62,7 +62,6 @@ class Settings:
     nifty_instrument_key: str
 
     dummy_orders_enabled: bool
-    dummy_sr_orders_enabled: bool
     dummy_supertrend_orders_enabled: bool
     dummy_order_quantity: int
     dummy_order_state_dir: str
@@ -193,7 +192,6 @@ def load_settings() -> Settings:
         live_feed_reconnect_max_backoff_seconds=_env_int("LIVE_FEED_RECONNECT_MAX_BACKOFF_SECONDS", 30),
         nifty_instrument_key=os.getenv("NIFTY_INSTRUMENT_KEY", "NSE_INDEX|Nifty 50"),
         dummy_orders_enabled=_env_bool("DUMMY_ORDERS_ENABLED", True),
-        dummy_sr_orders_enabled=_env_bool("DUMMY_SR_ORDERS_ENABLED", True),
         dummy_supertrend_orders_enabled=_env_bool("DUMMY_SUPERTREND_ORDERS_ENABLED", True),
         dummy_order_quantity=_env_int("DUMMY_ORDER_QUANTITY", 1),
         dummy_order_state_dir=os.getenv("DUMMY_ORDER_STATE_DIR", "./data/dummy_orders"),
