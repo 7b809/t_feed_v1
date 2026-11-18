@@ -246,15 +246,26 @@ class OptionChainCaptureService:
     def _load_pivot_document(self) -> dict:
         from core.config import PIVOT_DOC_ID, PROJECT_INFO_COLLECTION
         from core.mongo_client import get_mongo_db
-        doc = get_mongo_db()[PROJECT_INFO_COLLECTION].find_one({"_id": PIVOT_DOC_ID})
-        if not doc:
+        today = datetime.now(IST).date().isoformat()
+        doc = None
+        try:
+            candidate = get_mongo_db()[PROJECT_INFO_COLLECTION].find_one({"_id": PIVOT_DOC_ID})
+            if candidate and candidate.get("trade_date_ist") == today:
+                doc = candidate
+        except Exception:
+            logger.exception("Could not read pivot_levels from Mongo; trying local snapshot")
+
+        if doc is None:
             local = os.getenv("OR_LEVELS_LOCAL_PATH", "data/or_levels.json")
             try:
                 with open(local, "r", encoding="utf-8") as handle:
-                    doc = json.load(handle)
+                    candidate = json.load(handle)
+                if candidate and candidate.get("trade_date_ist") == today:
+                    doc = candidate
             except (OSError, json.JSONDecodeError):
-                doc = None
-        if not doc or doc.get("trade_date_ist") != datetime.now(IST).date().isoformat():
+                logger.exception("Could not read local pivot_levels snapshot")
+
+        if doc is None:
             raise RuntimeError("Today's pivot_levels document is not available")
         return doc
 
