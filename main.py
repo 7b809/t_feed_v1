@@ -98,6 +98,15 @@ def _get_option_chain_capture_status_safe() -> dict:
         return {"enabled": True, "state": "unavailable"}
 
 
+def _stop_option_chain_capture_safe() -> None:
+    """Shut down optional capture without affecting core shutdown."""
+    try:
+        from services.option_chain_capture_service import stop_option_chain_capture
+        stop_option_chain_capture()
+    except Exception:
+        logger.exception("Optional option-chain capture shutdown failed")
+
+
 _scheduler = None                       # populated in lifespan
 _startup_mode: str = "unknown"          # "immediate" | "deferred" | "test"
 _startup_cutoff_iso: str | None = None  # populated in deferred mode
@@ -223,6 +232,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     # ------------------------------------------------------------------ #
     logger.info("Shutting down…")
+
+    _stop_option_chain_capture_safe()
 
     try:
         stop_isolated_live_feed()
