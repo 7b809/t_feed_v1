@@ -56,6 +56,7 @@ class IsolatedFeedManager:
         self.enabled_st = os.getenv("ISOLATED_SUPERTREND_ENABLED", "true").lower() == "true"
         self.base_url = os.getenv("EMA_WS_BASE_URL", "wss://ema.novag7.in").strip().rstrip("/")
         self.sr_config = os.getenv("EMA_SR_CONFIG", "all").strip() or "all"
+        self.require_today_scope = os.getenv("REQUIRE_TODAY_ONLY_SCOPE", "true").lower() == "true"
         self.root = Path(os.getenv("ISOLATED_DATA_DIR", "data/isolated"))
         self._loop = None
         self._thread = None
@@ -111,9 +112,9 @@ class IsolatedFeedManager:
         logger.info("SR/Supertrend capture scheduled isolation=%s legs=%d", isolation_id, len(valid))
 
     def _file_path(self, trade_date, role, key, indicator):
-        folder = self.root / indicator / trade_date
+        folder = self.root / indicator
         folder.mkdir(parents=True, exist_ok=True)
-        return folder / f"{role}_{_safe(key)}.jsonl"
+        return folder / f"{trade_date}_{role}_{_safe(key)}.jsonl"
 
     async def _run_feed(self, isolation_id, trade_date, role, key, symbol, indicator):
         encoded = quote(key, safe="")
@@ -132,7 +133,12 @@ class IsolatedFeedManager:
             try:
                 logger.info("%s WS connecting role=%s symbol=%s url=%s", indicator.upper(), role, symbol, url)
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
-                    self._status[task_key] = {"state": "connected", "file": str(path), "connected_at": _now().isoformat()}
+                    connected_at = _now().isoformat()
+                    self._status[task_key] = {"state": "connected", "file": str(path), "connected_at": connected_at}
+                    from services.isolation_telegram_service import notify_runtime_event
+                    await asyncio.to_thread(notify_runtime_event,
+                        f"{indicator.upper()} FEED CONNECTED",
+                        f"{symbol} · {role} leg · {connected_at}", "🟢")
                     backoff = 1
                     async for raw in ws:
                         received_at = _now().isoformat()
@@ -144,6 +150,9 @@ class IsolatedFeedManager:
                             logger.warning("%s WS received non-JSON frame key=%s", indicator, key)
                             continue
                         if not isinstance(payload, dict):
+                            continue
+                        if self.require_today_scope and payload.get("data_scope") != "today_only":
+                            logger.warning("%s frame rejected: data_scope=%s key=%s", indicator.upper(), payload.get("data_scope"), key)
                             continue
                         row = {
                             "received_at_ist": received_at,
@@ -169,6 +178,11 @@ class IsolatedFeedManager:
                 self._status[task_key] = {"state": "reconnecting", "file": str(path), "error": str(exc)}
                 logger.warning("%s WS error role=%s key=%s: %s; retry=%ss",
                                indicator.upper(), role, key, exc, backoff)
+                from services.isolation_telegram_service import notify_runtime_event
+                if backoff == 1:
+                    await asyncio.to_thread(notify_runtime_event,
+                        f"{indicator.upper()} FEED INTERRUPTED",
+                        f"{symbol} · {role} leg · {type(exc).__name__}: {exc}", "⚠️")
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, int(os.getenv("ISOLATED_WS_MAX_BACKOFF_SECONDS", "30")))
 
