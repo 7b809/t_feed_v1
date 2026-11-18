@@ -602,19 +602,19 @@ does not derive LTP/Greeks or execute orders.
 
 ## 14 · First-signal dummy entry engine
 
-The first SR confirmation and first Supertrend signal are evaluated
-independently for each isolation. A signal must have a confirmation time
-strictly later than the isolation time.
+Only confirmed Supertrend signals create dummy orders. SR levels and
+updates continue to be collected and persisted as feed state, but SR does
+not participate in order entry. A Supertrend signal must be confirmed
+strictly after the isolation time and within the IST entry rules below.
 
-- SR RESISTANCE on the isolated leg → record BUY on the opposite leg.
-- SR SUPPORT on the isolated leg → record BUY on the isolated leg.
 - Supertrend BULLISH → record BUY on the isolated leg.
 - Supertrend BEARISH → record BUY on the opposite leg.
 
-Each indicator can create at most one entry per isolation. The two
-indicators are independent, so an isolation can have up to two entries.
-Local state survives restarts; overwrite=true resets that isolation's
-dummy-order state.
+The per-isolation Supertrend entry limit is selected from the first
+eligible signal's confirmed IST time: up to two entries when that first
+signal is before 09:40, or one entry when it is at/after 09:40. The
+selected mode and count survive restarts; overwrite=true resets that
+isolation's dummy-order state.
 
 The engine captures the latest locally persisted target-leg market quote
 when available. The quote receive timestamp is stored separately; it is
