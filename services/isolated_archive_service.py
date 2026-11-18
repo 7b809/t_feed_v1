@@ -103,7 +103,7 @@ class IsolatedArchiveService:
         return str(target)
 
     def load_current(self) -> dict | None:
-        path = self.root / datetime.now(IST).date().isoformat() / "isolated_instrument.json"
+        path = self.root / "isolated_instrument.json"
         if not path.is_file():
             return None
         try:
