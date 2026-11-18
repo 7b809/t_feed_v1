@@ -327,9 +327,16 @@ class OptionChainCaptureService:
         if doc is None:
             raise RuntimeError("Today's pivot_levels document is not available")
 
+        indexes = doc.get("indexes") or {}
         missing_indexes = [
             key for key in INSTRUMENT_KEYS
-            if key not in (doc.get("indexes") or {})
+            if (
+                key not in indexes
+                or not (indexes.get(key) or {}).get("levels")
+                or (indexes.get(key) or {}).get("levels", {}).get(
+                    "A", (indexes.get(key) or {}).get("levels", {}).get("avg")
+                ) is None
+            )
         ]
         if missing_indexes:
             logger.warning(
