@@ -28,6 +28,10 @@ from services.mega_backup_scheduler import (
     start_mega_backup_scheduler,
     stop_mega_backup_scheduler,
 )
+from services.token_check_scheduler import (
+    start_token_check_scheduler,
+    stop_token_check_scheduler,
+)
 
 logger = get_logger(__file__)
 TEMPLATES = Jinja2Templates(directory=str(PROJECT_ROOT / "templates"))
@@ -39,8 +43,21 @@ async def lifespan(app: FastAPI):
         "Starting Upstox Order Service | sandbox=%s | trading_enabled=%s | bind=%s:%s",
         UPSTOX_SANDBOX, TRADING_ENABLED, API_HOST, API_PORT,
     )
+    # MongoDB is a hard startup dependency: order persistence, token source,
+    # and backup state all live there. Fail fast rather than starting in a
+    # half-usable state.
     get_mongo_db()
+
+    # MEGA backup is best-effort: start_mega_backup_scheduler() logs and
+    # notifies (but does not raise) when credentials are missing.
     start_mega_backup_scheduler()
+
+    # Periodic token validation is best-effort too. It runs the first check
+    # ~10 s after startup and every TOKEN_CHECK_INTERVAL_MINUTES thereafter,
+    # so an expired token is reported by Telegram before the first order
+    # attempt rather than during it.
+    start_token_check_scheduler()
+
     notify_event("Sandbox service started", [
         f"Port: {API_PORT}",
         "Upstox mode: " + ("Sandbox" if UPSTOX_SANDBOX else "Live"),
@@ -51,6 +68,7 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("Stopping Upstox Order Service")
         notify_event("Sandbox service stopped", [f"Port: {API_PORT}"], "WARNING")
+        stop_token_check_scheduler()
         stop_mega_backup_scheduler()
         close_mongo_connection()
 

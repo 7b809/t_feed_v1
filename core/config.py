@@ -86,3 +86,13 @@ UPSTOX_INSTRUMENT_CACHE_ENABLED = env_bool("UPSTOX_INSTRUMENT_CACHE_ENABLED", Tr
 UPSTOX_INSTRUMENT_CACHE_MAX_STALE_SECONDS = max(
     0, int(os.getenv("UPSTOX_INSTRUMENT_CACHE_MAX_STALE_SECONDS", "604800"))
 )
+
+# Periodic Upstox token validation.
+# Loads the token from MongoDB and validates it via Upstox UserApi.get_profile
+# every TOKEN_CHECK_INTERVAL_MINUTES minutes. Emits a log line on every check,
+# and a Telegram alert only on valid<->invalid transitions (or invalid at
+# startup). The interval is clamped to >= 1 to guard against typo'd values.
+TOKEN_CHECK_ENABLED = env_bool("TOKEN_CHECK_ENABLED", True)
+TOKEN_CHECK_INTERVAL_MINUTES = max(
+    1, int(os.getenv("TOKEN_CHECK_INTERVAL_MINUTES", "30"))
+)
