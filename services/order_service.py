@@ -131,6 +131,38 @@ class OrderService:
             local_id, updates, require_mongo=require_mongo
         )
 
+    def _persist_before_action(self, entry: dict, action: str) -> None:
+        """Require Mongo + local audit persistence before any broker mutation."""
+        try:
+            self.repository.append_entry(entry, require_mongo=True)
+        except Exception as exc:
+            try:
+                existing = self.repository.find_entry(entry["local_id"])
+                event = self._new_event(
+                    "PERSISTENCE_EXCEPTION",
+                    action=action,
+                    error=_exception_text(exc),
+                    broker_request_sent=False,
+                )
+                if existing:
+                    events = list(existing.get("events") or [])
+                    events.append(event)
+                    self.repository.update_entry(
+                        entry["local_id"],
+                        {"status": "PERSISTENCE_EXCEPTION", "events": events,
+                         "last_modified_time": now_iso()},
+                        require_mongo=False,
+                    )
+                else:
+                    entry["status"] = "PERSISTENCE_EXCEPTION"
+                    entry.setdefault("events", []).append(event)
+                    self.repository.append_entry(entry, require_mongo=False)
+            except Exception:
+                logger.exception("Could not persist pre-action exception audit")
+            raise OrderServiceError(
+                f"Persistence failed before {action}; no Upstox request was sent."
+            ) from exc
+
     def _record_blocked_action(self, action: str, payload: dict) -> None:
         entry = self._new_entry(
             "EXCEPTION",
@@ -164,7 +196,7 @@ class OrderService:
         )
         entry["events"].append(self._new_event("PLACE_REQUESTED", request=payload))
         # Require both local and Mongo persistence before sending an order.
-        self.repository.append_entry(entry, require_mongo=True)
+        self._persist_before_action(entry, "place_order")
 
         if not TRADING_ENABLED:
             self._append_event(
@@ -470,7 +502,7 @@ class OrderService:
         entry["events"].append(self._new_event(
             "EXIT_ALL_REQUESTED", tag=tag, segment=segment
         ))
-        self.repository.append_entry(entry, require_mongo=True)
+        self._persist_before_action(entry, "exit_all_positions")
 
         try:
             self._require_trading()
