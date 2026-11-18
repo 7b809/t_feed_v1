@@ -53,7 +53,7 @@ class DailyDataBackupService:
         with self._lock:
             self._notify(
                 f"Sandbox MEGA backup started | {reason}",
-                f"Source: {self.data_dir}\\nDestination: {self.mega_backup_root}/",
+                f"Source: {self.data_dir}\nDestination: {self.mega_backup_root}/",
             )
             try:
                 result = self._run_sync(reason)
