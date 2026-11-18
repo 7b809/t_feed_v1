@@ -378,6 +378,28 @@ class DummyOrderEngine:
             if not eligible:
                 return
             signal = min(eligible, key=lambda x: x["dt"])
+            if not self._signal_in_entry_session(signal):
+                logger.info("Supertrend signal before 09:15 IST ignored iso=%s signal_time=%s",
+                            isolation_id, signal["time"])
+                return
+
+            order_count = self._supertrend_order_count(state)
+            order_limit = self._resolve_supertrend_entry_limit(state, signal)
+            signal_clock = signal["dt"].timetz().replace(tzinfo=None)
+            entry_window_mode = state.get("supertrend_entry_window_mode") or (
+                "LATE_SINGLE" if order_limit == 1 else "EARLY_TWO"
+            )
+            if order_count == 0 and signal_clock >= SUPERTREND_ENTRY_CUTOFF:
+                entry_window_mode = "LATE_SINGLE"
+                order_limit = 1
+            # Early-session entries are allowed only before 09:40. A late
+            # first signal (09:40 onward) gets exactly one entry.
+            if entry_window_mode == "EARLY_TWO" and signal_clock >= SUPERTREND_ENTRY_CUTOFF:
+                logger.info("Supertrend signal at/after 09:40 ignored iso=%s signal_time=%s; existing order remains active",
+                            isolation_id, signal["time"])
+                return
+            if entry_window_mode == "LATE_SINGLE":
+                order_limit = 1
             role = "isolated" if signal["direction"] == "BULLISH" else "opposite"
             raw = signal["raw"]
             trigger = {"direction": signal["direction"], "signal": raw.get("signal") or raw.get("trend"),
@@ -464,9 +486,10 @@ class DummyOrderEngine:
                 self._archive_supertrend_order(state, existing_order)
 
             order_count = self._supertrend_order_count(state)
-            if order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION:
+            if order_count >= order_limit:
                 state["supertrend_order_count"] = order_count
-                state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
+                state["supertrend_order_limit"] = order_limit
+                state["supertrend_entry_window_mode"] = entry_window_mode
                 state["updated_at"] = _now().isoformat()
                 await asyncio.to_thread(self._store.save, isolation_id, state)
                 logger.info("Supertrend entry limit reached iso=%s entries=%d limit=%d",
@@ -530,13 +553,14 @@ class DummyOrderEngine:
                 "quote_age_seconds": round((_now() - quote_time).total_seconds(), 3) if quote_is_today else None,
                 "trigger": trigger, "placed_at": now_ist.isoformat(),
                 "order_sequence": order_count + 1 if entry is not None else None,
-                "max_orders_per_isolation": MAX_SUPERTREND_ORDERS_PER_ISOLATION,
+                "max_orders_per_isolation": order_limit,
                 "status": "DUMMY_PLACED" if entry is not None else "DUMMY_SIGNAL_RECORDED_NO_QUOTE",
                 "broker_order_id": None, "real_order_submitted": False,
             }
             state.setdefault("orders", {})[indicator] = order
             state["supertrend_order_count"] = order_count + (1 if entry is not None else 0)
-            state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
+            state["supertrend_order_limit"] = order_limit
+            state["supertrend_entry_window_mode"] = entry_window_mode
             state["updated_at"] = now_ist.isoformat()
             await asyncio.to_thread(self._store.save, isolation_id, state)
             await self._persist_mongo_order(
