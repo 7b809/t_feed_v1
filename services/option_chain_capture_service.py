@@ -248,6 +248,10 @@ class OptionChainCaptureService:
 
             new_meta = {row["instrument_key"]: row for row in all_contracts}
             keys = list(new_meta)
+            # Register metadata before sending subscribe requests so an
+            # immediate first tick is not lost while the SDK acknowledges.
+            with self._lock:
+                self._contract_meta.update(new_meta)
             subscribed = set()
             owned_subscriptions = set()
             # Subscribe in bounded chunks so one oversized request does not
