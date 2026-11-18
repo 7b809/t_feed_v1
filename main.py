@@ -75,6 +75,7 @@ from services.isolated_feed_manager import (
     start_isolated_feeds, get_isolated_feed_status, stop_isolated_feeds,
 )
 from services.isolation_telegram_service import notify_runtime_event
+from services.option_chain_capture_service import get_option_chain_capture_status
 from services.log_file_service import (
     DEFAULT_TAIL_LINES,
     HARD_MAX_TAIL_LINES,
@@ -249,7 +250,11 @@ app.include_router(market_feed_router)
 # --------------------------------------------------------------------------- #
 @app.get("/health")
 def health():
-    return {"status": "ok", "isolated_feeds": get_isolated_feed_status()}
+    return {
+        "status": "ok",
+        "isolated_feeds": get_isolated_feed_status(),
+        "option_chain_capture": get_option_chain_capture_status(),
+    }
 
 
 def _restore_isolation_capture() -> None:
@@ -290,7 +295,8 @@ def status():
                 }
             )
     return {"scheduler_running": _scheduler is not None, "jobs": jobs,
-            "isolated_feeds": get_isolated_feed_status()}
+            "isolated_feeds": get_isolated_feed_status(),
+            "option_chain_capture": get_option_chain_capture_status()}
 
 @app.get("/startup-state")
 def startup_state():
