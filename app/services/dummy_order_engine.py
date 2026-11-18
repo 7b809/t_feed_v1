@@ -359,7 +359,10 @@ class DummyOrderEngine:
             # SR orders remain one-shot. Supertrend orders may be reversed by
             # a later opposite confirmed signal while the current order is open.
             if existing_order and existing_order.get("status") != "DISABLED":
-                if indicator != "supertrend" or existing_order.get("status") != "DUMMY_PLACED":
+                existing_status = str(existing_order.get("status") or "").upper()
+                if existing_status == "DUMMY_SIGNAL_RECORDED_NO_QUOTE":
+                    return
+                if not (existing_status == "DUMMY_PLACED" or existing_status.startswith("COMPLETED")):
                     return
             meta = self._meta.get(isolation_id) or {
                 "legs": state.get("legs") or {},
