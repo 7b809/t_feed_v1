@@ -93,7 +93,7 @@ def send_telegram(title: str, message: str, level: str = "INFO") -> None:
     if level.upper() == "INFO" and not DEBUG_MODE:
         return
 
-    text = f"{_LEVEL_EMOJI.get(level.upper(), 'ℹ️')} {title}\\n{message}"
+    text = f"{_LEVEL_EMOJI.get(level.upper(), 'ℹ️')} {title}\n{message}"
     try:
         sys.path.insert(0, str(PROJECT_DIR))
         from core.telegram_notifier import send_telegram_message
