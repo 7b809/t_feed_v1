@@ -120,6 +120,17 @@ def _remove_children(target: Path, preserve: set[Path] | None = None) -> tuple[i
     return removed_files, removed_dirs
 
 
+def _cleanup_hour(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+        if 0 <= value <= 23:
+            return value
+    except (TypeError, ValueError):
+        pass
+    logger.warning("Invalid %s; using default=%d", name, default)
+    return default
+
+
 def run_daily_startup_cleanup(now: datetime | None = None) -> dict:
     """Clear configured runtime directories once per day, only 01:00–09:00 IST."""
     if os.getenv("DAILY_CLEANUP_ENABLED", "true").strip().lower() != "true":
@@ -131,8 +142,11 @@ def run_daily_startup_cleanup(now: datetime | None = None) -> dict:
     else:
         now = now.astimezone(IST)
 
-    start_hour = int(os.getenv("DAILY_CLEANUP_START_HOUR", "1"))
-    end_hour = int(os.getenv("DAILY_CLEANUP_END_HOUR", "9"))
+    start_hour = _cleanup_hour("DAILY_CLEANUP_START_HOUR", 1)
+    end_hour = _cleanup_hour("DAILY_CLEANUP_END_HOUR", 9)
+    if end_hour <= start_hour:
+        logger.warning("DAILY_CLEANUP_END_HOUR must be later than start; using 01:00–09:00")
+        start_hour, end_hour = 1, 9
     if not (dt_time(start_hour, 0) <= now.time().replace(tzinfo=None) < dt_time(end_hour, 0)):
         return {
             "enabled": True,
