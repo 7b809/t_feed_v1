@@ -643,7 +643,14 @@ History API endpoints (application base path `/api/v1`):
 | `GET` | `/dummy-orders/history/dates` | List up to 365 archived IST trading dates, newest first |
 | `GET` | `/dummy-orders/history?trade_date=YYYY-MM-DD&page=1&page_size=24` | Retrieve one date's filtered order history |
 
-Optional history query parameters: `strategy=SUPERTREND`, `status=DUMMY_PLACED|COMPLETED_TARGET|COMPLETED_STOP_LOSS|COMPLETED_SIGNAL_REVERSAL`, and `search=<symbol-or-order-text>`. Page size is limited to 100. The API merges each day's `orders_history` events with the latest per-isolation order snapshots and de-duplicates them by isolation and order ID. Each isolation allows at most two Supertrend entries for the trading session; completed stop-loss/reversal entries count toward the limit, and no third entry is created.
+Optional history query parameters: `strategy=SUPERTREND`, `status=DUMMY_PLACED|COMPLETED_TARGET|COMPLETED_STOP_LOSS|COMPLETED_SIGNAL_REVERSAL`, and `search=<symbol-or-order-text>`. Page size is limited to 100. The API merges each day's `orders_history` events with the latest per-isolation order snapshots and de-duplicates them by isolation and order ID. Supertrend entry timing is based on each signal's confirmed timestamp in Asia/Kolkata (IST), not frame-receive time:
+
+- Signals confirmed before 09:15 are ignored.
+- If the first eligible signal is from 09:15:00 up to (but not including) 09:40:00, the isolation may create up to **two** entries. Both entries must be confirmed before 09:40. For example, 09:18 and 09:24 can create entries 1 and 2; a third signal at 09:35 is rejected by the two-entry cap.
+- If the first eligible signal is at or after 09:40, it may create **one** entry only. Any later signal is rejected.
+- If the first entry was created before 09:40, signals at or after 09:40 cannot create another entry, even if the two-entry cap has not been reached.
+- A rejected signal never reverses, closes, or replaces an existing order. The existing order continues to be monitored by its original target and stop-loss.
+- The selected window mode and entry limit are persisted per isolation and also applied during startup history recovery. Completed target, stop-loss, and reversal entries count toward the selected limit.
 
 Example:
 
