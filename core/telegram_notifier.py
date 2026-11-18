@@ -70,8 +70,9 @@ def send_telegram_message(text: str) -> bool:
             return False
         logger.info("Telegram notification delivered.")
         return True
-    except Exception:
-        logger.exception("Telegram delivery failed; application will continue.")
+    except Exception as error:
+        # Do not log the request URL: it contains the bot token.
+        logger.warning("Telegram delivery failed (%s); application will continue.", type(error).__name__)
         return False
 
 
