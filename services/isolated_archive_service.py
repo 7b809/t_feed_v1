@@ -33,9 +33,8 @@ class IsolatedArchiveService:
 
     def save_isolation(self, record: dict) -> str:
         trade_date = str(record.get("trade_date_ist") or datetime.now(IST).date())
-        day_dir = self.root / trade_date
-        day_dir.mkdir(parents=True, exist_ok=True)
-        target = day_dir / "isolated_instrument.json"
+        self.root.mkdir(parents=True, exist_ok=True)
+        target = self.root / "isolated_instrument.json"
 
         isolated = {
             "role": "isolated",
@@ -90,7 +89,7 @@ class IsolatedArchiveService:
             "instruments": {"isolated": isolated, "opposite": opposite},
             "source_record": record,
         }
-        fd, temp_name = tempfile.mkstemp(prefix="isolated_", suffix=".tmp", dir=str(day_dir))
+        fd, temp_name = tempfile.mkstemp(prefix="isolated_", suffix=".tmp", dir=str(self.root))
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump(document, handle, indent=2, ensure_ascii=False, default=_json_default)
