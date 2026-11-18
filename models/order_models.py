@@ -5,18 +5,15 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 from core.config import (
-    DEFAULT_ORDER_QUANTITY,
-    DEFAULT_TRANSACTION_TYPE,
-    DEFAULT_PRODUCT,
-    DEFAULT_ORDER_TYPE,
-    DEFAULT_VALIDITY,
+    DEFAULT_ORDER_QUANTITY, DEFAULT_PRODUCT, DEFAULT_ORDER_TYPE, DEFAULT_VALIDITY,
 )
 
 
 class PlaceOrderRequest(BaseModel):
     instrument_token: str = Field(min_length=3, max_length=100)
     quantity: int = Field(default=DEFAULT_ORDER_QUANTITY, gt=0)
-    transaction_type: Literal["BUY", "SELL"] = DEFAULT_TRANSACTION_TYPE
+    # This service's browser workflow is BUY-only; SELL is reserved for exit logic.
+    transaction_type: Literal["BUY"] = "BUY"
     product: Literal["I", "D", "MTF"] = DEFAULT_PRODUCT
     order_type: Literal["MARKET", "LIMIT", "SL", "SL-M"] = DEFAULT_ORDER_TYPE
     validity: Literal["DAY", "IOC"] = DEFAULT_VALIDITY

@@ -1,18 +1,29 @@
-"""HTTP endpoints for order placement, cancellation and square-off."""
+"""HTTP endpoints for order execution, instrument search and order history."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import json
+from datetime import date
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
+from fastapi import APIRouter, HTTPException, Query
+
+from core.config import (
+    DEFAULT_ORDER_QUANTITY, DEFAULT_PRODUCT, DEFAULT_ORDER_TYPE, DEFAULT_VALIDITY,
+    ORDERS_DATA_DIR,
+)
 from core.logger import get_logger
+from core.token_service import fetch_access_token
 from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderRequest
 from repositories.order_repository import OrderRepository
-from services.order_service import (
-    OrderService, OrderServiceError, TradingDisabledError,
-)
+from services.order_service import OrderService, OrderServiceError, TradingDisabledError
 
 logger = get_logger(__file__)
-router = APIRouter(prefix="/api/v1/orders", tags=["orders"])
+router = APIRouter(prefix="/api/v1", tags=["orders"])
 _service = OrderService()
+_repository = OrderRepository()
 
 
 def _raise_http(exc: Exception):
@@ -24,7 +35,92 @@ def _raise_http(exc: Exception):
     raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}")
 
 
-@router.post("/place")
+@router.get("/config/order-defaults")
+def order_defaults():
+    from core.config import TRADING_ENABLED, UPSTOX_SANDBOX
+    return {
+        "quantity": DEFAULT_ORDER_QUANTITY, "transaction_type": "BUY",
+        "product": DEFAULT_PRODUCT, "order_type": DEFAULT_ORDER_TYPE,
+        "validity": DEFAULT_VALIDITY, "trading_enabled": TRADING_ENABLED,
+        "upstox_sandbox": UPSTOX_SANDBOX,
+    }
+
+
+@router.get("/instruments/search")
+def search_instruments(
+    query: str = Query(min_length=1, max_length=50),
+    exchanges: str = "ALL",
+    segments: str = "ALL",
+    instrument_types: str | None = None,
+    expiry: str | None = None,
+    page_number: int = Query(default=1, ge=1),
+    records: int = Query(default=15, ge=1, le=30),
+):
+    """Proxy Upstox's official instrument search without exposing the access token."""
+    params = {
+        "query": query.strip(), "exchanges": exchanges, "segments": segments,
+        "page_number": page_number, "records": records,
+    }
+    if instrument_types:
+        params["instrument_types"] = instrument_types
+    if expiry:
+        params["expiry"] = expiry
+    request = Request(
+        "https://api.upstox.com/v2/instruments/search?" + urlencode(params),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {fetch_access_token()}",
+        },
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=12) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        return {
+            "status": payload.get("status", "success"),
+            "data": payload.get("data", []),
+            "meta_data": payload.get("meta_data", {}),
+        }
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:1200]
+        raise HTTPException(status_code=exc.code, detail=detail)
+    except (URLError, TimeoutError) as exc:
+        logger.exception("Upstox instrument search failed")
+        raise HTTPException(status_code=502, detail=f"Upstox instrument search failed: {exc}")
+
+
+@router.get("/orders/dates")
+def order_dates():
+    """Return available daily ledgers from local JSON and MongoDB."""
+    dates: set[str] = set()
+    folder = Path(ORDERS_DATA_DIR)
+    if folder.exists():
+        dates.update(path.stem for path in folder.glob("????-??-??.json"))
+    try:
+        rows = _repository.collection.find({}, {"_id": 1, "date": 1}).sort("_id", -1).limit(500)
+        for row in rows:
+            value = row.get("date") or row.get("_id")
+            if value:
+                dates.add(str(value))
+    except Exception:
+        logger.exception("Could not enumerate MongoDB order dates; using local ledgers")
+    return {"dates": sorted(dates, reverse=True)}
+
+
+@router.get("/orders/history")
+def order_history(date_key: str = Query(alias="date")):
+    try:
+        date.fromisoformat(date_key)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date must use YYYY-MM-DD")
+    try:
+        return _repository.load_daily_document(date_key)
+    except Exception as exc:
+        _raise_http(exc)
+
+
+@router.post("/orders/place")
 def place_order(body: PlaceOrderRequest):
     try:
         return _service.place_order(body)
@@ -32,15 +128,15 @@ def place_order(body: PlaceOrderRequest):
         _raise_http(exc)
 
 
-@router.get("/today")
+@router.get("/orders/today")
 def get_today_orders():
     try:
-        return OrderRepository().list_today()
+        return _repository.list_today()
     except Exception as exc:
         _raise_http(exc)
 
 
-@router.post("/cancel/bulk")
+@router.post("/orders/cancel/bulk")
 def cancel_orders(body: OrderIdsRequest):
     try:
         return {"results": _service.cancel_orders(body.order_ids)}
@@ -48,7 +144,7 @@ def cancel_orders(body: OrderIdsRequest):
         _raise_http(exc)
 
 
-@router.post("/exit-by-ids")
+@router.post("/orders/exit-by-ids")
 def exit_orders_by_ids(body: OrderIdsRequest):
     try:
         return {"results": _service.exit_orders(body.order_ids)}
@@ -56,7 +152,7 @@ def exit_orders_by_ids(body: OrderIdsRequest):
         _raise_http(exc)
 
 
-@router.post("/exit-all")
+@router.post("/orders/exit-all")
 def exit_all_positions(body: ExitAllRequest = ExitAllRequest()):
     try:
         return _service.exit_all_positions(tag=body.tag, segment=body.segment)
@@ -64,7 +160,7 @@ def exit_all_positions(body: ExitAllRequest = ExitAllRequest()):
         _raise_http(exc)
 
 
-@router.post("/{order_id}/cancel")
+@router.post("/orders/{order_id}/cancel")
 def cancel_single_order(order_id: str):
     try:
         return _service.cancel_order(order_id)
@@ -72,7 +168,7 @@ def cancel_single_order(order_id: str):
         _raise_http(exc)
 
 
-@router.post("/{order_id}/exit")
+@router.post("/orders/{order_id}/exit")
 def exit_single_order(order_id: str):
     try:
         return _service.exit_order(order_id)
@@ -80,10 +176,10 @@ def exit_single_order(order_id: str):
         _raise_http(exc)
 
 
-@router.get("/{order_id}")
+@router.get("/orders/{order_id}")
 def get_local_order(order_id: str):
     try:
-        order = OrderRepository().find_order(order_id)
+        order = _repository.find_order(order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found in today's local ledger")
         return order

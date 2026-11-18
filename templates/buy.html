@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Buy instrument{% endblock %}
+{% block page_heading %}Buy instrument{% endblock %}
+{% block content %}
+<section class="welcome-row">
+  <div><div class="eyebrow">ORDER ENTRY</div><h1>Place a buy order</h1><p>Search the official Upstox instrument catalogue, select a contract, then review the order.</p></div>
+  <span class="buy-only-pill"><i class="bi bi-lock-fill"></i> BUY ONLY</span>
+</section>
+<div class="buy-layout">
+  <section class="panel-card search-panel">
+    <div class="panel-header"><div><h2>Find an instrument</h2><p>Search by symbol, company, strike or contract</p></div><i class="bi bi-search panel-icon"></i></div>
+    <label class="form-label" for="instrumentQuery">Instrument search</label>
+    <div class="search-input-wrap"><i class="bi bi-search"></i><input id="instrumentQuery" class="form-control" type="search" maxlength="50" placeholder="e.g. NIFTY 25000 CE, RELIANCE…" autocomplete="off"><span id="searchSpinner" class="spinner-border spinner-border-sm d-none"></span></div>
+    <div class="search-hint">Suggestions are returned by Upstox Instrument Search API.</div>
+    <div id="instrumentResults" class="instrument-results"><div class="search-placeholder"><i class="bi bi-arrow-up-left-circle"></i><span>Start typing to find instruments</span></div></div>
+  </section>
+  <section class="panel-card order-panel">
+    <div class="panel-header"><div><h2>Order ticket</h2><p>Review selected instrument and default values</p></div><span class="ticket-step">01 / 01</span></div>
+    <div id="selectedInstrument" class="selected-instrument empty-selection"><i class="bi bi-box-arrow-in-down"></i><span>Select an instrument to build your order ticket</span></div>
+    <form id="buyOrderForm" class="order-form d-none">
+      <div class="selected-summary" id="instrumentSummary"></div>
+      <div class="row g-3">
+        <div class="col-6"><label class="form-label">Transaction</label><input class="form-control readonly-field" value="BUY" readonly></div>
+        <div class="col-6"><label class="form-label" for="quantity">Quantity</label><input id="quantity" class="form-control" type="number" min="1" step="1" required></div>
+        <div class="col-6"><label class="form-label">Order type</label><input class="form-control readonly-field" value="MARKET" readonly></div>
+        <div class="col-6"><label class="form-label">Product</label><input class="form-control readonly-field" value="Intraday (I)" readonly></div>
+        <div class="col-6"><label class="form-label">Validity</label><input class="form-control readonly-field" value="DAY" readonly></div>
+        <div class="col-6"><label class="form-label">Price</label><input class="form-control readonly-field" value="Market price" readonly></div>
+      </div>
+      <div class="order-notice"><i class="bi bi-info-circle"></i><span>Market orders are submitted with price = 0. Actual execution price is determined by the broker / exchange. Check lot size and freeze quantity before placing.</span></div>
+      <div id="tradingDisabledNotice" class="alert alert-warning d-none mb-3"><i class="bi bi-shield-lock me-2"></i>Trading is disabled. Enable it in the server .env only after verifying the account and environment.</div>
+      <button id="placeBuyBtn" type="submit" class="btn btn-primary btn-lg w-100"><i class="bi bi-bag-check me-2"></i>Review and place BUY order</button>
+    </form>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/buy.js"></script>{% endblock %}

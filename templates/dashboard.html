@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Orders dashboard{% endblock %}
+{% block page_heading %}Orders dashboard{% endblock %}
+{% block content %}
+<section class="welcome-row">
+  <div><div class="eyebrow">SANDBOX ACTIVITY</div><h1>Order activity</h1><p>Monitor today's orders and review previous trading sessions.</p></div>
+  <a href="/buy" class="btn btn-primary btn-lg"><i class="bi bi-plus-lg me-2"></i>Place buy order</a>
+</section>
+<div class="metric-grid">
+  <div class="metric-card"><div class="metric-label">Today's orders</div><div class="metric-value" id="metricTotal">—</div><div class="metric-foot"><i class="bi bi-calendar-day"></i> Current session</div></div>
+  <div class="metric-card"><div class="metric-label">Open / active</div><div class="metric-value" id="metricOpen">—</div><div class="metric-foot"><i class="bi bi-hourglass-split"></i> Needs attention</div></div>
+  <div class="metric-card"><div class="metric-label">Order history</div><div class="metric-value" id="metricDays">—</div><div class="metric-foot"><i class="bi bi-clock-history"></i> Available dates</div></div>
+  <div class="metric-card metric-card-dark"><div class="metric-label">Execution status</div><div class="metric-value status-value" id="tradingState">Checking…</div><div class="metric-foot" id="environmentState">Safety configuration</div></div>
+</div>
+<section class="panel-card">
+  <div class="panel-header flex-wrap gap-3"><div><h2>Orders ledger</h2><p>View and manage orders by trading date</p></div><div class="d-flex align-items-center gap-2"><label class="small muted" for="historyDate">Trading date</label><select id="historyDate" class="form-select form-select-sm date-select"><option value="today">Today</option></select><button class="btn btn-light btn-sm" id="refreshOrders" title="Refresh"><i class="bi bi-arrow-clockwise"></i></button></div></div>
+  <div class="filter-tabs"><button class="filter-tab active" data-filter="all">All orders</button><button class="filter-tab" data-filter="ORDER">Placed orders</button><button class="filter-tab" data-filter="EXIT">Exit actions</button><button class="filter-tab" data-filter="EXCEPTION">Blocked / errors</button></div>
+  <div id="ordersContainer"><div class="empty-state"><div class="spinner-border spinner-border-sm"></div><span>Loading order ledger…</span></div></div>
+</section>
+<section class="danger-panel"><div><div class="danger-title"><i class="bi bi-exclamation-triangle me-2"></i>Exit all open positions</div><p>Uses Upstox's position square-off endpoint. This action can affect every eligible open position in the selected account.</p></div><button id="exitAllBtn" class="btn btn-outline-danger"><i class="bi bi-power me-2"></i>Exit all positions</button></section>
+{% endblock %}
+{% block scripts %}<script src="/static/dashboard.js"></script>{% endblock %}
