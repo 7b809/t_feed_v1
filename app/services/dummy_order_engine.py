@@ -19,10 +19,7 @@ from .telegram_message_formatter import (
 
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
-SR_TIMES = ("confirmed_time", "confirmed_at", "confirmation_time", "confirmation_timestamp",
-            "confirmed_timestamp", "confirmed_candle_time", "confirmation_candle_time",
-            "confirmed_candle_timestamp", "confirmed_ts", "confirmation_ts")
-SR_PRICES = ("price", "level_price", "sr_price", "pivot_price", "level", "value")
+MAX_SUPERTREND_ORDERS_PER_ISOLATION = 2
 
 def _now() -> datetime:
     return datetime.now(IST)
@@ -47,37 +44,6 @@ def _text_time(value: Any) -> str | None:
 
 def _first(obj: dict, keys: tuple) -> Any:
     return next((obj[k] for k in keys if obj.get(k) not in (None, "")), None)
-
-def _kind(item: dict, inferred: str | None = None) -> str | None:
-    raw = _first(item, ("level_type", "sr_type", "type", "kind", "category", "side")) or inferred
-    value = str(raw or "").strip().lower()
-    if value in {"r", "res", "resistance"} or "resistance" in value:
-        return "RESISTANCE"
-    if value in {"s", "sup", "support"} or "support" in value:
-        return "SUPPORT"
-    return None
-
-def _sr_candidates(payload: dict) -> list[dict]:
-    found = []
-    def add(item: Any, inferred: str | None = None):
-        if not isinstance(item, dict):
-            return
-        kind, ts, price = _kind(item, inferred), _first(item, SR_TIMES), _first(item, SR_PRICES)
-        parsed = _dt(ts)
-        if kind and parsed and price is not None:
-            found.append({"kind": kind, "time": _text_time(ts), "dt": parsed,
-                          "price": price, "raw": item})
-    for name in ("levels", "confirmed_levels", "new_levels"):
-        if isinstance(payload.get(name), list):
-            for item in payload[name]:
-                add(item)
-    for name, kind in (("resistances", "RESISTANCE"), ("supports", "SUPPORT")):
-        if isinstance(payload.get(name), list):
-            for item in payload[name]:
-                add(item, kind)
-    for name in ("confirmed_level", "level"):
-        add(payload.get(name))
-    return found
 
 def _direction(value: Any) -> str | None:
     value = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
@@ -165,11 +131,48 @@ class DummyOrderEngine:
                 return value.strip()
         return None
 
-    def _indicator_enabled(self, indicator: str) -> bool:
-        if not getattr(self._config, "dummy_orders_enabled", True):
-            return False
-        field = "dummy_sr_orders_enabled" if indicator == "sr" else "dummy_supertrend_orders_enabled"
-        return bool(getattr(self._config, field, True))
+    def _indicator_enabled(self) -> bool:
+        return bool(
+            getattr(self._config, "dummy_orders_enabled", True)
+            and getattr(self._config, "dummy_supertrend_orders_enabled", True)
+        )
+
+    @staticmethod
+    def _supertrend_order_count(state: dict) -> int:
+        """Return the durable number of Supertrend entries for this isolation."""
+        try:
+            stored_count = max(0, int(state.get("supertrend_order_count") or 0))
+        except (TypeError, ValueError):
+            stored_count = 0
+        identities = set()
+        candidates = list(state.get("order_history") or [])
+        current = (state.get("orders") or {}).get("supertrend")
+        if isinstance(current, dict):
+            candidates.append(current)
+        for order in candidates:
+            if not isinstance(order, dict) or str(order.get("status") or "").upper() == "DISABLED":
+                continue
+            indicator = str(order.get("indicator") or "").upper()
+            if indicator and "SUPERTREND" not in indicator:
+                continue
+            identity = order.get("order_id") or order.get("started_at_ist") or order.get("entry_time_ist") or order.get("placed_at")
+            if identity:
+                identities.add(str(identity))
+        return max(stored_count, len(identities))
+
+    @staticmethod
+    def _archive_supertrend_order(state: dict, order: dict) -> None:
+        """Keep a completed current-slot order before replacing it with a new entry."""
+        if not isinstance(order, dict):
+            return
+        history = state.setdefault("order_history", [])
+        identity = order.get("order_id") or order.get("started_at_ist") or order.get("entry_time_ist")
+        if not any(
+            isinstance(item, dict) and
+            (item.get("order_id") or item.get("started_at_ist") or item.get("entry_time_ist")) == identity
+            for item in history
+        ):
+            history.append(dict(order))
 
     def _date_key(self, payload: dict, isolation_id: str) -> str:
         raw = payload.get("trade_date_ist") or isolation_id.split("__", 1)[0]
@@ -257,7 +260,7 @@ class DummyOrderEngine:
                     "isolation_time": iso_time,
                     "legs": dict(legs), "trading_symbol": self._symbol(payload),
                     "isolated_instrument": instrument_context,
-                    "status": "ACTIVE", "orders": {"sr": None, "supertrend": None},
+                    "status": "ACTIVE", "orders": {"supertrend": None},
                     "created_at": _now().isoformat(), "updated_at": _now().isoformat(),
                 }
             else:
@@ -267,31 +270,37 @@ class DummyOrderEngine:
                 state["isolated_instrument"] = instrument_context
                 state["updated_at"] = _now().isoformat()
 
-            # Per-indicator flags are independent. A disabled strategy is
-            # explicitly recorded, rather than silently appearing to wait.
-            for indicator in ("sr", "supertrend"):
-                if self._indicator_enabled(indicator):
-                    existing = (state.get("orders") or {}).get(indicator)
-                    if isinstance(existing, dict) and existing.get("status") == "DISABLED":
-                        state["orders"][indicator] = None
-                else:
-                    state.setdefault("orders", {})[indicator] = {
-                        "indicator": indicator.upper(),
-                        "status": "DISABLED",
-                        "reason": "orders disabled due to flag false",
-                        "placed_at": None,
-                        "real_order_submitted": False,
-                    }
+            # SR remains a live feed/state stream, but it no longer creates orders.
+            # Remove legacy SR order slots/history from local active state safely.
+            orders = state.setdefault("orders", {})
+            orders.pop("sr", None)
+            state["order_history"] = [
+                item for item in (state.get("order_history") or [])
+                if isinstance(item, dict)
+                and "SUPERTREND" in str(item.get("indicator") or item.get("strategy") or "").upper()
+            ]
+            if self._indicator_enabled():
+                if isinstance(orders.get("supertrend"), dict) and orders["supertrend"].get("status") == "DISABLED":
+                    orders["supertrend"] = None
+            else:
+                orders["supertrend"] = {
+                    "indicator": "SUPERTREND",
+                    "status": "DISABLED",
+                    "reason": "orders disabled due to flag false",
+                    "placed_at": None,
+                    "real_order_submitted": False,
+                }
+            state["supertrend_order_count"] = self._supertrend_order_count(state)
+            state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
 
             await asyncio.to_thread(self._store.save, isolation_id, state)
             date_key = self._date_key(payload, isolation_id)
             await self._persist_mongo_isolation(date_key, isolation_id, instrument_context)
-            for indicator in ("sr", "supertrend"):
-                disabled = (state.get("orders") or {}).get(indicator)
-                if isinstance(disabled, dict) and disabled.get("status") == "DISABLED":
-                    await self._persist_mongo_order(
-                        date_key, isolation_id, indicator, disabled, instrument_context
-                    )
+            disabled = (state.get("orders") or {}).get("supertrend")
+            if isinstance(disabled, dict) and disabled.get("status") == "DISABLED":
+                await self._persist_mongo_order(
+                    date_key, isolation_id, "supertrend", disabled, instrument_context
+                )
 
             self._index_open_orders(isolation_id, state)
             self._meta[isolation_id] = {
@@ -315,20 +324,9 @@ class DummyOrderEngine:
             state["status"], state["updated_at"] = "CLOSED", _now().isoformat()
             await asyncio.to_thread(self._store.save, isolation_id, state)
 
-    async def on_sr_frame(self, payload: dict, instrument_key: str,
-                          leg_role: str, isolation_id: str) -> None:
-        if not self._indicator_enabled("sr") or payload.get("event") not in {"snapshot", "sr_update"}:
-            return
-        if leg_role != "isolated":
-            return
-        try:
-            await self._process("sr", payload, instrument_key, leg_role, isolation_id)
-        except Exception:
-            logger.exception("Dummy SR entry failed for %s", isolation_id)
-
     async def on_supertrend_frame(self, payload: dict, instrument_key: str,
                                   leg_role: str, isolation_id: str) -> None:
-        if not self._indicator_enabled("supertrend") or payload.get("event") not in {"snapshot", "supertrend_signal"}:
+        if not self._indicator_enabled() or payload.get("event") not in {"snapshot", "supertrend_signal"}:
             return
         if leg_role != "isolated":
             return
@@ -339,17 +337,18 @@ class DummyOrderEngine:
                 recovery_status = (recovered or {}).get("supertrend_startup_recovery", {}).get("status")
                 if recovery_status in {"COMPLETED", "SKIPPED_EXISTING_ORDER"}:
                     return
-            await self._process("supertrend", payload, instrument_key, leg_role, isolation_id)
+            await self._process(payload, instrument_key, leg_role, isolation_id)
         except Exception:
             logger.exception("Dummy Supertrend entry failed for %s", isolation_id)
 
-    async def _process(self, indicator: str, payload: dict, source_key: str,
+    async def _process(self, payload: dict, source_key: str,
                        source_role: str, isolation_id: str) -> None:
+        indicator = "supertrend"
         async with self._lock(isolation_id):
             state = await asyncio.to_thread(self._store.load, isolation_id)
             if not state or state.get("status") != "ACTIVE":
                 return
-            if not self._indicator_enabled(indicator):
+            if not self._indicator_enabled():
                 return
             if indicator == "supertrend" and state.get("supertrend_daily_target_locked"):
                 return
@@ -369,28 +368,17 @@ class DummyOrderEngine:
                 "instrument_meta": {},
                 "date_key": self._date_key(state, isolation_id),
             }
-            if indicator == "sr":
-                eligible = [x for x in _sr_candidates(payload) if x["dt"] > meta["cutoff"]]
-                if not eligible:
-                    return
-                signal = min(eligible, key=lambda x: x["dt"])
-                role = "opposite" if signal["kind"] == "RESISTANCE" else "isolated"
-                trigger = {"level_type": signal["kind"], "level_price": signal["price"],
-                           "confirmed_time": signal["time"], "config": payload.get("config"),
-                           "source_event": payload.get("event")}
-                direction = signal["kind"]
-            else:
-                eligible = [x for x in _st_candidates(payload) if x["dt"] > meta["cutoff"]]
-                if not eligible:
-                    return
-                signal = min(eligible, key=lambda x: x["dt"])
-                role = "isolated" if signal["direction"] == "BULLISH" else "opposite"
-                raw = signal["raw"]
-                trigger = {"direction": signal["direction"], "signal": raw.get("signal") or raw.get("trend"),
-                           "signal_price": raw.get("price"),
-                           "confirmed_time_price": raw.get("confirmed_time_price"),
-                           "confirmed_time": signal["time"], "source_event": payload.get("event")}
-                direction = signal["direction"]
+            eligible = [x for x in _st_candidates(payload) if x["dt"] > meta["cutoff"]]
+            if not eligible:
+                return
+            signal = min(eligible, key=lambda x: x["dt"])
+            role = "isolated" if signal["direction"] == "BULLISH" else "opposite"
+            raw = signal["raw"]
+            trigger = {"direction": signal["direction"], "signal": raw.get("signal") or raw.get("trend"),
+                       "signal_price": raw.get("price"),
+                       "confirmed_time_price": raw.get("confirmed_time_price"),
+                       "confirmed_time": signal["time"], "source_event": payload.get("event")}
+            direction = signal["direction"]
             target_key = meta["legs"].get(role)
             if not target_key:
                 logger.warning("Dummy order target role %s missing for %s", role, isolation_id)
@@ -452,10 +440,25 @@ class DummyOrderEngine:
                 )
                 self._index_open_orders(isolation_id, state)
                 await self._notify_completion(state, indicator, existing_order)
-                if close_reason != "SIGNAL_REVERSAL":
-                    logger.info("Supertrend signal arrived after existing order exit threshold iso=%s reason=%s",
-                                isolation_id, close_reason)
+                if close_reason == "TARGET":
+                    logger.info("Supertrend target reached during signal evaluation; daily entries locked iso=%s",
+                                isolation_id)
                     return
+
+            # Completed orders can be followed by another confirmed signal,
+            # but the per-isolation entry cap remains authoritative.
+            if isinstance(existing_order, dict) and existing_order.get("status") not in {"DUMMY_PLACED", "DISABLED"}:
+                self._archive_supertrend_order(state, existing_order)
+
+            order_count = self._supertrend_order_count(state)
+            if order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION:
+                state["supertrend_order_count"] = order_count
+                state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
+                state["updated_at"] = _now().isoformat()
+                await asyncio.to_thread(self._store.save, isolation_id, state)
+                logger.info("Supertrend entry limit reached iso=%s entries=%d limit=%d",
+                            isolation_id, order_count, MAX_SUPERTREND_ORDERS_PER_ISOLATION)
+                return
 
             quote = await asyncio.to_thread(self._live_feed.latest, target_key)
             quote_received_at = (quote or {}).get("received_at")
@@ -513,10 +516,14 @@ class DummyOrderEngine:
                 "quote_received_at": quote_received_at if quote_is_today else None,
                 "quote_age_seconds": round((_now() - quote_time).total_seconds(), 3) if quote_is_today else None,
                 "trigger": trigger, "placed_at": now_ist.isoformat(),
+                "order_sequence": order_count + 1,
+                "max_orders_per_isolation": MAX_SUPERTREND_ORDERS_PER_ISOLATION,
                 "status": "DUMMY_PLACED" if entry is not None else "DUMMY_SIGNAL_RECORDED_NO_QUOTE",
                 "broker_order_id": None, "real_order_submitted": False,
             }
             state.setdefault("orders", {})[indicator] = order
+            state["supertrend_order_count"] = order_count + 1
+            state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
             state["updated_at"] = now_ist.isoformat()
             await asyncio.to_thread(self._store.save, isolation_id, state)
             await self._persist_mongo_order(
@@ -656,8 +663,9 @@ class DummyOrderEngine:
                 return
 
             history = list(state.get("order_history") or [])
+            order_count = self._supertrend_order_count(state)
             active, active_role, active_candles, last_processed = None, None, None, None
-            locked, replayed = False, 0
+            locked, replayed, limit_reached = False, 0, False
 
             async def persist_closed(order: dict):
                 self._finish_recovery_order(order, order["exit_reason"],
@@ -702,6 +710,9 @@ class DummyOrderEngine:
                         continue
                 if locked:
                     break
+                if order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION:
+                    limit_reached = True
+                    break
                 entry_candle = next((bar for bar in role_candles
                                      if self._candle_dt(bar) is not None and
                                      self._candle_dt(bar) > signal["dt"] and
@@ -715,6 +726,9 @@ class DummyOrderEngine:
                     await asyncio.to_thread(self._store.save, isolation_id, state)
                     return
                 active = self._recovery_order(isolation_id, signal, role, key, entry_candle, meta)
+                order_count += 1
+                active["order_sequence"] = order_count
+                active["max_orders_per_isolation"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
                 active_role, active_candles = role, role_candles
                 last_processed = self._candle_dt(entry_candle)
                 replayed += 1
@@ -742,10 +756,14 @@ class DummyOrderEngine:
             elif history:
                 state.setdefault("orders", {})["supertrend"] = history[-1]
             state["order_history"] = history[-500:]
+            state["supertrend_order_count"] = order_count
+            state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
             state["supertrend_startup_recovery"] = {
                 "status": "COMPLETED", "started_at_ist": self._startup_at.isoformat(),
                 "completed_at_ist": _now().isoformat(), "signals_found": len(signals),
                 "orders_replayed": replayed, "orders_completed": len(history),
+                "order_limit": MAX_SUPERTREND_ORDERS_PER_ISOLATION,
+                "order_limit_reached": limit_reached or order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION,
                 "daily_target_locked": locked,
                 "method": "one_minute_ohlc_stop_first_if_both_levels_touch",
             }
@@ -899,8 +917,8 @@ class DummyOrderEngine:
     async def status(self) -> dict:
         result = await asyncio.to_thread(self._store.status)
         result["enabled"] = self._config.dummy_orders_enabled
-        result["sr_orders_enabled"] = self._indicator_enabled("sr")
-        result["supertrend_orders_enabled"] = self._indicator_enabled("supertrend")
+        result["supertrend_orders_enabled"] = self._indicator_enabled()
+        result["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
         states = await asyncio.to_thread(self._store.list_all)
         result["supertrend_daily_target_locked_count"] = sum(bool(x.get("supertrend_daily_target_locked")) for x in states)
         result["startup_recovery_waiting_count"] = sum(
