@@ -156,8 +156,13 @@ class OptionChainCaptureService:
         with self._lock:
             if self._active_date != date_key:
                 self._roll_date(date_key, feed)
-            self._feed = feed
-            if self._listener is None:
+            if self._feed is not feed:
+                if self._feed is not None and self._listener is not None:
+                    try:
+                        self._feed.remove_message_listener(self._listener)
+                    except Exception:
+                        logger.exception("Could not detach option-chain listener from old feed")
+                self._feed = feed
                 self._listener = self._on_feed_message
                 feed.add_message_listener(self._listener)
             self._ensure_writer()
