@@ -191,7 +191,6 @@ class IsolationSubscriber:
                     isolation_id=isolation_id,
                     instrument_key=key,
                     leg_role=role,
-                    order_engine=self._dummy_order_engine,
                 )
                 self._clients[key] = client
                 await client.start()
@@ -199,8 +198,8 @@ class IsolationSubscriber:
                 subscribed.append(role)
 
             # Start an independent Supertrend connection for both legs.
-            # SR and Supertrend failures are isolated: one indicator must not
-            # prevent the other indicator or the isolation POST from working.
+            # SR remains subscribed and persisted independently; only Supertrend
+            # frames are connected to the simulated-order engine.
             if self._config.supertrend_enabled:
                 for role, key in new_legs.items():
                     existing_st = self._supertrend_clients.get(key)
