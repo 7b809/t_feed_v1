@@ -21,7 +21,7 @@ IST = ZoneInfo("Asia/Kolkata")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATE_FILE = PROJECT_ROOT / ".daily_cleanup_state.json"
 
-DEFAULT_TARGETS = ("data", "logs", "logs_text", "backups")
+DEFAULT_TARGETS = ("data", "logs", "logs_text")
 FORBIDDEN_TARGETS = {
     ".git", ".github", ".venv", "venv", "myenv", "env",
     "app", "api", "core", "jobs", "repositories", "services",
