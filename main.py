@@ -70,6 +70,11 @@ from core.config import (
 )
 from core.logger import get_logger
 from core.telegram_notifier import send_telegram_message
+from services.isolated_archive_service import IsolatedArchiveService
+from services.isolated_feed_manager import (
+    start_isolated_feeds, get_isolated_feed_status, stop_isolated_feeds,
+)
+from services.isolation_telegram_service import notify_runtime_event
 from services.log_file_service import (
     DEFAULT_TAIL_LINES,
     HARD_MAX_TAIL_LINES,
@@ -107,7 +112,7 @@ async def lifespan(app: FastAPI):
             "(deferred startup gate is active if now < cutoff)"
         )
 
-    send_telegram_message("🚀 Project starting…")
+    send_telegram_message("🚀 <b>ISOLATION SERVICE STARTING</b>\\nEnvironment initialising · IST")
 
     now = datetime.now(ZoneInfo(TIMEZONE))
     cutoff = now.replace(
@@ -177,6 +182,8 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Startup backfill failed.")
 
+        _restore_isolation_capture()
+
         try:
             _scheduler = start_scheduler()
             logger.info(
@@ -195,6 +202,11 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down…")
 
     try:
+        stop_isolated_feeds()
+    except Exception:
+        logger.exception("Isolated SR/Supertrend feed shutdown failed.")
+
+    try:
         shutdown_websocket_feeds()
     except Exception:
         logger.exception("External WebSocket feed shutdown failed.")
@@ -210,7 +222,7 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Scheduler shutdown failed.")
 
-    send_telegram_message("🛑 Project stopped.")
+    notify_runtime_event("ISOLATION SERVICE STOPPED", "Application shutdown completed.", "🛑")
 
 # --------------------------------------------------------------------------- #
 # App                                                                         #
@@ -237,7 +249,30 @@ app.include_router(market_feed_router)
 # --------------------------------------------------------------------------- #
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "isolated_feeds": get_isolated_feed_status()}
+
+
+def _restore_isolation_capture() -> None:
+    """Resume indicator capture for today's persisted isolation after restart."""
+    try:
+        archive = IsolatedArchiveService().load_current()
+        if archive:
+            record = archive.get("source_record") or {}
+        else:
+            from core.config import ISOLATION_DOC_ID, PROJECT_INFO_COLLECTION
+            from core.mongo_client import get_mongo_db
+            record = get_mongo_db()[PROJECT_INFO_COLLECTION].find_one({"_id": ISOLATION_DOC_ID}) or {}
+        if record and record.get("status", "ACTIVE") == "ACTIVE" and record.get("instrument_key"):
+            if not archive:
+                IsolatedArchiveService().save_isolation(record)
+            start_isolated_feeds(record)
+            notify_runtime_event(
+                "ISOLATION CAPTURE RESTORED",
+                f"{record.get('trading_symbol') or record.get('instrument_key')} · SR and Supertrend recovery requested.",
+                "🔄",
+            )
+    except Exception:
+        logger.exception("Could not restore today's isolation feed capture")
 
 @app.get("/status")
 def status():
@@ -251,7 +286,8 @@ def status():
                     "next_run": str(job.next_run_time),
                 }
             )
-    return {"scheduler_running": _scheduler is not None, "jobs": jobs}
+    return {"scheduler_running": _scheduler is not None, "jobs": jobs,
+            "isolated_feeds": get_isolated_feed_status()}
 
 @app.get("/startup-state")
 def startup_state():
