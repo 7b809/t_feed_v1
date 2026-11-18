@@ -240,5 +240,4 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
             if deferred_until is not None else ""
         ),
     )
-    send_telegram_message("✅ Project started. Scheduler running.")
     return scheduler
