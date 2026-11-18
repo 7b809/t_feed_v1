@@ -389,6 +389,17 @@ class DummyOrderEngine:
             if not target_key:
                 logger.warning("Dummy order target role %s missing for %s", role, isolation_id)
                 return
+            # Enforce the entry cap before reversal logic. A rejected later
+            # signal must never close or modify the existing target/SL-managed order.
+            if order_count >= order_limit:
+                state["supertrend_order_count"] = order_count
+                state["supertrend_order_limit"] = order_limit
+                state["supertrend_entry_window_mode"] = entry_window_mode
+                state["updated_at"] = _now().isoformat()
+                await asyncio.to_thread(self._store.save, isolation_id, state)
+                logger.info("Supertrend entry limit reached iso=%s entries=%d limit=%d signal_time=%s",
+                            isolation_id, order_count, order_limit, signal["time"])
+                return
             # A new opposite Supertrend signal reverses an open dummy order.
             # Close at the latest same-session LTP, but never replace an order
             # if that quote already satisfies its target or stop.
