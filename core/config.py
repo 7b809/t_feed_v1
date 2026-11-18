@@ -336,3 +336,21 @@ TOKEN_CACHE_TTL_SECONDS = int(os.getenv("TOKEN_CACHE_TTL_SECONDS", "1800"))
 # ---------------------------------------------------------------------------
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8001"))
+
+# ---------------------------------------------------------------------------
+# Daily MEGA data backup
+# ---------------------------------------------------------------------------
+DAILY_DATA_BACKUP_ENABLED = (
+    os.getenv("DAILY_DATA_BACKUP_ENABLED", "true").strip().lower() == "true"
+)
+DAILY_DATA_BACKUP_DIR = os.getenv("DAILY_DATA_BACKUP_DIR", "./backups")
+DAILY_DATA_BACKUP_HOUR = int(os.getenv("DAILY_DATA_BACKUP_HOUR", "16"))
+DAILY_DATA_BACKUP_MINUTE = int(os.getenv("DAILY_DATA_BACKUP_MINUTE", "5"))
+DAILY_DATA_BACKUP_DAYS = os.getenv("DAILY_DATA_BACKUP_DAYS", "mon-fri").strip()
+DAILY_DATA_BACKUP_COLLECTION = os.getenv(
+    "DAILY_DATA_BACKUP_COLLECTION", "daily_data_backup_state"
+)
+MEGA_ENABLED = os.getenv("MEGA_ENABLED", "true").strip().lower() == "true"
+MEGA_EMAIL = os.getenv("MEGA_EMAIL", "").strip()
+MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
+MEGA_BACKUP_ROOT = os.getenv("MEGA_BACKUP_ROOT", "isolation_app").strip().strip("/")
