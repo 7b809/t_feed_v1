@@ -254,7 +254,7 @@ def test_startup_recovery_replays_stop_then_target_and_locks_day(tmp_path):
         })
         state = store.load(isolation_id)
         assert state["supertrend_startup_recovery"]["status"] == "COMPLETED"
-        assert state["supertrend_daily_target_locked"] is True
+        assert state["supertrend_order_count"] == 2
         assert len(state["order_history"]) == 2
         assert state["order_history"][0]["exit_reason"] == "STOP_LOSS"
         assert state["order_history"][1]["exit_reason"] == "TARGET"
@@ -304,9 +304,9 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
         first = store.load(isolation_id)["orders"]["supertrend"]
         assert first["order_sequence"] == 1
 
-        # Stop-loss closes entry 1; the next signal may create entry 2.
+        # A target closes entry 1; a later signal may still create entry 2.
         first_tick = (datetime.fromisoformat(first["started_at_ist"]) + timedelta(seconds=60)).isoformat()
-        await engine.on_market_tick("CE", {"ltpc": {"ltp": 86.41}}, first_tick)
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 173.45}}, first_tick)
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "BEARISH",
             "confirmed_time": "2026-11-12T09:45:00+05:30", "price": 123.45,
@@ -314,6 +314,7 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
         second = store.load(isolation_id)["orders"]["supertrend"]
         assert second["order_sequence"] == 2
         assert second["target_instrument_key"] == "PE"
+        assert store.load(isolation_id)["order_history"][0]["exit_reason"] == "TARGET"
 
         # Close entry 2. A third confirmed signal must not create another order.
         second_tick = (datetime.fromisoformat(second["started_at_ist"]) + timedelta(seconds=60)).isoformat()
