@@ -67,15 +67,17 @@ class ORLevelsService:
             merged["computed_at"] = repaired.get("computed_at")
             merged["updated_at"] = repaired.get("updated_at")
             merged["trigger"] = "missing_index_repair"
-            if all(key in merged_indexes for key in INSTRUMENT_KEYS):
+            if merged_indexes != existing_indexes:
+                # Persist partial progress too: a transient failure for one
+                # exchange must not discard successfully repaired indexes.
                 self._save_mongo(merged)
                 self._save_local(merged)
-                logger.info("Today's pivot_levels repaired with all %d indexes", len(merged_indexes))
-                return merged
 
             still_missing = [key for key in INSTRUMENT_KEYS if key not in merged_indexes]
-            logger.error("OR levels remain incomplete after repair; missing=%s", still_missing)
-            self._save_local(merged)
+            if still_missing:
+                logger.error("OR levels remain incomplete after repair; missing=%s", still_missing)
+            else:
+                logger.info("Today's pivot_levels repaired with all %d indexes", len(merged_indexes))
             return merged
 
         if existing:
