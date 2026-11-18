@@ -56,6 +56,8 @@ Default schedule: weekdays at **16:05 Asia/Kolkata**. Remote archive naming is `
 
 Required private `.env` settings: `DAILY_DATA_BACKUP_ENABLED=true`, `MEGA_ENABLED=true`, `MEGA_EMAIL`, `MEGA_PASSWORD`, and `MEGA_BACKUP_ROOT=sandbox_v1`. Configure the schedule with `DAILY_DATA_BACKUP_HOUR`, `DAILY_DATA_BACKUP_MINUTE`, and `DAILY_DATA_BACKUP_DAYS`.
 
+Backups include files under `data/` only; credentials and `.env` are never archived. Empty data directories are rejected rather than uploading an empty ZIP.
+
 Backup endpoints:
 
 - `GET /api/v1/backups/mega/status` — configuration, next run and latest result
