@@ -5,17 +5,29 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from api.routes.orders import router as orders_router
 from api.routes.backups import router as backups_router
-from core.config import API_PORT, API_HOST, UPSTOX_SANDBOX, TRADING_ENABLED, PROJECT_ROOT
+from api.routes.orders import router as orders_router
+from core.config import (
+    API_HOST,
+    API_PORT,
+    MONGO_DB_NAME,
+    ORDERS_COLLECTION,
+    PROJECT_ROOT,
+    TRADING_ENABLED,
+    UPSTOX_SANDBOX,
+)
 from core.logger import get_logger
 from core.mongo_client import close_mongo_connection, get_mongo_db
 from core.telegram_notifier import notify_event
-from services.mega_backup_scheduler import start_mega_backup_scheduler, stop_mega_backup_scheduler
+from core.token_service import get_token_status
+from services.mega_backup_scheduler import (
+    start_mega_backup_scheduler,
+    stop_mega_backup_scheduler,
+)
 
 logger = get_logger(__file__)
 TEMPLATES = Jinja2Templates(directory=str(PROJECT_ROOT / "templates"))
@@ -72,11 +84,45 @@ def buy_page(request: Request):
 
 @app.get("/health", tags=["system"])
 def health():
+    """Liveness + shallow readiness probe.
+
+    Returns HTTP 200 regardless (liveness), but the body distinguishes
+    a fully healthy service (``status: "ok"``) from one that started
+    but has lost MongoDB (``status: "degraded"``, ``database_ok: false``).
+    """
+    db_ok = True
+    try:
+        get_mongo_db().command("ping")
+    except Exception:
+        logger.exception("Health check: MongoDB ping failed")
+        db_ok = False
+
     return {
-        "status": "ok", "service": "sandbox_v1", "port": API_PORT,
-        "upstox_sandbox": UPSTOX_SANDBOX, "trading_enabled": TRADING_ENABLED,
-        "database": "UPSTOX_APP_V2", "orders_collection": "sandbox_orders",
+        "status": "ok" if db_ok else "degraded",
+        "service": "sandbox_v1",
+        "port": API_PORT,
+        "upstox_sandbox": UPSTOX_SANDBOX,
+        "trading_enabled": TRADING_ENABLED,
+        "database": MONGO_DB_NAME,
+        "database_ok": db_ok,
+        "orders_collection": ORDERS_COLLECTION,
     }
+
+
+@app.get("/health/token", tags=["system"])
+def health_token():
+    """Deep readiness probe: is the Upstox access token valid right now?
+
+    Performs one call to Upstox's ``UserApi.get_profile`` via the SDK.
+    Returns HTTP 200 only when the token is accepted; otherwise HTTP 503.
+    The response body deliberately contains no profile data — only
+    ``present``, ``valid``, and an error category when applicable.
+    """
+    status = get_token_status()
+    return JSONResponse(
+        status_code=200 if status.get("valid") else 503,
+        content=status,
+    )
 
 
 @app.get("/docs-info", tags=["system"])

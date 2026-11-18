@@ -30,7 +30,13 @@ _CACHE_LOCK = threading.RLock()
 class InstrumentSearchError(Exception):
     """Expected upstream/search failure with safe client-facing diagnostics."""
 
-    def __init__(self, message: str, *, status_code: int = 502, details: dict | None = None):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int = 502,
+        details: dict | None = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.details = details or {}
@@ -90,6 +96,79 @@ def _cache_response(payload: dict, *, age: int, stale: bool) -> dict:
         "meta_data": payload.get("meta_data", {}),
         "cache": {"source": "local", "stale": stale, "age_seconds": age},
     }
+
+
+def _extract_upstream_error(response: requests.Response) -> dict:
+    """Pull the useful parts out of an Upstox error body.
+
+    Returns a dict with ``status``, ``error_code``, ``error_name``,
+    ``message``, and ``body_excerpt``. Never raises; missing/broken bodies
+    yield ``None`` fields and an empty excerpt.
+    """
+    result: dict[str, Any] = {
+        "status": response.status_code,
+        "error_code": None,
+        "error_name": None,
+        "message": None,
+        "body_excerpt": "",
+    }
+    try:
+        result["body_excerpt"] = (response.text or "")[:2000]
+    except Exception:
+        pass
+    try:
+        body = response.json()
+    except (ValueError, TypeError):
+        body = None
+    if isinstance(body, dict):
+        result["error_name"] = body.get("error_name") or body.get("status")
+        errors = body.get("errors")
+        if isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            first = errors[0]
+            result["error_code"] = (
+                first.get("errorCode") or first.get("error_code")
+            )
+            result["message"] = first.get("message")
+        if not result["message"] and isinstance(body.get("message"), str):
+            result["message"] = body["message"]
+    return result
+
+
+def _build_hint(params: dict[str, Any], upstream: dict[str, Any]) -> str:
+    """Return a context-aware, human-readable hint for a 4xx failure.
+
+    Hints are matched against the upstream error code / message, not against
+    the query alone. Previously a numeric-only query always appended the
+    "try a trading symbol" hint — which was actively misleading when the
+    real failure was ``UDAPI100500`` "Please Enter Correct Segment And
+    Exchange Values". This function now prefers the upstream signal.
+    """
+    error_code = (upstream.get("error_code") or "").upper()
+    error_message = (upstream.get("message") or "").lower()
+
+    # Upstox rejects the literal string "ALL" for exchanges/segments — the
+    # documented "Default: ALL" means "omit this parameter", not "send ALL".
+    if (
+        error_code == "UDAPI100500"
+        or "segment" in error_message
+        or "exchange" in error_message
+    ):
+        return (
+            " Omit exchanges/segments to search across all values "
+            "(Upstox rejects the literal string 'ALL')."
+        )
+
+    # Numeric-only queries are valid but usually match many contracts; the
+    # hint applies only when the failure is *not* about filters.
+    query = params.get("query")
+    if isinstance(query, str) and query.strip().isdigit():
+        return (
+            " Numeric-only queries usually match many contracts; "
+            "try a trading symbol like 'NIFTY' or 'NIFTY24500CE' "
+            "instead of a strike price."
+        )
+
+    return ""
 
 
 def search_upstox_instruments(params: dict[str, Any]) -> dict:
@@ -202,17 +281,87 @@ def search_upstox_instruments(params: dict[str, Any]) -> dict:
             status_code=504,
             details={"upstream": "upstox", "retryable": True},
         ) from exc
+
+    # ------------------------------------------------------------------
+    # HTTP error handling.
+    #
+    # * extracts the upstream error_code / error_name / message,
+    # * maps 4xx (except 401/403/429) to 400,
+    # * propagates 401/403/429 unchanged,
+    # * maps 5xx to 502,
+    # * logs the full params dict and a body excerpt so the failure is
+    #   reproducible from the log alone,
+    # * appends a context-aware hint (see _build_hint).
+    # ------------------------------------------------------------------
     except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else None
-        logger.warning("Upstox instrument search HTTP failure; status=%s", status)
-        if cached_payload is not None:
-            logger.warning("Serving cached instrument results after upstream HTTP failure; age_seconds=%s", cache_age)
+        upstream = _extract_upstream_error(exc.response) if exc.response is not None else {
+            "status": None, "error_code": None, "error_name": None,
+            "message": None, "body_excerpt": "",
+        }
+        upstream_status = upstream["status"]
+
+        logger.warning(
+            "Upstox instrument search HTTP failure; status=%s; params=%r; "
+            "upstream_error_code=%s; upstream_error_name=%s; "
+            "upstream_message=%s; body_excerpt=%r",
+            upstream_status, params,
+            upstream["error_code"], upstream["error_name"],
+            upstream["message"], upstream["body_excerpt"][:500],
+        )
+
+        # Cache fallback only makes sense when the failure is not clearly
+        # caused by the request itself. A 400 will fail again; serving a
+        # previously successful result for the same query would mask a real
+        # upstream change. 5xx and 429 are transient — cache is useful there.
+        cache_eligible = upstream_status is None or upstream_status >= 500 or upstream_status == 429
+        if cached_payload is not None and cache_eligible:
+            logger.warning(
+                "Serving cached instrument results after upstream HTTP failure; age_seconds=%s",
+                cache_age,
+            )
             return _cache_response(cached_payload, age=cache_age or 0, stale=True)
+
+        if upstream_status in (401, 403):
+            client_status = upstream_status
+            retryable = False
+            message = (
+                f"Upstox rejected the instrument-search request (HTTP {upstream_status}). "
+                "Check the access token in MongoDB."
+            )
+            if upstream["message"]:
+                message += f" Upstox said: {upstream['message']}"
+        elif upstream_status == 429:
+            client_status = 429
+            retryable = True
+            message = "Upstox rate limit reached on instrument search. Retry shortly."
+        elif upstream_status is not None and 400 <= upstream_status < 500:
+            client_status = 400
+            retryable = False
+            message = (
+                f"Upstox rejected the instrument-search request (HTTP {upstream_status}). "
+                "Check the query parameters."
+            )
+            if upstream["message"]:
+                message += f" Upstox said: {upstream['message']}"
+            message += _build_hint(params, upstream)
+        else:
+            client_status = 502
+            retryable = True
+            message = "Upstox instrument search is temporarily unavailable."
+
         raise InstrumentSearchError(
-            "Upstox rejected or failed the instrument-search request.",
-            status_code=502,
-            details={"upstream": "upstox", "upstream_status": status, "retryable": status in (408, 429, 500, 502, 503, 504)},
+            message,
+            status_code=client_status,
+            details={
+                "upstream": "upstox",
+                "upstream_status": upstream_status,
+                "upstream_error_code": upstream["error_code"],
+                "upstream_error_name": upstream["error_name"],
+                "upstream_message": upstream["message"],
+                "retryable": retryable,
+            },
         ) from exc
+
     except requests.RequestException as exc:
         logger.warning("Upstox instrument search network failure: %s", type(exc).__name__)
         if cached_payload is not None:

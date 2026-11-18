@@ -1,18 +1,19 @@
 """Order lifecycle orchestration using the official Upstox Python SDK."""
 from __future__ import annotations
 
-import logging
 import threading
 import uuid
-from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 import upstox_client
 
 from core.config import (
-    DEFAULT_ORDER_QUANTITY, DEFAULT_PRODUCT, DEFAULT_VALIDITY,
-    TRADING_ENABLED, UPSTOX_API_VERSION, UPSTOX_SANDBOX, TIMEZONE,
+    DEFAULT_ORDER_QUANTITY,
+    DEFAULT_PRODUCT,
+    DEFAULT_VALIDITY,
+    TRADING_ENABLED,
+    UPSTOX_SANDBOX,
+    TIMEZONE,  # noqa: F401  (kept for symmetry with config surface)
 )
 from core.logger import get_logger
 from core.token_service import fetch_access_token
@@ -21,7 +22,13 @@ from models.order_models import PlaceOrderRequest
 from repositories.order_repository import OrderRepository, now_iso
 
 logger = get_logger(__file__)
-_TZ = ZoneInfo(TIMEZONE)
+
+# Re-exported here so existing callers that did
+#   from services.order_service import _TZ
+# continue to import cleanly, even though no internal code uses it.
+from zoneinfo import ZoneInfo as _ZoneInfo
+
+_TZ = _ZoneInfo(TIMEZONE)
 
 
 class OrderServiceError(RuntimeError):
@@ -53,12 +60,6 @@ def _plain(value: Any) -> Any:
     return str(value)
 
 
-def _get(value: Any, key: str, default=None):
-    if isinstance(value, dict):
-        return value.get(key, default)
-    return getattr(value, key, default)
-
-
 def _response_data(response: Any) -> dict:
     raw = _plain(response)
     if not isinstance(raw, dict):
@@ -67,9 +68,29 @@ def _response_data(response: Any) -> dict:
     return data if isinstance(data, dict) else raw
 
 
+# Upstox SDK ApiException.__str__ embeds the raw HTTP response, including
+# set-cookie and any future Authorization echo. Anything that ends up in
+# the audit ledger, MongoDB, or a Telegram message must be scrubbed before
+# truncation, not after — otherwise the 1500-char cap alone still leaks the
+# Cloudflare __cf_bm cookie seen in the 2026-11-18 logs.
+_HEADER_MARKERS = ("\nHTTP response headers:", "\nHTTP response body:")
+
+
 def _exception_text(exc: Exception) -> str:
-    # Do not include request headers or access tokens in audit records.
-    return f"{type(exc).__name__}: {str(exc)[:1500]}"
+    """Compact, credential-safe exception description for audit records.
+
+    Cuts the raw ``str(exc)`` at the first HTTP header/body marker (the
+    Upstox SDK embeds both) and caps the remaining text at 500 chars.
+    Response cookies such as Cloudflare's ``__cf_bm`` therefore never reach
+    ``data/orders/*.json``, Mongo, or Telegram.
+    """
+    text = str(exc)
+    for marker in _HEADER_MARKERS:
+        index = text.find(marker)
+        if index >= 0:
+            text = text[:index]
+            break
+    return f"{type(exc).__name__}: {text[:500]}"
 
 
 class OrderService:
@@ -117,7 +138,11 @@ class OrderService:
         }
 
     def _append_event(
-        self, local_id: str, event: dict, *, status: str | None = None,
+        self,
+        local_id: str,
+        event: dict,
+        *,
+        status: str | None = None,
         require_mongo: bool = False,
     ) -> dict:
         entry = self.repository.find_entry(local_id)
@@ -150,8 +175,11 @@ class OrderService:
                     events.append(event)
                     self.repository.update_entry(
                         entry["local_id"],
-                        {"status": "PERSISTENCE_EXCEPTION", "events": events,
-                         "last_modified_time": now_iso()},
+                        {
+                            "status": "PERSISTENCE_EXCEPTION",
+                            "events": events,
+                            "last_modified_time": now_iso(),
+                        },
                         require_mongo=False,
                     )
                 else:
@@ -163,21 +191,6 @@ class OrderService:
             raise OrderServiceError(
                 f"Persistence failed before {action}; no Upstox request was sent."
             ) from exc
-
-    def _record_blocked_action(self, action: str, payload: dict) -> None:
-        entry = self._new_entry(
-            "EXCEPTION",
-            action=action,
-            status="BLOCKED",
-            request=_plain(payload),
-        )
-        entry["events"].append(
-            self._new_event("TRADING_DISABLED", reason="TRADING_ENABLED=false")
-        )
-        try:
-            self.repository.append_entry(entry, require_mongo=False)
-        except Exception:
-            logger.exception("Could not persist blocked order action")
 
     def place_order(self, request: PlaceOrderRequest) -> dict:
         """Place a V3 order. Defaults are BUY, 65 units, MARKET and Intraday."""
@@ -208,11 +221,15 @@ class OrderService:
                 status="BLOCKED",
                 require_mongo=False,
             )
-            notify_event("Order blocked — trading disabled", [
-                f"Instrument: {request.trading_symbol or request.instrument_token}",
-                f"Quantity: {request.quantity}",
-                "Reason: TRADING_ENABLED=false",
-            ], "WARNING")
+            notify_event(
+                "Order blocked — trading disabled",
+                [
+                    f"Instrument: {request.trading_symbol or request.instrument_token}",
+                    f"Quantity: {request.quantity}",
+                    "Reason: TRADING_ENABLED=false",
+                ],
+                "WARNING",
+            )
             raise TradingDisabledError(
                 "Order execution is disabled. Set TRADING_ENABLED=true only "
                 "after verifying sandbox/live settings."
@@ -246,9 +263,13 @@ class OrderService:
                 )
 
             events = list(entry["events"])
-            events.append(self._new_event(
-                "ORDER_PLACED", order_ids=ids, broker_response=_plain(response)
-            ))
+            events.append(
+                self._new_event(
+                    "ORDER_PLACED",
+                    order_ids=ids,
+                    broker_response=_plain(response),
+                )
+            )
             updates = {
                 "order_id": ids[0] if len(ids) == 1 else None,
                 "order_ids": ids,
@@ -262,15 +283,22 @@ class OrderService:
             )
             logger.info(
                 "Upstox order accepted | ids=%s | side=%s | qty=%s | instrument=%s",
-                ids, request.transaction_type, request.quantity, request.instrument_token,
+                ids,
+                request.transaction_type,
+                request.quantity,
+                request.instrument_token,
             )
-            notify_event("Order placed", [
-                f"Symbol: {request.trading_symbol or request.instrument_token}",
-                f"Side: {request.transaction_type} | Qty: {request.quantity}",
-                f"Type: {request.order_type} | Product: {request.product}",
-                "Order ID(s): " + ", ".join(ids),
-                "Mode: " + ("Sandbox" if UPSTOX_SANDBOX else "Live"),
-            ], "ORDER")
+            notify_event(
+                "Order placed",
+                [
+                    f"Symbol: {request.trading_symbol or request.instrument_token}",
+                    f"Side: {request.transaction_type} | Qty: {request.quantity}",
+                    f"Type: {request.order_type} | Product: {request.product}",
+                    "Order ID(s): " + ", ".join(ids),
+                    "Mode: " + ("Sandbox" if UPSTOX_SANDBOX else "Live"),
+                ],
+                "ORDER",
+            )
             return {
                 "status": "placed",
                 "order_ids": ids,
@@ -278,6 +306,11 @@ class OrderService:
                 "persistence": persistence,
                 "sandbox": UPSTOX_SANDBOX,
             }
+        except TradingDisabledError:
+            # Defensive: _require_trading() is *before* the try in place_order,
+            # but if a future refactor moves it inside, do not mislabel it as a
+            # broker failure.
+            raise
         except Exception as exc:
             try:
                 self._append_event(
@@ -289,11 +322,15 @@ class OrderService:
             except Exception:
                 logger.exception("Could not save order exception audit")
             logger.exception("Upstox order placement failed")
-            notify_event("Order placement failed", [
-                f"Symbol: {request.trading_symbol or request.instrument_token}",
-                f"Quantity: {request.quantity}",
-                f"Error: {_exception_text(exc)}",
-            ], "ERROR")
+            notify_event(
+                "Order placement failed",
+                [
+                    f"Symbol: {request.trading_symbol or request.instrument_token}",
+                    f"Quantity: {request.quantity}",
+                    f"Error: {_exception_text(exc)}",
+                ],
+                "ERROR",
+            )
             raise
 
     def _get_or_create_order_entry(self, order_id: str) -> dict:
@@ -315,8 +352,10 @@ class OrderService:
         with self._operation_lock:
             entry = self._get_or_create_order_entry(order_id)
             self._append_event(
-                entry["local_id"], self._new_event("CANCEL_REQUESTED", order_id=order_id),
-                status="CANCEL_REQUESTED", require_mongo=True,
+                entry["local_id"],
+                self._new_event("CANCEL_REQUESTED", order_id=order_id),
+                status="CANCEL_REQUESTED",
+                require_mongo=True,
             )
             try:
                 self._require_trading()
@@ -324,35 +363,65 @@ class OrderService:
                 response = order_v3.cancel_order(order_id)
                 persistence = self._append_event(
                     entry["local_id"],
-                    self._new_event("ORDER_CANCEL_RESPONSE", order_id=order_id,
-                                    broker_response=_plain(response)),
+                    self._new_event(
+                        "ORDER_CANCEL_RESPONSE",
+                        order_id=order_id,
+                        broker_response=_plain(response),
+                    ),
                     status="CANCEL_SUBMITTED",
                     require_mongo=False,
                 )
-                notify_event("Order cancellation submitted", [
-                    f"Order ID: {order_id}",
-                    "Broker cancellation request submitted.",
-                ], "CANCEL")
+                notify_event(
+                    "Order cancellation submitted",
+                    [
+                        f"Order ID: {order_id}",
+                        "Broker cancellation request submitted.",
+                    ],
+                    "CANCEL",
+                )
                 return {
                     "status": "cancel_submitted",
                     "order_id": order_id,
                     "broker_response": _plain(response),
                     "persistence": persistence,
                 }
+            except TradingDisabledError as exc:
+                try:
+                    self._append_event(
+                        entry["local_id"],
+                        self._new_event(
+                            "TRADING_DISABLED",
+                            order_id=order_id,
+                            reason="TRADING_ENABLED=false",
+                        ),
+                        status="BLOCKED",
+                        require_mongo=False,
+                    )
+                except Exception:
+                    logger.exception("Could not save blocked-cancel audit")
+                notify_event(
+                    "Order cancellation blocked — trading disabled",
+                    [f"Order ID: {order_id}", "Reason: TRADING_ENABLED=false"],
+                    "WARNING",
+                )
+                raise
             except Exception as exc:
                 try:
                     self._append_event(
                         entry["local_id"],
-                        self._new_event("CANCEL_EXCEPTION", error=_exception_text(exc)),
+                        self._new_event(
+                            "CANCEL_EXCEPTION", error=_exception_text(exc)
+                        ),
                         status="CANCEL_EXCEPTION",
                         require_mongo=False,
                     )
                 except Exception:
                     logger.exception("Could not save cancel exception")
-                notify_event("Order cancellation failed", [
-                    f"Order ID: {order_id}",
-                    f"Error: {_exception_text(exc)}",
-                ], "ERROR")
+                notify_event(
+                    "Order cancellation failed",
+                    [f"Order ID: {order_id}", f"Error: {_exception_text(exc)}"],
+                    "ERROR",
+                )
                 raise
 
     def cancel_orders(self, order_ids: list[str]) -> list[dict]:
@@ -361,8 +430,13 @@ class OrderService:
             try:
                 results.append({"order_id": order_id, **self.cancel_order(order_id)})
             except Exception as exc:
-                results.append({"order_id": order_id, "status": "error",
-                                "error": _exception_text(exc)})
+                results.append(
+                    {
+                        "order_id": order_id,
+                        "status": "error",
+                        "error": _exception_text(exc),
+                    }
+                )
         return results
 
     def _order_details(self, order_v2, order_id: str) -> dict:
@@ -379,8 +453,10 @@ class OrderService:
                     "ID-specific exit is refused to avoid an untracked/double square-off."
                 )
             self._append_event(
-                entry["local_id"], self._new_event("EXIT_REQUESTED", order_id=order_id),
-                status="EXIT_REQUESTED", require_mongo=True,
+                entry["local_id"],
+                self._new_event("EXIT_REQUESTED", order_id=order_id),
+                status="EXIT_REQUESTED",
+                require_mongo=True,
             )
             try:
                 self._require_trading()
@@ -400,22 +476,30 @@ class OrderService:
                     exit_detail = self._order_details(order_v2, exit_id)
                     pending_qty = int(exit_detail.get("pending_quantity") or 0)
                     status = str(exit_detail.get("status") or "").lower()
-                    if pending_qty > 0 and status not in {"complete", "cancelled", "rejected"}:
+                    if pending_qty > 0 and status not in {
+                        "complete",
+                        "cancelled",
+                        "rejected",
+                    }:
                         pending_exit_ids.append(exit_id)
                     exited_qty += int(exit_detail.get("filled_quantity") or 0)
 
                 if pending_exit_ids:
                     raise OrderServiceError(
-                        "An earlier exit order is still pending; wait for its final status "
-                        f"before submitting another exit: {pending_exit_ids}"
+                        "An earlier exit order is still pending; wait for its final "
+                        f"status before submitting another exit: {pending_exit_ids}"
                     )
                 remaining_qty = filled_qty - exited_qty
                 if remaining_qty <= 0:
-                    notify_event("Position already exited", [
-                        f"Original order ID: {order_id}",
-                        f"Filled quantity: {filled_qty}",
-                        f"Exited quantity: {exited_qty}",
-                    ], "INFO")
+                    notify_event(
+                        "Position already exited",
+                        [
+                            f"Original order ID: {order_id}",
+                            f"Filled quantity: {filled_qty}",
+                            f"Exited quantity: {exited_qty}",
+                        ],
+                        "INFO",
+                    )
                     return {
                         "status": "already_exited",
                         "order_id": order_id,
@@ -423,14 +507,24 @@ class OrderService:
                         "exited_quantity": exited_qty,
                     }
 
-                side = str(entry.get("transaction_type") or original.get("transaction_type") or "").upper()
+                side = str(
+                    entry.get("transaction_type")
+                    or original.get("transaction_type")
+                    or ""
+                ).upper()
                 if side not in {"BUY", "SELL"}:
-                    raise OrderServiceError("Original order transaction_type is unavailable.")
+                    raise OrderServiceError(
+                        "Original order transaction_type is unavailable."
+                    )
                 reverse_side = "SELL" if side == "BUY" else "BUY"
-                instrument = entry.get("instrument_token") or original.get("instrument_token")
+                instrument = (
+                    entry.get("instrument_token") or original.get("instrument_token")
+                )
                 product = entry.get("product") or original.get("product") or "I"
                 if not instrument:
-                    raise OrderServiceError("Original instrument_token is unavailable.")
+                    raise OrderServiceError(
+                        "Original instrument_token is unavailable."
+                    )
 
                 body = upstox_client.PlaceOrderV3Request(
                     quantity=remaining_qty,
@@ -454,20 +548,29 @@ class OrderService:
                 exit_ids = [str(value) for value in exit_ids if value]
                 if not exit_ids:
                     raise OrderServiceError(
-                        f"Upstox exit response did not contain order IDs: {response_data}"
+                        "Upstox exit response did not contain order IDs: "
+                        f"{response_data}"
                     )
 
                 exit_map.setdefault(order_id, []).extend(exit_ids)
                 parent_events = list(entry.get("events") or [])
-                parent_events.append(self._new_event(
-                    "EXIT_ORDER_PLACED", source_order_id=order_id,
-                    exit_order_ids=exit_ids, quantity=remaining_qty,
-                    transaction_type=reverse_side, broker_response=_plain(response),
-                ))
+                parent_events.append(
+                    self._new_event(
+                        "EXIT_ORDER_PLACED",
+                        source_order_id=order_id,
+                        exit_order_ids=exit_ids,
+                        quantity=remaining_qty,
+                        transaction_type=reverse_side,
+                        broker_response=_plain(response),
+                    )
+                )
                 persistence = self.repository.update_entry(
                     entry["local_id"],
-                    {"exit_orders_by_order_id": exit_map, "events": parent_events,
-                     "last_modified_time": now_iso()},
+                    {
+                        "exit_orders_by_order_id": exit_map,
+                        "events": parent_events,
+                        "last_modified_time": now_iso(),
+                    },
                     require_mongo=False,
                 )
                 for exit_id in exit_ids:
@@ -484,20 +587,31 @@ class OrderService:
                         status="PLACED",
                         broker_response=_plain(response),
                     )
-                    exit_entry["events"].append(self._new_event(
-                        "EXIT_ORDER_PLACED", source_order_id=order_id,
-                        broker_response=_plain(response),
-                    ))
+                    exit_entry["events"].append(
+                        self._new_event(
+                            "EXIT_ORDER_PLACED",
+                            source_order_id=order_id,
+                            broker_response=_plain(response),
+                        )
+                    )
                     try:
-                        self.repository.append_entry(exit_entry, require_mongo=False)
+                        self.repository.append_entry(
+                            exit_entry, require_mongo=False
+                        )
                     except Exception:
-                        logger.exception("Could not persist exit order audit entry %s", exit_id)
-                notify_event("Exit order submitted", [
-                    f"Original order ID: {order_id}",
-                    "Exit order ID(s): " + ", ".join(exit_ids),
-                    f"Quantity: {remaining_qty} | Side: {reverse_side}",
-                    f"Instrument: {instrument}",
-                ], "EXIT")
+                        logger.exception(
+                            "Could not persist exit order audit entry %s", exit_id
+                        )
+                notify_event(
+                    "Exit order submitted",
+                    [
+                        f"Original order ID: {order_id}",
+                        "Exit order ID(s): " + ", ".join(exit_ids),
+                        f"Quantity: {remaining_qty} | Side: {reverse_side}",
+                        f"Instrument: {instrument}",
+                    ],
+                    "EXIT",
+                )
                 return {
                     "status": "exit_submitted",
                     "source_order_id": order_id,
@@ -506,21 +620,45 @@ class OrderService:
                     "transaction_type": reverse_side,
                     "persistence": persistence,
                 }
+            except TradingDisabledError:
+                try:
+                    self._append_event(
+                        entry["local_id"],
+                        self._new_event(
+                            "TRADING_DISABLED",
+                            order_id=order_id,
+                            reason="TRADING_ENABLED=false",
+                        ),
+                        status="BLOCKED",
+                        require_mongo=False,
+                    )
+                except Exception:
+                    logger.exception("Could not save blocked-exit audit")
+                notify_event(
+                    "Exit request blocked — trading disabled",
+                    [f"Order ID: {order_id}", "Reason: TRADING_ENABLED=false"],
+                    "WARNING",
+                )
+                raise
             except Exception as exc:
                 try:
                     self._append_event(
                         entry["local_id"],
-                        self._new_event("EXIT_EXCEPTION", order_id=order_id,
-                                        error=_exception_text(exc)),
+                        self._new_event(
+                            "EXIT_EXCEPTION",
+                            order_id=order_id,
+                            error=_exception_text(exc),
+                        ),
                         status="EXIT_EXCEPTION",
                         require_mongo=False,
                     )
                 except Exception:
                     logger.exception("Could not save exit exception")
-                notify_event("Exit request failed", [
-                    f"Order ID: {order_id}",
-                    f"Error: {_exception_text(exc)}",
-                ], "ERROR")
+                notify_event(
+                    "Exit request failed",
+                    [f"Order ID: {order_id}", f"Error: {_exception_text(exc)}"],
+                    "ERROR",
+                )
                 raise
 
     def exit_orders(self, order_ids: list[str]) -> list[dict]:
@@ -529,12 +667,18 @@ class OrderService:
             try:
                 results.append(self.exit_order(order_id))
             except Exception as exc:
-                results.append({"order_id": order_id, "status": "error",
-                                "error": _exception_text(exc)})
+                results.append(
+                    {
+                        "order_id": order_id,
+                        "status": "error",
+                        "error": _exception_text(exc),
+                    }
+                )
         return results
 
-    def exit_all_positions(self, *, tag: str | None = None,
-                           segment: str | None = None) -> dict:
+    def exit_all_positions(
+        self, *, tag: str | None = None, segment: str | None = None
+    ) -> dict:
         """Call Upstox's native exit_positions API; no order IDs are needed."""
         entry = self._new_entry(
             "EXIT_ALL",
@@ -542,9 +686,9 @@ class OrderService:
             tag=tag,
             segment=segment,
         )
-        entry["events"].append(self._new_event(
-            "EXIT_ALL_REQUESTED", tag=tag, segment=segment
-        ))
+        entry["events"].append(
+            self._new_event("EXIT_ALL_REQUESTED", tag=tag, segment=segment)
+        )
         self._persist_before_action(entry, "exit_all_positions")
 
         try:
@@ -556,8 +700,11 @@ class OrderService:
             ids = [str(value) for value in ids if value]
             persistence = self._append_event(
                 entry["local_id"],
-                self._new_event("EXIT_ALL_RESPONSE", order_ids=ids,
-                                broker_response=_plain(response)),
+                self._new_event(
+                    "EXIT_ALL_RESPONSE",
+                    order_ids=ids,
+                    broker_response=_plain(response),
+                ),
                 status="EXIT_ALL_SUBMITTED",
                 require_mongo=False,
             )
@@ -570,35 +717,67 @@ class OrderService:
                     status="SUBMITTED",
                     broker_response=_plain(response),
                 )
-                audit["events"].append(self._new_event(
-                    "EXIT_ALL_ORDER_CREATED", parent_action_id=entry["local_id"]
-                ))
+                audit["events"].append(
+                    self._new_event(
+                        "EXIT_ALL_ORDER_CREATED",
+                        parent_action_id=entry["local_id"],
+                    )
+                )
                 try:
                     self.repository.append_entry(audit, require_mongo=False)
                 except Exception:
-                    logger.exception("Could not persist exit-all order %s", exit_id)
-            notify_event("Exit all positions submitted", [
-                "Exit order ID(s): " + (", ".join(ids) if ids else "Not returned"),
-                f"Tag: {tag or 'All'} | Segment: {segment or 'All'}",
-                "Broker-native exit_positions request submitted.",
-            ], "EXIT")
+                    logger.exception(
+                        "Could not persist exit-all order %s", exit_id
+                    )
+            notify_event(
+                "Exit all positions submitted",
+                [
+                    "Exit order ID(s): "
+                    + (", ".join(ids) if ids else "Not returned"),
+                    f"Tag: {tag or 'All'} | Segment: {segment or 'All'}",
+                    "Broker-native exit_positions request submitted.",
+                ],
+                "EXIT",
+            )
             return {
                 "status": "exit_all_submitted",
                 "order_ids": ids,
                 "broker_response": _plain(response),
                 "persistence": persistence,
             }
+        except TradingDisabledError:
+            try:
+                self._append_event(
+                    entry["local_id"],
+                    self._new_event(
+                        "TRADING_DISABLED", reason="TRADING_ENABLED=false"
+                    ),
+                    status="BLOCKED",
+                    require_mongo=False,
+                )
+            except Exception:
+                logger.exception("Could not save blocked exit-all audit")
+            notify_event(
+                "Exit all positions blocked — trading disabled",
+                ["Reason: TRADING_ENABLED=false"],
+                "WARNING",
+            )
+            raise
         except Exception as exc:
             try:
                 self._append_event(
                     entry["local_id"],
-                    self._new_event("EXIT_ALL_EXCEPTION", error=_exception_text(exc)),
+                    self._new_event(
+                        "EXIT_ALL_EXCEPTION", error=_exception_text(exc)
+                    ),
                     status="EXIT_ALL_EXCEPTION",
                     require_mongo=False,
                 )
             except Exception:
                 logger.exception("Could not save exit-all exception")
-            notify_event("Exit all positions failed", [
-                f"Error: {_exception_text(exc)}",
-            ], "ERROR")
+            notify_event(
+                "Exit all positions failed",
+                [f"Error: {_exception_text(exc)}"],
+                "ERROR",
+            )
             raise

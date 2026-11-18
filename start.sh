@@ -1,8 +1,6 @@
 #!/bin/bash
 
 APP_NAME="sandbox_service"
-PORT=8004
-
 
 PID_FILE="${APP_NAME}.pid"
 LOG_DIR="logs"
@@ -10,14 +8,63 @@ VENV_DIR="myenv"
 REQUIREMENTS_FILE="requirements.txt"
 
 # --------------------------------------------------
+# Minimal .env reader (no external dependencies)
+# --------------------------------------------------
+# Reads KEY=value from .env, strips surrounding quotes and CR, and echoes the
+# first match. Blank lines and comments are ignored. Returns empty when the
+# key is absent or .env does not exist.
+read_env_value() {
+    local key="$1"
+    local file="${2:-.env}"
+    [ -f "$file" ] || return 0
+    awk -F= -v k="$key" '
+        $0 ~ "^[[:space:]]*"k"[[:space:]]*=" {
+            sub("^[^=]*=", "")
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "")
+            gsub(/^"|"$/, "")
+            gsub(/^\x27|\x27$/, "")
+            gsub(/\r$/, "")
+            print
+            exit
+        }
+    ' "$file"
+}
+
+# --------------------------------------------------
+# Resolve ports
+# --------------------------------------------------
+# Precedence (must match core/config.py):
+#   shell API_PORT  >  .env API_PORT  >  shell APP_PORT  >  .env APP_PORT  >  8004
+# APP_PORT is kept as a backward-compatible alias.
+if [ -z "${API_PORT:-}" ]; then
+    API_PORT="$(read_env_value API_PORT)"
+fi
+if [ -z "${API_PORT:-}" ]; then
+    API_PORT="${APP_PORT:-}"
+fi
+if [ -z "${API_PORT:-}" ]; then
+    API_PORT="$(read_env_value APP_PORT)"
+fi
+PORT="${API_PORT:-8004}"
+
+# --------------------------------------------------
 # IP binding feature flag
 # --------------------------------------------------
 # Set ENABLE_IP_BINDING=true to bind Uvicorn to a specific IP (BIND_IP).
 # Set ENABLE_IP_BINDING=false (default) to bind to 0.0.0.0 (all interfaces).
 #
+# Precedence: shell env > .env > default.
+#
 # Can be overridden from the shell, e.g.:
 #   ENABLE_IP_BINDING=true BIND_IP=192.168.1.50 ./start.sh
+if [ -z "${ENABLE_IP_BINDING:-}" ]; then
+    ENABLE_IP_BINDING="$(read_env_value ENABLE_IP_BINDING)"
+fi
 ENABLE_IP_BINDING="${ENABLE_IP_BINDING:-false}"
+
+if [ -z "${BIND_IP:-}" ]; then
+    BIND_IP="$(read_env_value BIND_IP)"
+fi
 BIND_IP="${BIND_IP:-127.0.0.1}"
 
 echo "=========================================="
@@ -124,12 +171,6 @@ echo "Virtual environment activated."
 
 PYTHON="$VENV_DIR/bin/python"
 PIP="$VENV_DIR/bin/pip"
-
-# Keep the consumer API listener separate from LIVE_FEED_PORT.
-if [ -z "${APP_PORT:-}" ] && [ -f ".env" ]; then
-    APP_PORT="$("$PYTHON" -c 'from dotenv import dotenv_values; print(dotenv_values(".env").get("APP_PORT") or "8004")')"
-fi
-PORT="${APP_PORT:-8004}"
 
 if [ ! -x "$PYTHON" ]; then
     echo
