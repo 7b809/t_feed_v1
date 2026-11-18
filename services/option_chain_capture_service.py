@@ -112,7 +112,7 @@ class OptionChainCaptureService:
         self._active_date: str | None = None
         self._contract_meta: dict[str, dict] = {}
         self._subscribed: set[str] = set()
-        self._last_attempt: dict[str, float] = {}
+        self._processed_indexes: set[str] = set()
         self._last_summary: dict = {}
 
     def ensure_started(self) -> dict:
@@ -121,7 +121,11 @@ class OptionChainCaptureService:
         today = datetime.now(IST).date()
         date_key = today.isoformat()
         with self._lock:
-            if self._active_date == date_key and self._subscribed:
+            if (
+                self._active_date == date_key
+                and len(self._processed_indexes) == len(INSTRUMENT_KEYS)
+                and self._contract_meta.keys() <= self._subscribed
+            ):
                 return self.status()
 
         feed = get_feed_service()
@@ -156,10 +160,14 @@ class OptionChainCaptureService:
             api = upstox_client.OptionsApi(upstox_client.ApiClient(configuration))
             pivot_doc = self._load_pivot_document()
             index_docs = pivot_doc.get("indexes") or {}
-            all_contracts: list[dict] = []
+            with self._lock:
+                all_contracts: list[dict] = list(self._contract_meta.values())
+                processed_indexes = set(self._processed_indexes)
             skipped = []
 
             for instrument_key in INSTRUMENT_KEYS:
+                if instrument_key in processed_indexes:
+                    continue
                 meta = INDEX_METADATA.get(instrument_key, {})
                 pivot = index_docs.get(instrument_key) or {}
                 levels = pivot.get("levels") or {}
@@ -178,6 +186,8 @@ class OptionChainCaptureService:
                     )
                     if not selected:
                         skipped.append({"index": instrument_key, "reason": "no_contracts_in_nearest_expiry_range"})
+                        with self._lock:
+                            self._processed_indexes.add(instrument_key)
                         continue
                     for row in selected:
                         row.update({
@@ -191,6 +201,8 @@ class OptionChainCaptureService:
                             "selected_expiry": nearest_expiry,
                         })
                     all_contracts.extend(selected)
+                    with self._lock:
+                        self._processed_indexes.add(instrument_key)
                     logger.info(
                         "Option-chain selection %s expiry=%s average=%.2f range=[%.2f, %.2f] "
                         "contracts=%d strikes=%d",
@@ -228,10 +240,10 @@ class OptionChainCaptureService:
                 self._subscribed.update(subscribed)
                 self._last_summary = {
                     "enabled": True,
-                    "state": "running" if len(self._subscribed) == len(self._contract_meta) else "partially_subscribed",
+                    "state": "running" if self._contract_meta.keys() <= self._subscribed else "partially_subscribed",
                     "trade_date_ist": date_key,
-                    "selected_contracts": len(new_meta),
-                    "subscribed_contracts": len(subscribed),
+                    "selected_contracts": len(self._contract_meta),
+                    "subscribed_contracts": len(self._subscribed),
                     "skipped_indexes": skipped,
                     "feed_mode": feed.mode,
                 }
@@ -257,6 +269,7 @@ class OptionChainCaptureService:
         self._active_date = date_key
         self._contract_meta.clear()
         self._subscribed.clear()
+        self._processed_indexes.clear()
         self._last_summary = {"enabled": True, "state": "preparing", "trade_date_ist": date_key}
 
     def _load_pivot_document(self) -> dict:
