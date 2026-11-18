@@ -1,4 +1,4 @@
-"""Daily MongoDB persistence for dummy SR/Supertrend orders.
+"""Daily MongoDB persistence for Supertrend dummy orders.
 
 One MongoDB document is maintained per IST date. The requested summary fields
 remain at the document root; by_isolation and orders_history preserve every
@@ -53,7 +53,7 @@ class DummyOrderMongoStore:
                    order: dict, isolated_instrument: dict) -> None:
         now = self._now_utc()
         key = self._isolation_key(isolation_id)
-        indicator_key = "sr_order" if indicator == "sr" else "supertrend_order"
+        indicator_key = "supertrend_order"
         # Use a detached JSON-safe document; PyMongo accepts datetime but the
         # event payload may contain non-BSON objects, so normalize defensively.
         safe_order = self._json_safe(order)
@@ -86,7 +86,7 @@ class DummyOrderMongoStore:
                      completed: bool = False) -> None:
         now = self._now_utc()
         key = self._isolation_key(isolation_id)
-        indicator_key = "sr_order" if indicator == "sr" else "supertrend_order"
+        indicator_key = "supertrend_order"
         safe_order = self._json_safe(order)
         fields = {
             "last_updated_time": now,
