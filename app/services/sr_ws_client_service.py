@@ -55,6 +55,7 @@ class SrWsClientService:
         isolation_id: str,
         instrument_key: str,
         leg_role: str,
+        order_engine: Any = None,  # accepted for compatibility; SR never places orders
     ) -> None:
         self._config = config
         self._state_store = state_store
