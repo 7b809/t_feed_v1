@@ -45,6 +45,8 @@ from jobs.deferred_startup import run_deferred_startup_sequence
 from jobs.isolation_scan import run_isolation_scan
 from services.daily_data_backup_service import DailyDataBackupService
 from core.mongo_client import get_mongo_db
+from services.option_chain_capture_service import ensure_option_chain_capture
+from core.config import OPTION_CHAIN_CAPTURE_ENABLED
 
 logger = get_logger(__file__)
 
@@ -144,6 +146,19 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
     )
+
+    # Option-chain capture retries until today's OR levels and the primary
+    # market feed are ready. The service itself is idempotent after success.
+    if OPTION_CHAIN_CAPTURE_ENABLED:
+        scheduler.add_job(
+            ensure_option_chain_capture,
+            IntervalTrigger(seconds=60),
+            id="option_chain_capture",
+            name="Live Option Chain Capture",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
 
     # End-of-day disconnect
     scheduler.add_job(
