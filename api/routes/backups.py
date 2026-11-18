@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Query
 from core.config import (
     DAILY_DATA_BACKUP_COLLECTION, DAILY_DATA_BACKUP_ENABLED,
     DAILY_DATA_BACKUP_HOUR, DAILY_DATA_BACKUP_MINUTE, DAILY_DATA_BACKUP_DAYS,
-    DAILY_DATA_BACKUP_DIR, DATA_DIR, MEGA_BACKUP_ROOT, MEGA_EMAIL, MEGA_ENABLED,
+    DAILY_DATA_BACKUP_DIR, DATA_DIR, MEGA_BACKUP_ROOT, MEGA_EMAIL, MEGA_PASSWORD, MEGA_ENABLED,
 )
 from core.logger import get_logger
 from core.mongo_client import get_mongo_db
@@ -44,7 +44,7 @@ def mega_backup_status():
     service = get_backup_service()
     return {
         "enabled": bool(DAILY_DATA_BACKUP_ENABLED and MEGA_ENABLED),
-        "credentials_configured": bool(MEGA_EMAIL),
+        "credentials_configured": bool(MEGA_EMAIL and MEGA_PASSWORD),
         "schedule": {
             "days": DAILY_DATA_BACKUP_DAYS,
             "time": f"{DAILY_DATA_BACKUP_HOUR:02d}:{DAILY_DATA_BACKUP_MINUTE:02d}",
