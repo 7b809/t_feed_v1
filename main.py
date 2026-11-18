@@ -10,10 +10,12 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from api.routes.orders import router as orders_router
+from api.routes.backups import router as backups_router
 from core.config import API_PORT, API_HOST, UPSTOX_SANDBOX, TRADING_ENABLED, PROJECT_ROOT
 from core.logger import get_logger
 from core.mongo_client import close_mongo_connection, get_mongo_db
 from core.telegram_notifier import notify_event
+from services.mega_backup_scheduler import start_mega_backup_scheduler, stop_mega_backup_scheduler
 
 logger = get_logger(__file__)
 TEMPLATES = Jinja2Templates(directory=str(PROJECT_ROOT / "templates"))
@@ -26,6 +28,7 @@ async def lifespan(app: FastAPI):
         UPSTOX_SANDBOX, TRADING_ENABLED, API_HOST, API_PORT,
     )
     get_mongo_db()
+    start_mega_backup_scheduler()
     notify_event("Sandbox service started", [
         f"Port: {API_PORT}",
         "Upstox mode: " + ("Sandbox" if UPSTOX_SANDBOX else "Live"),
@@ -36,6 +39,7 @@ async def lifespan(app: FastAPI):
     finally:
         logger.info("Stopping Upstox Order Service")
         notify_event("Sandbox service stopped", [f"Port: {API_PORT}"], "WARNING")
+        stop_mega_backup_scheduler()
         close_mongo_connection()
 
 
@@ -47,6 +51,7 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
 app.include_router(orders_router)
+app.include_router(backups_router)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
