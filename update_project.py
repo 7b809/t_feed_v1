@@ -86,7 +86,11 @@ def telegram_is_enabled() -> bool:
 
 def send_telegram(title: str, message: str, level: str = "INFO") -> None:
     """Best-effort notification; notification failures never stop an update."""
-    if not DEBUG_MODE or not telegram_is_enabled():
+    if not telegram_is_enabled():
+        return
+    # Keep per-step INFO chatter behind UPDATE_DEBUG_MODE, but always send
+    # update start, completion, warning and failure events.
+    if level.upper() == "INFO" and not DEBUG_MODE:
         return
 
     text = f"{_LEVEL_EMOJI.get(level.upper(), 'ℹ️')} {title}\n{message}"
@@ -229,7 +233,7 @@ def main() -> int:
     print(f"Project: {PROJECT_DIR}")
     print(f"Target:  {REMOTE}/{BRANCH}")
     print("Service port: configured by start.sh / .env (default 8004)")
-    print(f"Telegram update notifications: {'ENABLED' if DEBUG_MODE and telegram_is_enabled() else 'DISABLED'}")
+    print(f"Telegram update notifications: {'ENABLED' if telegram_is_enabled() else 'DISABLED'}")
 
     send_telegram(
         "Sandbox Update Started",
