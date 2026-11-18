@@ -11,7 +11,7 @@ all active isolation option legs plus `NSE_INDEX|Nifty 50`, only from
 read APIs expose feed state and connection status; active isolations are
 re-subscribed on restart.
 
-> Scope: **SR + Supertrend + raw live-market feed consumption + local dummy-entry simulation**. EMA calculations and broker order execution remain out of scope. Dummy entries are local records only.
+> Scope: **SR feed/state persistence + Supertrend feed + raw live-market feed consumption + Supertrend-only dummy-entry simulation**. SR levels continue to be collected and exposed, but they do not create orders. EMA calculations and broker order execution remain out of scope. Dummy entries are local records only.
 
 ---
 
@@ -643,7 +643,7 @@ History API endpoints (application base path `/api/v1`):
 | `GET` | `/dummy-orders/history/dates` | List up to 365 archived IST trading dates, newest first |
 | `GET` | `/dummy-orders/history?trade_date=YYYY-MM-DD&page=1&page_size=24` | Retrieve one date's filtered order history |
 
-Optional history query parameters: `strategy=SR|SUPERTREND`, `status=DUMMY_PLACED|COMPLETED_TARGET|COMPLETED_STOP_LOSS|COMPLETED_SIGNAL_REVERSAL`, and `search=<symbol-or-order-text>`. Page size is limited to 100. The API merges each day's `orders_history` events with the latest per-isolation order snapshots and de-duplicates them by isolation and order ID.
+Optional history query parameters: `strategy=SUPERTREND`, `status=DUMMY_PLACED|COMPLETED_TARGET|COMPLETED_STOP_LOSS|COMPLETED_SIGNAL_REVERSAL`, and `search=<symbol-or-order-text>`. Page size is limited to 100. The API merges each day's `orders_history` events with the latest per-isolation order snapshots and de-duplicates them by isolation and order ID. Each isolation allows at most two Supertrend entries for the trading session; completed stop-loss/reversal entries count toward the limit, and no third entry is created.
 
 Example:
 
