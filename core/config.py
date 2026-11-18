@@ -48,3 +48,8 @@ BIND_IP = os.getenv("BIND_IP", "127.0.0.1").strip()
 API_HOST = BIND_IP if ENABLE_IP_BINDING else "0.0.0.0"
 API_PORT = int(os.getenv("API_PORT", "8004"))
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
+
+# Optional Telegram notifications (isolation_v1-compatible settings).
+TELEGRAM_ENABLED = env_bool("TELEGRAM_ENABLED", True)
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
