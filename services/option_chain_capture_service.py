@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 import re
 import threading
 from datetime import date, datetime
@@ -114,6 +115,12 @@ class OptionChainCaptureService:
         self._subscribed: set[str] = set()
         self._processed_indexes: set[str] = set()
         self._last_summary: dict = {}
+        self._write_queue: queue.Queue = queue.Queue(
+            maxsize=max(1000, int(os.getenv("OPTION_CHAIN_WRITE_QUEUE_SIZE", "20000")))
+        )
+        self._writer_stop = threading.Event()
+        self._writer_thread: threading.Thread | None = None
+        self._dropped_rows = 0
 
     def ensure_started(self) -> dict:
         if not self.enabled:
@@ -152,6 +159,7 @@ class OptionChainCaptureService:
             if self._listener is None:
                 self._listener = self._on_feed_message
                 feed.add_message_listener(self._listener)
+            self._ensure_writer()
 
         try:
             token = fetch_access_token()
@@ -337,25 +345,27 @@ class OptionChainCaptureService:
             metadata_tmp.write_text(json.dumps(row, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
             metadata_tmp.replace(metadata_path)
 
+    def _ensure_writer(self) -> None:
+        if self._writer_thread and self._writer_thread.is_alive():
+            return
+        self._writer_stop.clear()
+        self._writer_thread = threading.Thread(
+            target=self._writer_loop,
+            name="option-chain-file-writer",
+            daemon=True,
+        )
+        self._writer_thread.start()
+
     def _on_feed_message(self, feeds: dict) -> None:
-        now = datetime.now(IST).isoformat()
+        """Keep the Upstox callback lightweight; disk I/O runs on a worker."""
+        received_at = datetime.now(IST).isoformat()
         with self._lock:
             for instrument_key, payload in feeds.items():
                 meta = self._contract_meta.get(instrument_key)
                 if not meta:
                     continue
-                folder = (
-                    self.root
-                    / str(meta.get("index_folder") or "unknown")
-                    / datetime.now(IST).strftime("%Y%m%d")
-                )
-                folder.mkdir(parents=True, exist_ok=True)
-                strike_label = f"{meta['strike_price']:g}"
-                side = str(meta["instrument_type"]).lower()
-                filename = f"{strike_label}_{side}_{_safe(instrument_key)}.jsonl"
-                path = folder / filename
                 row = {
-                    "received_at_ist": now,
+                    "received_at_ist": received_at,
                     "trade_date_ist": self._active_date,
                     "index_instrument_key": meta.get("index_instrument_key"),
                     "index_canonical": meta.get("index_canonical"),
@@ -367,10 +377,52 @@ class OptionChainCaptureService:
                     "payload": payload,
                 }
                 try:
-                    with path.open("a", encoding="utf-8") as handle:
-                        handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
-                except OSError:
-                    logger.exception("Could not append option-chain feed file %s", path)
+                    self._write_queue.put_nowait((meta, instrument_key, row))
+                except queue.Full:
+                    self._dropped_rows += 1
+                    if self._dropped_rows == 1 or self._dropped_rows % 1000 == 0:
+                        logger.error(
+                            "Option-chain write queue full; dropped_rows=%d",
+                            self._dropped_rows,
+                        )
+
+    def _writer_loop(self) -> None:
+        while not self._writer_stop.is_set() or not self._write_queue.empty():
+            try:
+                item = self._write_queue.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            try:
+                if item is None:
+                    continue
+                meta, instrument_key, row = item
+                trade_date = str(row.get("trade_date_ist") or datetime.now(IST).date().isoformat())
+                date_folder = trade_date.replace("-", "")
+                folder = self.root / str(meta.get("index_folder") or "unknown") / date_folder
+                folder.mkdir(parents=True, exist_ok=True)
+                strike_label = f"{meta['strike_price']:g}"
+                side = str(meta["instrument_type"]).lower()
+                filename = f"{strike_label}_{side}_{_safe(instrument_key)}.jsonl"
+                path = folder / filename
+                with path.open("a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+            except Exception:
+                logger.exception("Could not write option-chain feed row")
+            finally:
+                self._write_queue.task_done()
+
+    def stop(self) -> None:
+        feed = self._feed
+        if feed is not None and self._listener is not None:
+            try:
+                feed.remove_message_listener(self._listener)
+            except Exception:
+                logger.exception("Could not detach option-chain feed listener")
+        self._listener = None
+        self._writer_stop.set()
+        if self._writer_thread and self._writer_thread.is_alive():
+            self._writer_thread.join(timeout=5)
+        self._writer_thread = None
 
     def status(self) -> dict:
         with self._lock:
@@ -386,3 +438,7 @@ def ensure_option_chain_capture() -> dict:
 
 def get_option_chain_capture_status() -> dict:
     return option_chain_capture.status()
+
+
+def stop_option_chain_capture() -> None:
+    option_chain_capture.stop()
