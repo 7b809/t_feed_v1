@@ -262,7 +262,10 @@ def _restore_isolation_capture() -> None:
             from core.config import ISOLATION_DOC_ID, PROJECT_INFO_COLLECTION
             from core.mongo_client import get_mongo_db
             record = get_mongo_db()[PROJECT_INFO_COLLECTION].find_one({"_id": ISOLATION_DOC_ID}) or {}
-        if record and record.get("status", "ACTIVE") == "ACTIVE" and record.get("instrument_key"):
+        today = datetime.now(ZoneInfo(TIMEZONE)).date().isoformat()
+        if (record and record.get("trade_date_ist") == today
+                and record.get("status", "ACTIVE") == "ACTIVE"
+                and record.get("instrument_key")):
             if not archive:
                 IsolatedArchiveService().save_isolation(record)
             start_isolated_feeds(record)
