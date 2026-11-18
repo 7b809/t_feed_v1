@@ -212,7 +212,25 @@ class DailyDataBackupService:
             and int(node.get("s", -1)) == expected_size
         ), None)
         if not uploaded_handle:
+            # Do not leave a partial or unverifiable object under the final name.
+            for handle, node in files.items():
+                if node.get("p") == folder_id and (node.get("a") or {}).get("n") == filename:
+                    try:
+                        mega.destroy(handle)
+                    except Exception:
+                        logger.exception("Could not clean unverified MEGA node %s", handle)
             raise RuntimeError("MEGA upload could not be verified by filename and size")
+
+        # A manual retry on the same date replaces the previous archive,
+        # keeping exactly one date-keyed ZIP in the remote folder.
+        for handle, node in files.items():
+            if handle == uploaded_handle:
+                continue
+            if node.get("p") == folder_id and (node.get("a") or {}).get("n") == filename:
+                try:
+                    mega.destroy(handle)
+                except Exception:
+                    logger.exception("Could not remove older MEGA archive node %s", handle)
 
         link = None
         try:
