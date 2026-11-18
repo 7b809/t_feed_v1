@@ -245,3 +245,6 @@ logs_text/
 # Daily startup cleanup idempotency state
 /.daily_cleanup_state.json
 /.daily_cleanup_state.tmp
+
+# Temporary daily MEGA ZIP staging archives
+backups/
