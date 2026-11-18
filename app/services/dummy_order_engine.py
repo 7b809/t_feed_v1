@@ -648,6 +648,20 @@ class DummyOrderEngine:
                 await asyncio.to_thread(self._store.save, isolation_id, state)
                 self._index_open_orders(isolation_id, state)
                 return
+            persisted_count = self._supertrend_order_count(state)
+            if persisted_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION:
+                state["supertrend_order_count"] = persisted_count
+                state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
+                state["supertrend_startup_recovery"] = {
+                    "status": "COMPLETED", "started_at_ist": self._startup_at.isoformat(),
+                    "completed_at_ist": _now().isoformat(),
+                    "orders_replayed": 0, "order_limit": MAX_SUPERTREND_ORDERS_PER_ISOLATION,
+                    "order_limit_reached": True,
+                    "message": "The per-isolation Supertrend entry limit was already reached; historical replay was skipped.",
+                }
+                await asyncio.to_thread(self._store.save, isolation_id, state)
+                self._index_open_orders(isolation_id, state)
+                return
             meta = self._meta.get(isolation_id) or {
                 "legs": state.get("legs") or {}, "instrument_context": state.get("isolated_instrument") or {},
                 "instrument_meta": {}, "date_key": trade_date,
