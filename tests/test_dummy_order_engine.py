@@ -225,7 +225,7 @@ def test_supertrend_does_not_reverse_when_existing_target_is_already_met(tmp_pat
 
 
 
-def test_startup_recovery_replays_stop_then_target_and_locks_day(tmp_path):
+def test_startup_recovery_replays_two_entries_stop_then_target(tmp_path):
     async def run():
         class CandleHistory:
             def read_day(self, key, day):
