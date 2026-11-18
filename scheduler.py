@@ -45,10 +45,22 @@ from jobs.deferred_startup import run_deferred_startup_sequence
 from jobs.isolation_scan import run_isolation_scan
 from services.daily_data_backup_service import DailyDataBackupService
 from core.mongo_client import get_mongo_db
-from services.option_chain_capture_service import ensure_option_chain_capture
 from core.config import OPTION_CHAIN_CAPTURE_ENABLED
 
 logger = get_logger(__file__)
+
+
+def _run_option_chain_capture_job() -> None:
+    """Run the lowest-priority option capture behind a hard exception boundary."""
+    try:
+        from services.option_chain_capture_service import ensure_option_chain_capture
+        result = ensure_option_chain_capture()
+        logger.debug("Option-chain capture result: %s", result)
+    except Exception:
+        logger.exception(
+            "Optional option-chain capture failed; skipping this cycle. "
+            "Isolation scan and primary feeds continue unaffected."
+        )
 
 
 def _pivot_check_job() -> None:
@@ -151,7 +163,7 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
     # market feed are ready. The service itself is idempotent after success.
     if OPTION_CHAIN_CAPTURE_ENABLED:
         scheduler.add_job(
-            ensure_option_chain_capture,
+            _run_option_chain_capture_job,
             IntervalTrigger(seconds=60),
             id="option_chain_capture",
             name="Live Option Chain Capture",
