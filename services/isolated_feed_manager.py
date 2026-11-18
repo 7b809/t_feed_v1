@@ -169,8 +169,16 @@ class IsolatedFeedManager:
                         }
                         await asyncio.to_thread(self._append_jsonl, path, row)
                         event = payload.get("event")
-                        if event in ("connection_ack", "snapshot", "sr_update", "supertrend_signal"):
-                            logger.info("%s WS event=%s role=%s symbol=%s", indicator.upper(), event, role, symbol)
+                        if event == "connection_ack":
+                            logger.info(
+                                "%s WS acknowledged | role=%s | instrument=%s",
+                                indicator.upper(), role, symbol,
+                            )
+                        elif event == "snapshot":
+                            logger.debug(
+                                "%s WS initial snapshot received | role=%s | instrument=%s",
+                                indicator.upper(), role, symbol,
+                            )
                         if event == "supertrend_signal" or (indicator == "sr" and event == "sr_update"):
                             from services.isolation_telegram_service import notify_indicator_event
                             await asyncio.to_thread(notify_indicator_event, indicator, payload, symbol, role)
