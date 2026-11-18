@@ -25,10 +25,18 @@ def _safe(value: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in str(value))[:100]
 
 
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        return max(1000, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s; using safe default=%d", name, default)
+        return default
+
+
 class IsolatedLiveFeedCapture:
     def __init__(self):
         self.root = Path(os.getenv("ISOLATED_DATA_DIR", "data/isolated")) / "live_feed"
-        self.queue = queue.Queue(maxsize=max(1000, int(os.getenv("ISOLATED_LIVE_FEED_QUEUE_SIZE", "20000"))))
+        self.queue = queue.Queue(maxsize=_positive_int_env("ISOLATED_LIVE_FEED_QUEUE_SIZE", 20000))
         self.lock = threading.RLock()
         self.feed = None
         self.listener = None
