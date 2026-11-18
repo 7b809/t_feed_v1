@@ -44,7 +44,7 @@ def isolation_payload():
         "instrument_key": "CE",
         "trading_symbol": "NIFTY 25000 CE",
         "opposite_leg": {"instrument_key": "PE", "trading_symbol": "NIFTY 25000 PE"},
-        "isolation_time": "2026-11-12T09:30:00+05:30",
+        "isolation_time": "2026-11-12T09:00:00+05:30",
     }
 
 
