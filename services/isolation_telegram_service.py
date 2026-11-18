@@ -66,3 +66,42 @@ def notify_isolation_created(record: dict, archive_path: str | None = None) -> b
 
 def notify_runtime_event(title: str, detail: str, emoji: str = "ℹ️") -> bool:
     return send_html(f"{emoji} <b>{html.escape(title)}</b>\n{html.escape(detail)}")
+
+
+def notify_indicator_event(indicator: str, payload: dict, symbol: str, role: str) -> bool:
+    """Notify only meaningful confirmed indicator events, never snapshots/heartbeats."""
+    event = payload.get("event")
+    if indicator == "supertrend" and event == "supertrend_signal":
+        signal = _v(payload.get("signal") or payload.get("trend"))
+        when = _v(payload.get("confirmed_time") or payload.get("timestamp"))
+        price = _v(payload.get("price") or payload.get("close"))
+        message = (
+            "📈 <b>SUPERTREND SIGNAL CONFIRMED</b>\\n"
+            f"<b>Instrument:</b> {html.escape(symbol)}\\n"
+            f"<b>Leg:</b> {html.escape(role)}\\n"
+            f"<b>Signal:</b> {html.escape(signal)}\\n"
+            f"<b>Time:</b> {html.escape(when)}\\n"
+            f"<b>Price:</b> {html.escape(price)}"
+        )
+        return send_html(message)
+
+    if indicator == "sr" and event == "sr_update":
+        levels = payload.get("new_levels") or payload.get("confirmed_levels") or payload.get("levels")
+        if not isinstance(levels, list) or not levels:
+            return False
+        lines = [
+            "🧭 <b>SUPPORT / RESISTANCE UPDATE</b>",
+            f"<b>Instrument:</b> {html.escape(symbol)}",
+            f"<b>Leg:</b> {html.escape(role)}",
+        ]
+        for item in levels[:8]:
+            if not isinstance(item, dict):
+                continue
+            kind = _v(item.get("level_type") or item.get("sr_type") or item.get("type"))
+            price = _v(item.get("price") or item.get("level_price") or item.get("value"))
+            confirmed = _v(item.get("confirmed_time") or item.get("confirmed_at") or item.get("timestamp"))
+            lines.append(f"• {html.escape(kind)} · <code>{html.escape(price)}</code> · {html.escape(confirmed)}")
+        if len(lines) == 3:
+            return False
+        return send_html("\\n".join(lines))
+    return False
