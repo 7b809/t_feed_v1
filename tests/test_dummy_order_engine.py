@@ -319,12 +319,17 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
         # Close entry 2. A third confirmed signal must not create another order.
         second_tick = (datetime.fromisoformat(second["started_at_ist"]) + timedelta(seconds=60)).isoformat()
         await engine.on_market_tick("PE", {"ltpc": {"ltp": 86.41}}, second_tick)
-        await engine.on_supertrend_frame({
+
+        # Recreate the engine to verify that persisted count survives restart.
+        restarted_engine, restarted_store = build(tmp_path)
+        await restarted_engine.register_isolation(isolation_id, isolation_payload(),
+                                                  {"isolated": "CE", "opposite": "PE"})
+        await restarted_engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "BULLISH",
             "confirmed_time": "2026-11-12T09:50:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
 
-        state = store.load(isolation_id)
+        state = restarted_store.load(isolation_id)
         current = state["orders"]["supertrend"]
         assert current["order_id"] == second["order_id"]
         assert current["status"] == "COMPLETED_STOP_LOSS"
