@@ -46,9 +46,11 @@ def close_mongo() -> None:
         _collection = None
 
 def append_order_event(event: dict) -> None:
+    if not settings.MONGO_URL:
+        raise RuntimeError("MONGO_URL is not configured; order was journaled locally but MongoDB persistence is unavailable")
     collection = connect_mongo()
     if collection is None:
-        return
+        raise RuntimeError("MongoDB collection could not be initialized")
     local_now = now_ist()
     date_key = local_now.strftime("%Y-%m-%d")
     payload = dict(event)
