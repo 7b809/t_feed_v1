@@ -64,6 +64,7 @@ from services.touch_arbitration_service import arbitrate_touches
 from services.isolation_notification_service import notify_isolation_clients
 from services.isolated_archive_service import IsolatedArchiveService
 from services.isolated_feed_manager import start_isolated_feeds
+from services.isolated_live_feed_capture_service import start_isolated_live_feed
 from services.isolation_telegram_service import notify_isolation_created
 
 logger = get_logger(__file__)
@@ -319,6 +320,12 @@ class IsolationService:
             archive_path = self.archive.save_isolation(record)
         except Exception:
             logger.exception("Local isolation archive failed; Mongo record remains saved")
+        # Optional live-feed archive is strictly best-effort. It must never
+        # block or roll back the already-persisted isolation.
+        try:
+            start_isolated_live_feed(record, feed)
+        except Exception:
+            logger.exception("Isolated live-feed capture failed; isolation remains active")
         try:
             start_isolated_feeds(record)
         except Exception:
@@ -453,7 +460,7 @@ class IsolationService:
         now = datetime.now(ZoneInfo(TIMEZONE)).isoformat()
         record = {
             "_id": ISOLATION_DOC_ID,
-            "trade_date_ist": date.today().isoformat(),
+            "trade_date_ist": datetime.now(ZoneInfo(TIMEZONE)).date().isoformat(),
 
             # Instrument
             "instrument_key": instrument.get("instrument_key"),
