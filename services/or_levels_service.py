@@ -41,7 +41,7 @@ class ORLevelsService:
     # ------------------------------------------------------------------ #
     def ensure_or_levels(self) -> dict:
         """Return today's OR levels (loading/computing as needed)."""
-        today = date.today().isoformat()
+        today = datetime.now(ZoneInfo(TIMEZONE)).date().isoformat()
 
         existing = self._load_from_mongo()
         if existing and existing.get("trade_date_ist") == today:
@@ -148,8 +148,10 @@ class ORLevelsService:
         try:
             path = OR_LEVELS_LOCAL_PATH
             os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
+            temp_path = f"{path}.tmp"
+            with open(temp_path, "w", encoding="utf-8") as f:
                 json.dump(doc, f, indent=2, default=str)
+            os.replace(temp_path, path)
             logger.info("OR levels saved locally to %s", path)
         except Exception:
             logger.exception("OR: local save failed")
