@@ -1,7 +1,8 @@
 """REST endpoints for Upstox orders."""
 import logging
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from app.core.config import settings
+from app.core.security import require_order_api_key
 from app.models.order_models import PlaceOrderRequest, ExitSingleOrderRequest, ExitAllOrdersRequest
 from app.services.order_manager import order_manager
 
@@ -13,6 +14,7 @@ def order_health():
     return {
         "service": "order-management",
         "trading_enabled": settings.TRADING_ENABLED,
+        "api_key_configured": bool(settings.ORDER_API_KEY),
         "defaults": {
             "transaction_type": settings.DEFAULT_TRANSACTION_TYPE,
             "quantity": settings.DEFAULT_QUANTITY,
@@ -21,7 +23,7 @@ def order_health():
         },
     }
 
-@router.post("/place", status_code=status.HTTP_201_CREATED)
+@router.post("/place", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_order_api_key)])
 def place_order(payload: PlaceOrderRequest):
     try:
         return order_manager.place_order(payload)
@@ -31,7 +33,7 @@ def place_order(payload: PlaceOrderRequest):
         logger.exception("Order placement failed")
         raise HTTPException(status_code=502, detail=f"Order placement failed: {exc}") from exc
 
-@router.get("/book")
+@router.get("/book", dependencies=[Depends(require_order_api_key)])
 def get_order_book():
     try:
         return order_manager.order_book()
@@ -39,7 +41,7 @@ def get_order_book():
         logger.exception("Could not retrieve order book")
         raise HTTPException(status_code=502, detail=f"Could not retrieve order book: {exc}") from exc
 
-@router.post("/exit/single")
+@router.post("/exit/single", dependencies=[Depends(require_order_api_key)])
 def exit_single(payload: ExitSingleOrderRequest):
     try:
         return order_manager.exit_single(payload.order_id)
@@ -51,7 +53,7 @@ def exit_single(payload: ExitSingleOrderRequest):
         logger.exception("Single exit failed")
         raise HTTPException(status_code=502, detail=f"Single exit failed: {exc}") from exc
 
-@router.post("/exit/all")
+@router.post("/exit/all", dependencies=[Depends(require_order_api_key)])
 def exit_all(payload: ExitAllOrdersRequest):
     try:
         return order_manager.exit_all(segment=payload.segment, tag=payload.tag)

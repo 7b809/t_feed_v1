@@ -1,4 +1,4 @@
-"""Write each order lifecycle event to local JSON and MongoDB independently."""
+"""Write order lifecycle events to a local JSON journal and MongoDB."""
 from __future__ import annotations
 import json
 import logging
@@ -48,30 +48,20 @@ def archive_event(event: dict) -> dict[str, Any]:
     local_now = now_ist()
     payload.setdefault("created_time", local_now.isoformat())
     payload["last_modified_time"] = local_now.isoformat()
-    result: dict[str, Any] = {"local_persisted": False, "mongo_persisted": False}
-    local_path: Path | None = None
 
-    # Attempt both stores independently: a local filesystem error must not skip MongoDB.
-    try:
-        local_path = _write_local(payload)
-        result["local_persisted"] = True
-        result["local_file"] = str(local_path)
-    except Exception as exc:
-        logger.exception("Failed to save order event to local JSON journal")
-        result["local_error"] = f"{type(exc).__name__}: {exc}"
-
+    # Write locally first: this journal survives a MongoDB outage.
+    local_path = _write_local(payload)
+    result: dict[str, Any] = {
+        "local_file": str(local_path),
+        "mongo_persisted": False,
+    }
     try:
         append_order_event(payload)
         result["mongo_persisted"] = True
     except Exception as exc:
-        logger.exception("MongoDB persistence failed for order event")
+        logger.exception("Order event is saved locally but MongoDB persistence failed")
         result["mongo_error"] = f"{type(exc).__name__}: {exc}"
-
-    # Rewrite the local event with per-store persistence outcomes when possible.
-    if local_path is not None:
-        payload.update(result)
-        try:
-            _write_local(payload)
-        except Exception:
-            logger.exception("Could not update local order event with persistence outcomes")
+        payload["mongo_persisted"] = False
+        payload["mongo_error"] = result["mongo_error"]
+        _write_local(payload)
     return result

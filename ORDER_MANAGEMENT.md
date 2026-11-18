@@ -5,13 +5,14 @@ A standalone FastAPI order service added alongside the existing feed/EMA applica
 ## Features
 - Official Upstox Python SDK adapter (V3 order placement by default; V2 configurable).
 - Defaults: BUY, quantity 65, MARKET, intraday product `I`, DAY validity.
-- Single-position exit: finds the completed order and matching current net position, then submits an opposite-side MARKET order.
+- Single-position exit: finds a completed order and matching current net position, then submits an opposite-side MARKET order for up to that order's filled quantity, bounded by the current net position.
 - Exit all positions through Upstox's official exit-positions API, optionally filtered by segment or tag.
 - Local event journal at `data/YYYY-MM-DD/*.json`.
 - MongoDB daily document at `UPSTOX_APP_V2.sandbox_orders`: `_id` and `date` are YYYY-MM-DD, `orders` is an array, plus `created_time` and `last_modified_time`.
 
 ## Safety
-No orders are sent on startup. Live order execution is disabled unless `TRADING_ENABLED=true`. Keep it false during setup. A MARKET order is not guaranteed to fill at the last traded/displayed price. Validate instrument token, F&O lot-size multiples, funds, exchange session and market protection before enabling live execution.
+No orders are sent on startup. Live order execution is disabled unless `TRADING_ENABLED=true`. Place, order-book, and exit APIs additionally require the `X-Order-API-Key` header. Set a strong `ORDER_API_KEY` value in `.env`; protected endpoints remain disabled if it is missing. Keep the trading switch false during setup.
+A MARKET order is not guaranteed to fill at the last traded/displayed price. Upstox expects `price=0` for MARKET orders. Validate instrument token, F&O lot-size multiples, funds, exchange session and market protection before enabling live execution. Keep the service bound to localhost or behind a trusted reverse proxy/firewall.
 
 ## Setup
 ```bash
@@ -21,7 +22,7 @@ python -m venv .venv
 pip install -r requirements-orders.txt
 # copy .env.example .env (Windows: copy .env.example .env)
 ```
-Set `UPSTOX_ACCESS_TOKEN` and `MONGO_URL` in `.env`. The default database and collection are already set to `UPSTOX_APP_V2` and `sandbox_orders`.
+Set `ORDER_API_KEY`, `UPSTOX_ACCESS_TOKEN` and `MONGO_URL` in `.env`. The default database and collection are `UPSTOX_APP_V2` and `sandbox_orders`.
 
 Run:
 ```bash
@@ -32,12 +33,20 @@ Swagger UI: `http://127.0.0.1:8010/docs`.
 ## Endpoints
 - `GET /health`
 - `GET /api/orders/health`
-- `POST /api/orders/place`
-- `GET /api/orders/book`
-- `POST /api/orders/exit/single`
-- `POST /api/orders/exit/all`
+- `POST /api/orders/place` (requires X-Order-API-Key)
+- `GET /api/orders/book` (requires X-Order-API-Key)
+- `POST /api/orders/exit/single` (requires X-Order-API-Key)
+- `POST /api/orders/exit/all` (requires X-Order-API-Key)
 
-Example place request:
+Example:
+```bash
+curl -X POST http://127.0.0.1:8010/api/orders/place ^
+  -H "Content-Type: application/json" ^
+  -H "X-Order-API-Key: YOUR_SECRET_KEY" ^
+  -d "{\"instrument_token\":\"NSE_EQ|INE669E01016\"}"
+```
+
+Example placement body (defaults may be omitted):
 ```json
 {
   "instrument_token": "NSE_EQ|INE669E01016",
@@ -45,7 +54,8 @@ Example place request:
   "quantity": 65,
   "product": "I",
   "order_type": "MARKET",
-  "validity": "DAY"
+  "validity": "DAY",
+  "price": 0
 }
 ```
 
@@ -70,7 +80,7 @@ Example place request:
 }
 ```
 
-Local JSON is written before MongoDB persistence. If MongoDB is unavailable the local journal is retained and the API reports the persistence error rather than indicating both writes succeeded.
+Local JSON and MongoDB writes are attempted independently. Each event includes `local_persisted` and `mongo_persisted`; any store failure is returned as an error field and logged. The local event is rewritten with both persistence outcomes when the local filesystem is available.
 
-## Single-exit behavior
-Upstox's official exit-positions endpoint exits open positions and supports segment/tag filtering; it is not an arbitrary order-id close endpoint. The single-exit endpoint therefore uses order ID to find a completed order, maps it to the current net position by instrument and product, and sends the opposite-side market order for the full current net quantity. Multiple fills/orders in the same instrument/product make exact attribution ambiguous, so verify the order book and positions afterward.
+## Single-exit behavior and limitation
+Upstox's official exit-positions endpoint exits open positions with optional segment/tag filters; it is not a close-by-order-ID endpoint. The single-exit endpoint therefore uses the selected order ID to find a completed order, reads its filled quantity, checks the current net position for the same instrument/product, and submits the opposite-side market order for the smaller of the selected order's filled quantity and current net quantity. It refuses to reverse the current net position. If multiple orders exist in the same instrument/product, exact attribution to a single order is inherently limited by net-position accounting; verify the order book and positions after the exit request.

@@ -20,10 +20,10 @@ class Settings:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
     LOG_DIR = Path(os.getenv("LOG_DIR", str(ROOT_DIR / "logs")))
     DATA_DIR = Path(os.getenv("DATA_DIR", str(ROOT_DIR / "data")))
+    ORDER_API_KEY = os.getenv("ORDER_API_KEY", "")
     UPSTOX_ACCESS_TOKEN = os.getenv("UPSTOX_ACCESS_TOKEN", "")
     UPSTOX_API_VERSION = os.getenv("UPSTOX_API_VERSION", "2.0")
     UPSTOX_ORDER_API_VERSION = os.getenv("UPSTOX_ORDER_API_VERSION", "v3")
-    # Live execution is opt-in. No order is sent during application startup.
     TRADING_ENABLED = os.getenv("TRADING_ENABLED", "false").strip().lower() == "true"
     DEFAULT_TRANSACTION_TYPE = os.getenv("DEFAULT_TRANSACTION_TYPE", "BUY").upper()
     DEFAULT_QUANTITY = int(os.getenv("DEFAULT_QUANTITY", "65"))
