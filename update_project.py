@@ -90,39 +90,10 @@ def send_telegram(title: str, message: str, level: str = "INFO") -> None:
         return
 
     text = f"{_LEVEL_EMOJI.get(level.upper(), 'ℹ️')} {title}\n{message}"
-
-    # Prefer the application's notifier if it exists and is importable.
     try:
         sys.path.insert(0, str(PROJECT_DIR))
-        from core.telegram_notifier import (  # type: ignore[import-not-found]
-            is_enabled,
-            send_telegram_message,
-        )
-
-        if is_enabled():
-            send_telegram_message(text)
-        return
-    except ImportError:
-        pass
-    except Exception as error:
-        print(f"WARNING: Project Telegram notifier failed: {error}")
-        # Fall through to the standard-library sender.
-
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
-        return
-
-    try:
-        payload = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
-        request = urllib.request.Request(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            data=payload,
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=8) as response:
-            if response.status >= 300:
-                raise RuntimeError(f"Telegram HTTP status {response.status}")
+        from core.telegram_notifier import send_telegram_message
+        send_telegram_message(text)
     except Exception as error:
         print(f"WARNING: Telegram notification failed: {error}")
 
