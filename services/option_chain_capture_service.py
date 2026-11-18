@@ -137,18 +137,20 @@ class OptionChainCaptureService:
                 "state": "outside_market_session",
                 "trade_date_ist": date_key,
             }
-        with self._lock:
-            if (
-                self._active_date == date_key
-                and len(self._processed_indexes) == len(INSTRUMENT_KEYS)
-                and self._contract_meta.keys() <= self._subscribed
-            ):
-                return self.status()
-
         feed = get_feed_service()
         if feed is None or not feed.get_health().get("running"):
             logger.info("Option-chain capture waiting for the primary market feed")
             return {"enabled": True, "state": "waiting_for_market_feed"}
+
+        with self._lock:
+            if (
+                self._active_date == date_key
+                and self._feed is feed
+                and len(self._processed_indexes) == len(INSTRUMENT_KEYS)
+                and self._contract_meta.keys() <= self._subscribed
+                and self._contract_meta.keys() <= set(feed.instrument_keys)
+            ):
+                return self.status()
 
         if feed.mode != self.mode:
             logger.error(
@@ -172,6 +174,10 @@ class OptionChainCaptureService:
                     except Exception:
                         logger.exception("Could not detach option-chain listener from old feed")
                 self._feed = feed
+                # Subscription state belongs to a particular SDK feed object.
+                # Rebuild it when daily refresh replaces the primary feed.
+                self._subscribed.clear()
+                self._owned_subscriptions.clear()
                 self._listener = self._on_feed_message
                 feed.add_message_listener(self._listener)
             self._ensure_writer()
