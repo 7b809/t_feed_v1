@@ -12,7 +12,7 @@ import os
 import queue
 import re
 import threading
-from datetime import date, datetime
+from datetime import date, datetime, time as dt_time
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -126,8 +126,17 @@ class OptionChainCaptureService:
     def ensure_started(self) -> dict:
         if not self.enabled:
             return {"enabled": False, "state": "disabled"}
-        today = datetime.now(IST).date()
+        now = datetime.now(IST)
+        today = now.date()
         date_key = today.isoformat()
+        if today.weekday() >= 5 or not (
+            dt_time(9, 15) <= now.time().replace(tzinfo=None) < dt_time(15, 30)
+        ):
+            return {
+                "enabled": True,
+                "state": "outside_market_session",
+                "trade_date_ist": date_key,
+            }
         with self._lock:
             if (
                 self._active_date == date_key
