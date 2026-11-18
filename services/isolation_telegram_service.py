@@ -76,11 +76,11 @@ def notify_indicator_event(indicator: str, payload: dict, symbol: str, role: str
         when = _v(payload.get("confirmed_time") or payload.get("timestamp"))
         price = _v(payload.get("price") or payload.get("close"))
         message = (
-            "📈 <b>SUPERTREND SIGNAL CONFIRMED</b>\\n"
-            f"<b>Instrument:</b> {html.escape(symbol)}\\n"
-            f"<b>Leg:</b> {html.escape(role)}\\n"
-            f"<b>Signal:</b> {html.escape(signal)}\\n"
-            f"<b>Time:</b> {html.escape(when)}\\n"
+            "📈 <b>SUPERTREND SIGNAL CONFIRMED</b>\n"
+            f"<b>Instrument:</b> {html.escape(symbol)}\n"
+            f"<b>Leg:</b> {html.escape(role)}\n"
+            f"<b>Signal:</b> {html.escape(signal)}\n"
+            f"<b>Time:</b> {html.escape(when)}\n"
             f"<b>Price:</b> {html.escape(price)}"
         )
         return send_html(message)
@@ -103,5 +103,5 @@ def notify_indicator_event(indicator: str, payload: dict, symbol: str, role: str
             lines.append(f"• {html.escape(kind)} · <code>{html.escape(price)}</code> · {html.escape(confirmed)}")
         if len(lines) == 3:
             return False
-        return send_html("\\n".join(lines))
+        return send_html("\n".join(lines))
     return False
