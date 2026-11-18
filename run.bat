@@ -1,74 +1,44 @@
 @echo off
-cls
+setlocal
 cd /d "%~dp0"
 
 echo ================================================
-echo      Market Data Foundation
+echo             Upstox Order Service
 echo ================================================
 echo.
 
-set "VENV_PATH="
-set DIRS_TO_CLEAR=data logs logs_text
-set DIRS_DISPLAY=data, logs, logs_text
-
+set "PYTHON_CMD=python"
 if exist "myenv\Scripts\python.exe" (
-    set "VENV_PATH=%CD%\myenv"
-    echo Virtual environment found in current folder.
+    set "PYTHON_CMD=myenv\Scripts\python.exe"
 ) else (
-    if exist "..\myenv\Scripts\python.exe" (
-        set "VENV_PATH=%CD%\..\myenv"
-        echo Virtual environment found in parent folder.
-    ) else (
-        echo Virtual environment not found.
-        echo Creating virtual environment in current folder...
-        echo.
-
-        python -m venv myenv
-
-        if errorlevel 1 (
-            echo.
-            echo ERROR: Failed to create virtual environment.
-            echo Make sure Python is installed and available in PATH.
-            pause
-            exit /b 1
-        )
-
-        set "VENV_PATH=%CD%\myenv"
-        echo.
-        echo Virtual environment created successfully.
+    echo Creating virtual environment...
+    python -m venv myenv
+    if errorlevel 1 (
+        echo ERROR: Could not create virtual environment.
+        pause
+        exit /b 1
     )
+    set "PYTHON_CMD=myenv\Scripts\python.exe"
 )
 
-echo.
-echo Using virtual environment:
-echo %VENV_PATH%
-echo.
+"%PYTHON_CMD%" -m pip install --upgrade pip
+if errorlevel 1 goto :error
+"%PYTHON_CMD%" -m pip install -r requirements.txt
+if errorlevel 1 goto :error
 
-echo Activating virtual environment...
-call "%VENV_PATH%\Scripts\activate.bat"
+if not exist "data\orders" mkdir "data\orders"
+if not exist "logs" mkdir "logs"
+if not exist "logs_text" mkdir "logs_text"
 
-if errorlevel 1 (
-    echo.
-    echo ERROR: Failed to activate virtual environment.
-    pause
-    exit /b 1
-)
+for /f "delims=" %%H in ('"%PYTHON_CMD%" -c "from core.config import API_HOST; print(API_HOST)"') do set "APP_HOST=%%H"
+for /f "delims=" %%P in ('"%PYTHON_CMD%" -c "from core.config import API_PORT; print(API_PORT)"') do set "APP_PORT=%%P"
 
+echo Starting on %APP_HOST%:%APP_PORT%
+echo Note: this launcher does NOT clear data, logs, or order history.
+"%PYTHON_CMD%" -m uvicorn main:app --host %APP_HOST% --port %APP_PORT%
+goto :eof
 
-echo ================================================
-echo Starting Market Data Foundation with Uvicorn...
-echo ================================================
-echo.
-
-
-
-for %%d in (%DIRS_TO_CLEAR%) do (
-    if exist "%%d" rmdir /s /q "%%d"
-)
-
-echo ================================================
-echo Cleanup directories cleared: %DIRS_DISPLAY%
-echo ================================================
-echo.
-
-python -m uvicorn main:app --host 0.0.0.0 --port 8001
+:error
+echo ERROR: Dependency installation failed.
+pause
+exit /b 1

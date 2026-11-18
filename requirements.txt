@@ -1,9 +1,6 @@
-upstox-python-sdk
-pymongo
-requests
-apscheduler
-python-dotenv
-uvicorn[standard]
-fastapi
-websockets>=12.0
-mega-sdk>=0.1.1
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.30,<1.0
+upstox-python-sdk>=2.23.0
+pymongo>=4.6,<5.0
+python-dotenv>=1.0,<2.0
+pydantic>=2.7,<3.0
