@@ -8,8 +8,6 @@ def _normalise_strategy(value: Any) -> str:
     raw = str(value or "").strip().lower().replace("-", "_")
     if "supertrend" in raw:
         return "SUPERTREND"
-    if raw == "sr" or raw.startswith("sr_") or raw.endswith("_sr"):
-        return "SR"
     return str(value or "UNKNOWN").strip().upper() or "UNKNOWN"
 
 
@@ -40,7 +38,7 @@ def flatten_daily_orders(document: dict[str, Any] | None) -> list[dict[str, Any]
         strategy = _normalise_strategy(
             order_value.get("indicator") or order_value.get("strategy") or indicator
         )
-        if strategy not in {"SR", "SUPERTREND"}:
+        if strategy != "SUPERTREND":
             return
         if str(order_value.get("status") or "").upper() == "DISABLED":
             return
@@ -84,7 +82,6 @@ def flatten_daily_orders(document: dict[str, Any] | None) -> list[dict[str, Any]
             if not isinstance(entry, dict):
                 continue
             isolation_id = entry.get("isolation_id")
-            add(entry.get("sr_order"), isolation_id, "SR", live_snapshot=True)
             add(entry.get("supertrend_order"), isolation_id, "SUPERTREND", live_snapshot=True)
 
     # Older daily documents may predate by_isolation; retain their root snapshots.
@@ -92,13 +89,11 @@ def flatten_daily_orders(document: dict[str, Any] | None) -> list[dict[str, Any]
     # compatibility mirror and must not override or duplicate other isolations.
     has_isolation_order_snapshots = isinstance(by_isolation, dict) and any(
         isinstance(entry, dict) and (
-            isinstance(entry.get("sr_order"), dict)
-            or isinstance(entry.get("supertrend_order"), dict)
+            isinstance(entry.get("supertrend_order"), dict)
         )
         for entry in by_isolation.values()
     )
     if not has_isolation_order_snapshots:
-        add(orders_data.get("sr_order"), None, "SR", live_snapshot=True)
         add(orders_data.get("supertrend_order"), None, "SUPERTREND", live_snapshot=True)
 
     result = [row[2] for row in flattened.values()]
