@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 from datetime import datetime, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
