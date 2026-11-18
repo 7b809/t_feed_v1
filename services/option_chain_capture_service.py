@@ -58,6 +58,43 @@ def _safe(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_")[:120]
 
 
+def select_nearest_expiry_contracts(
+    contracts: list[Any],
+    today: date,
+    average: float,
+    range_points: float,
+) -> tuple[list[dict], str | None, float, float]:
+    """Keep CE/PE contracts at the nearest valid expiry inside the inclusive range."""
+    lower, upper = average - range_points, average + range_points
+    valid: list[dict] = []
+    for item in contracts or []:
+        row = _plain_contract(item)
+        try:
+            expiry = date.fromisoformat(str(row.get("expiry"))[:10])
+            strike = float(row.get("strike_price"))
+        except (TypeError, ValueError):
+            continue
+        option_type = str(row.get("instrument_type") or "").upper()
+        key = row.get("instrument_key")
+        if expiry < today or not key or option_type not in ("CE", "PE"):
+            continue
+        row["expiry"] = expiry.isoformat()
+        row["strike_price"] = strike
+        row["instrument_type"] = option_type
+        valid.append(row)
+
+    if not valid:
+        return [], None, lower, upper
+    nearest_expiry = min(row["expiry"] for row in valid)
+    selected = [
+        row for row in valid
+        if row["expiry"] == nearest_expiry
+        and lower <= row["strike_price"] <= upper
+    ]
+    selected.sort(key=lambda row: (row["strike_price"], row["instrument_type"]))
+    return selected, nearest_expiry, lower, upper
+
+
 class OptionChainCaptureService:
     def __init__(self):
         self.enabled = os.getenv("OPTION_CHAIN_CAPTURE_ENABLED", "false").strip().lower() == "true"
@@ -136,33 +173,12 @@ class OptionChainCaptureService:
                     window = self.windows.get(meta.get("canonical"), 300.0)
                     response = api.get_option_contracts(instrument_key)
                     contracts = _value(response, "data", []) or []
-                    valid = []
-                    for item in contracts:
-                        row = _plain_contract(item)
-                        try:
-                            expiry = date.fromisoformat(str(row.get("expiry"))[:10])
-                            strike = float(row.get("strike_price"))
-                        except (TypeError, ValueError):
-                            continue
-                        option_type = str(row.get("instrument_type") or "").upper()
-                        key = row.get("instrument_key")
-                        if expiry < today or not key or option_type not in ("CE", "PE"):
-                            continue
-                        row["expiry"] = expiry.isoformat()
-                        row["strike_price"] = strike
-                        valid.append(row)
-                    if not valid:
-                        skipped.append({"index": instrument_key, "reason": "no_valid_contracts"})
+                    selected, nearest_expiry, lower, upper = select_nearest_expiry_contracts(
+                        contracts, today, average, window
+                    )
+                    if not selected:
+                        skipped.append({"index": instrument_key, "reason": "no_contracts_in_nearest_expiry_range"})
                         continue
-
-                    nearest_expiry = min(row["expiry"] for row in valid)
-                    lower, upper = average - window, average + window
-                    selected = [
-                        row for row in valid
-                        if row["expiry"] == nearest_expiry
-                        and lower <= row["strike_price"] <= upper
-                    ]
-                    selected.sort(key=lambda row: (row["strike_price"], row["instrument_type"]))
                     for row in selected:
                         row.update({
                             "index_instrument_key": instrument_key,
