@@ -633,6 +633,26 @@ class DummyOrderEngine:
             signals = sorted((item for item in _st_candidates(payload)
                               if cutoff < item["dt"] <= self._startup_at),
                              key=lambda item: item["dt"])
+            # Never replay signals already represented by a persisted entry.
+            persisted_orders = list(state.get("order_history") or [])
+            current_persisted = (state.get("orders") or {}).get("supertrend")
+            if isinstance(current_persisted, dict):
+                persisted_orders.append(current_persisted)
+            processed_signal_times = {
+                str((item.get("trigger") or {}).get("confirmed_time"))
+                for item in persisted_orders if isinstance(item, dict)
+                and (item.get("trigger") or {}).get("confirmed_time")
+            }
+            signals = [item for item in signals if item["time"] not in processed_signal_times]
+            persisted_order = (state.get("orders") or {}).get("supertrend")
+            if isinstance(persisted_order, dict) and persisted_order.get("status") == "DUMMY_PLACED":
+                state["supertrend_startup_recovery"] = {
+                    "status": "SKIPPED_EXISTING_ORDER", "started_at_ist": self._startup_at.isoformat(),
+                    "message": "An open order already exists; preserving it prevents duplicate replay.",
+                }
+                await asyncio.to_thread(self._store.save, isolation_id, state)
+                self._index_open_orders(isolation_id, state)
+                return
             meta = self._meta.get(isolation_id) or {
                 "legs": state.get("legs") or {}, "instrument_context": state.get("isolated_instrument") or {},
                 "instrument_meta": {}, "date_key": trade_date,
@@ -655,15 +675,6 @@ class DummyOrderEngine:
                              isolation_id, missing)
                 return
 
-            persisted_order = (state.get("orders") or {}).get("supertrend")
-            if isinstance(persisted_order, dict) and persisted_order.get("status") == "DUMMY_PLACED":
-                state["supertrend_startup_recovery"] = {
-                    "status": "SKIPPED_EXISTING_ORDER", "started_at_ist": self._startup_at.isoformat(),
-                    "message": "An open order already exists; preserving it prevents duplicate replay. Gap reconciliation for this pre-existing order is not performed.",
-                }
-                await asyncio.to_thread(self._store.save, isolation_id, state)
-                self._index_open_orders(isolation_id, state)
-                return
 
             history = list(state.get("order_history") or [])
             order_count = self._supertrend_order_count(state)
