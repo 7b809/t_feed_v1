@@ -100,7 +100,7 @@ def send_telegram(title: str, message: str, level: str = "INFO") -> None:
         send_telegram_message(text)
         return
     except Exception as error:
-        print(f"WARNING: Shared Telegram notifier unavailable: {error}")
+        print(f"WARNING: Shared Telegram notifier unavailable ({type(error).__name__}).")
 
     # Keep the updater usable with system Python if app dependencies are
     # installed only inside myenv.
@@ -119,7 +119,7 @@ def send_telegram(title: str, message: str, level: str = "INFO") -> None:
             if response.status >= 300:
                 raise RuntimeError(f"Telegram HTTP status {response.status}")
     except Exception as error:
-        print(f"WARNING: Telegram notification failed: {error}")
+        print(f"WARNING: Telegram notification failed ({type(error).__name__}).")
 
 
 def run_command(
