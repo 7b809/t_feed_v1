@@ -130,6 +130,8 @@ def search_upstox_instruments(params: dict[str, Any]) -> dict:
                 error_payload = response.json()
             except ValueError:
                 error_payload = {"detail": response.text[:1000]}
+            if not isinstance(error_payload, dict):
+                error_payload = {"detail": str(error_payload)[:1000]}
             error_code = error_payload.get("error_code")
             error_name = error_payload.get("error_name")
             if error_code == 1010 or error_name == "browser_signature_banned":
