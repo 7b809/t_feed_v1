@@ -350,14 +350,13 @@ class DummyOrderEngine:
                 return
             if not self._indicator_enabled():
                 return
-            if indicator == "supertrend" and state.get("supertrend_daily_target_locked"):
-                return
             recovery = state.get("supertrend_startup_recovery") or {}
             if indicator == "supertrend" and recovery.get("status") == "WAITING_FOR_HISTORY":
                 return
             existing_order = (state.get("orders") or {}).get(indicator)
-            # SR orders remain one-shot. Supertrend orders may be reversed by
-            # a later opposite confirmed signal while the current order is open.
+            # Supertrend orders may be reversed by a later opposite confirmed
+            # signal while the current order is open; completed entries may be
+            # followed by another entry until the per-isolation cap is reached.
             if existing_order and existing_order.get("status") != "DISABLED":
                 existing_status = str(existing_order.get("status") or "").upper()
                 if existing_status == "DUMMY_SIGNAL_RECORDED_NO_QUOTE":
@@ -429,10 +428,6 @@ class DummyOrderEngine:
                 existing_order.update({"pnl_points": pnl_points, "pnl_gross": round(pnl_points * units, 2),
                                        "estimated_costs": 0.0, "pnl_net": round(pnl_points * units, 2),
                                        "pnl_currency": "INR", "pnl_cost_model": "gross_only_costs_not_configured"})
-                if close_reason == "TARGET":
-                    state["supertrend_daily_target_locked"] = True
-                    state["supertrend_daily_target_locked_at"] = close_time.isoformat()
-                    state["supertrend_daily_target_order_id"] = existing_order.get("order_id")
                 state.setdefault("order_history", []).append(dict(existing_order))
                 state["updated_at"] = close_time.isoformat()
                 await asyncio.to_thread(self._store.save, isolation_id, state)
@@ -679,7 +674,7 @@ class DummyOrderEngine:
             history = list(state.get("order_history") or [])
             order_count = self._supertrend_order_count(state)
             active, active_role, active_candles, last_processed = None, None, None, None
-            locked, replayed, limit_reached = False, 0, False
+            replayed, limit_reached = 0, False
 
             async def persist_closed(order: dict):
                 self._finish_recovery_order(order, order["exit_reason"],
@@ -701,9 +696,6 @@ class DummyOrderEngine:
                         active["exit_reason"], active["exit_price"] = result["reason"], result["price"]
                         active["completed_at_ist"] = result["time"].isoformat()
                         await persist_closed(active)
-                        if result["reason"] == "TARGET":
-                            locked = True
-                            break
                         active = active_role = active_candles = last_processed = None
                     elif role != active_role:
                         prior = [bar for bar in (active_candles or [])
@@ -722,8 +714,6 @@ class DummyOrderEngine:
                         active = active_role = active_candles = last_processed = None
                     else:
                         continue
-                if locked:
-                    break
                 if order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION:
                     limit_reached = True
                     break
@@ -747,7 +737,7 @@ class DummyOrderEngine:
                 last_processed = self._candle_dt(entry_candle)
                 replayed += 1
 
-            if active is not None and not locked:
+            if active is not None:
                 hit, result, _ = self._simulate_candles(
                     active, active_candles or [], last_processed or _dt(active["started_at_ist"]),
                     self._startup_at + timedelta(seconds=1))
@@ -755,14 +745,8 @@ class DummyOrderEngine:
                     active["exit_reason"], active["exit_price"] = result["reason"], result["price"]
                     active["completed_at_ist"] = result["time"].isoformat()
                     await persist_closed(active)
-                    if result["reason"] == "TARGET":
-                        locked = True
                     active = None
 
-            if locked:
-                state["supertrend_daily_target_locked"] = True
-                state["supertrend_daily_target_locked_at"] = _now().isoformat()
-                state["supertrend_daily_target_lock_reason"] = "STARTUP_RECOVERY_TARGET"
             if active is not None:
                 state.setdefault("orders", {})["supertrend"] = active
                 await self._persist_mongo_order(trade_date, isolation_id, "supertrend",
@@ -778,7 +762,6 @@ class DummyOrderEngine:
                 "orders_replayed": replayed, "orders_completed": len(history),
                 "order_limit": MAX_SUPERTREND_ORDERS_PER_ISOLATION,
                 "order_limit_reached": limit_reached or order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION,
-                "daily_target_locked": locked,
                 "method": "one_minute_ohlc_stop_first_if_both_levels_touch",
             }
             state["updated_at"] = _now().isoformat()
@@ -838,10 +821,6 @@ class DummyOrderEngine:
                     "completed_at_ist": stamp,
                     "duration_seconds": round((tick_time - started).total_seconds(), 3) if started else None,
                 })
-                if indicator == "supertrend" and reason == "TARGET":
-                    state["supertrend_daily_target_locked"] = True
-                    state["supertrend_daily_target_locked_at"] = stamp
-                    state["supertrend_daily_target_order_id"] = order.get("order_id")
                 units = int(order.get("quantity_units") or order.get("quantity") or 1)
                 pnl_points = round(price - float(order.get("entry_price") or 0), 4)
                 order.update({"pnl_points": pnl_points, "pnl_gross": round(pnl_points * units, 2),
@@ -934,7 +913,6 @@ class DummyOrderEngine:
         result["supertrend_orders_enabled"] = self._indicator_enabled()
         result["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
         states = await asyncio.to_thread(self._store.list_all)
-        result["supertrend_daily_target_locked_count"] = sum(bool(x.get("supertrend_daily_target_locked")) for x in states)
         result["startup_recovery_waiting_count"] = sum(
             (x.get("supertrend_startup_recovery") or {}).get("status") == "WAITING_FOR_HISTORY"
             for x in states)
