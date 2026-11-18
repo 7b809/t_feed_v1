@@ -329,6 +329,7 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
         assert current["status"] == "COMPLETED_STOP_LOSS"
         assert state["supertrend_order_count"] == 2
         assert state["supertrend_order_limit"] == 2
-        assert len(state["order_history"]) == 1
+        assert len(state["order_history"]) == 2
+        assert [item["order_sequence"] for item in state["order_history"]] == [1, 2]
 
     asyncio.run(run())
