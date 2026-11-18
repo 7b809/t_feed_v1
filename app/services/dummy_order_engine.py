@@ -630,7 +630,8 @@ class DummyOrderEngine:
             trade_date = state.get("trade_date_ist") or isolation_id.split("__", 1)[0]
             cutoff = _dt(state.get("isolation_time")) or self._startup_at
             signals = sorted((item for item in _st_candidates(payload)
-                              if cutoff < item["dt"] <= self._startup_at),
+                              if cutoff < item["dt"] <= self._startup_at
+                              and self._signal_in_entry_session(item)),
                              key=lambda item: item["dt"])
             # Never replay signals already represented by a persisted entry.
             persisted_orders = list(state.get("order_history") or [])
@@ -643,6 +644,25 @@ class DummyOrderEngine:
                 and (item.get("trigger") or {}).get("confirmed_time")
             }
             signals = [item for item in signals if item["time"] not in processed_signal_times]
+            persisted_count = self._supertrend_order_count(state)
+            if persisted_count == 0 and signals:
+                entry_window_mode = (
+                    "LATE_SINGLE" if signals[0]["dt"].timetz().replace(tzinfo=None) >= SUPERTREND_ENTRY_CUTOFF
+                    else "EARLY_TWO"
+                )
+            else:
+                resolved_limit = self._resolve_supertrend_entry_limit(state)
+                entry_window_mode = state.get("supertrend_entry_window_mode") or (
+                    "LATE_SINGLE" if resolved_limit == 1 else "EARLY_TWO"
+                )
+            order_limit = 1 if entry_window_mode == "LATE_SINGLE" else 2
+            if entry_window_mode == "EARLY_TWO":
+                signals = [item for item in signals
+                           if item["dt"].timetz().replace(tzinfo=None) < SUPERTREND_ENTRY_CUTOFF]
+            elif signals:
+                signals = signals[:1]
+            state["supertrend_entry_window_mode"] = entry_window_mode
+            state["supertrend_order_limit"] = order_limit
             persisted_order = (state.get("orders") or {}).get("supertrend")
             if isinstance(persisted_order, dict) and persisted_order.get("status") == "DUMMY_PLACED":
                 state["supertrend_startup_recovery"] = {
@@ -653,13 +673,14 @@ class DummyOrderEngine:
                 self._index_open_orders(isolation_id, state)
                 return
             persisted_count = self._supertrend_order_count(state)
-            if persisted_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION:
+            if persisted_count >= order_limit:
                 state["supertrend_order_count"] = persisted_count
-                state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
+                state["supertrend_order_limit"] = order_limit
+                state["supertrend_entry_window_mode"] = entry_window_mode
                 state["supertrend_startup_recovery"] = {
                     "status": "COMPLETED", "started_at_ist": self._startup_at.isoformat(),
                     "completed_at_ist": _now().isoformat(),
-                    "orders_replayed": 0, "order_limit": MAX_SUPERTREND_ORDERS_PER_ISOLATION,
+                    "orders_replayed": 0, "order_limit": order_limit,
                     "order_limit_reached": True,
                     "message": "The per-isolation Supertrend entry limit was already reached; historical replay was skipped.",
                 }
@@ -732,7 +753,7 @@ class DummyOrderEngine:
                         active = active_role = active_candles = last_processed = None
                     else:
                         continue
-                if order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION:
+                if order_count >= order_limit:
                     limit_reached = True
                     break
                 entry_candle = next((bar for bar in role_candles
@@ -750,7 +771,7 @@ class DummyOrderEngine:
                 active = self._recovery_order(isolation_id, signal, role, key, entry_candle, meta)
                 order_count += 1
                 active["order_sequence"] = order_count
-                active["max_orders_per_isolation"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
+                active["max_orders_per_isolation"] = order_limit
                 active_role, active_candles = role, role_candles
                 last_processed = self._candle_dt(entry_candle)
                 replayed += 1
@@ -773,13 +794,14 @@ class DummyOrderEngine:
                 state.setdefault("orders", {})["supertrend"] = history[-1]
             state["order_history"] = history[-500:]
             state["supertrend_order_count"] = order_count
-            state["supertrend_order_limit"] = MAX_SUPERTREND_ORDERS_PER_ISOLATION
+            state["supertrend_order_limit"] = order_limit
+            state["supertrend_entry_window_mode"] = entry_window_mode
             state["supertrend_startup_recovery"] = {
                 "status": "COMPLETED", "started_at_ist": self._startup_at.isoformat(),
                 "completed_at_ist": _now().isoformat(), "signals_found": len(signals),
                 "orders_replayed": replayed, "orders_completed": len(history),
-                "order_limit": MAX_SUPERTREND_ORDERS_PER_ISOLATION,
-                "order_limit_reached": limit_reached or order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION,
+                "order_limit": order_limit,
+                "order_limit_reached": limit_reached or order_count >= order_limit,
                 "method": "one_minute_ohlc_stop_first_if_both_levels_touch",
             }
             state["updated_at"] = _now().isoformat()
@@ -787,7 +809,7 @@ class DummyOrderEngine:
             self._index_open_orders(isolation_id, state)
             logger.info("Supertrend startup recovery complete iso=%s signals=%d replayed=%d completed=%d limit_reached=%s",
                         isolation_id, len(signals), replayed, len(history),
-                        limit_reached or order_count >= MAX_SUPERTREND_ORDERS_PER_ISOLATION)
+                        limit_reached or order_count >= order_limit)
             await self._notify_recovery(state)
 
     async def on_market_tick(self, instrument_key: str, data: dict,
