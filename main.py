@@ -112,7 +112,7 @@ async def lifespan(app: FastAPI):
             "(deferred startup gate is active if now < cutoff)"
         )
 
-    send_telegram_message("🚀 <b>ISOLATION SERVICE STARTING</b>\\nEnvironment initialising · IST")
+    notify_runtime_event("ISOLATION SERVICE STARTING", "Environment initialising · Asia/Kolkata", "🚀")
 
     now = datetime.now(ZoneInfo(TIMEZONE))
     cutoff = now.replace(
