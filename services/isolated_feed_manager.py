@@ -38,11 +38,15 @@ def _inside_session(now=None):
 
 def _until_session(now=None):
     now = now or _now()
-    boundary = now.replace(hour=15, minute=30, second=0, microsecond=0)
-    if now >= boundary:
+    if now.weekday() >= 5:
+        days_ahead = 7 - now.weekday()
+        boundary = (now + timedelta(days=days_ahead)).replace(hour=9, minute=15, second=0, microsecond=0)
+    elif now.time().replace(tzinfo=None) < dt_time(9, 15):
+        boundary = now.replace(hour=9, minute=15, second=0, microsecond=0)
+    else:
         boundary = (now + timedelta(days=1)).replace(hour=9, minute=15, second=0, microsecond=0)
-    while boundary.weekday() >= 5:
-        boundary += timedelta(days=1)
+        while boundary.weekday() >= 5:
+            boundary += timedelta(days=1)
     return max(1.0, (boundary - now).total_seconds())
 
 
@@ -202,10 +206,11 @@ class IsolatedFeedManager:
         if not self._loop or not self._loop.is_running():
             return
         async def cancel_all():
-            for task in list(self._tasks.values()):
-                task.cancel()
-            if self._tasks:
-                await asyncio.gather(*self._tasks.values(), return_exceptions=True)
+            # run_coroutine_threadsafe returns concurrent.futures.Future objects,
+            # not asyncio Tasks; cancelling them propagates cancellation to the loop.
+            for future in list(self._tasks.values()):
+                future.cancel()
+            await asyncio.sleep(0.1)
             self._tasks.clear()
         future = asyncio.run_coroutine_threadsafe(cancel_all(), self._loop)
         try:
