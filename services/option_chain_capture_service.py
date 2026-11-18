@@ -155,7 +155,7 @@ class OptionChainCaptureService:
 
         with self._lock:
             if self._active_date != date_key:
-                self._roll_date(date_key, feed)
+                self._roll_date(date_key, self._feed or feed)
             if self._feed is not feed:
                 if self._feed is not None and self._listener is not None:
                     try:
