@@ -9,6 +9,7 @@ from fastapi.templating import Jinja2Templates
 
 from api.routes.backups import router as backups_router
 from api.routes.gtt import router as gtt_router
+from api.routes.external_orders import router as external_orders_router
 from api.routes.orders import router as orders_router
 from core.config import (
     API_HOST, API_PORT, MONGO_DB_NAME, ORDERS_COLLECTION, PROJECT_ROOT,
@@ -59,6 +60,7 @@ app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="
 app.include_router(orders_router)
 app.include_router(backups_router)
 app.include_router(gtt_router)
+app.include_router(external_orders_router)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
