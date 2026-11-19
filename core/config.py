@@ -111,8 +111,7 @@ TOKEN_CHECK_INTERVAL_MINUTES = max(
 ORDERS_VERBOSE: bool = os.getenv("ORDERS_VERBOSE", "false").lower() in ("1", "true", "yes")
 
 # Server-to-server authentication for external trading integrations.
-# When enabled, external mutation endpoints require both independent 32-char
-# credentials in X-Source-Token and X-Destination-Token request headers.
+# One shared 32-character secret is configured on the source project and
+# supplied in each external API JSON payload as "api_token".
 EXTERNAL_API_AUTH_ENABLED = env_bool("EXTERNAL_API_AUTH_ENABLED", False)
 EXTERNAL_API_SOURCE_TOKEN = os.getenv("EXTERNAL_API_SOURCE_TOKEN", "").strip()
-EXTERNAL_API_DESTINATION_TOKEN = os.getenv("EXTERNAL_API_DESTINATION_TOKEN", "").strip()
