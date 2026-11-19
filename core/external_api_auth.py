@@ -41,9 +41,10 @@ def require_external_api_auth(
     if len(source_token) != 32 or len(destination_token) != 32:
         raise HTTPException(status_code=401, detail="Invalid external API credentials.")
 
-    source_ok = hmac.compare_digest(source_token, EXTERNAL_API_SOURCE_TOKEN)
+    source_ok = hmac.compare_digest(source_token.encode('utf-8'), EXTERNAL_API_SOURCE_TOKEN.encode('utf-8'))
     destination_ok = hmac.compare_digest(
-        destination_token, EXTERNAL_API_DESTINATION_TOKEN
+        destination_token.encode('utf-8'),
+        EXTERNAL_API_DESTINATION_TOKEN.encode('utf-8'),
     )
     if not (source_ok and destination_ok):
         raise HTTPException(status_code=401, detail="Invalid external API credentials.")
