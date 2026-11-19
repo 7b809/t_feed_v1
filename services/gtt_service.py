@@ -2,6 +2,12 @@
 
 GTT placement is a live-account operation. It deliberately refuses sandbox
 configuration and respects the existing TRADING_ENABLED safety switch.
+
+By default, placing a GTT first hard-closes every existing position via the
+same broker-native global "exit all positions" service that backs the
+order API's no-order-ID square-off (``OrderService.exit_all_positions``).
+This is intentional: a new GTT is only ever placed on a clean book. Pass
+``cancel_existing=False`` to opt out explicitly.
 """
 from __future__ import annotations
 
@@ -29,13 +35,11 @@ LOT_SIZE_MAP = {
     "NIFTY": 65,
 }
 
-
 class GTTServiceError(RuntimeError):
     def __init__(self, message: str, *, status_code: int = 400, payload: dict | None = None):
         super().__init__(message)
         self.status_code = status_code
         self.payload = payload or {}
-
 
 def resolve_lot_size(
     instrument_key: str,
@@ -55,7 +59,6 @@ def resolve_lot_size(
         "or provide its verified lot_size metadata."
     )
 
-
 def _headers(token: str) -> dict[str, str]:
     return {
         "Accept": "application/json",
@@ -63,6 +66,50 @@ def _headers(token: str) -> dict[str, str]:
         "Authorization": f"Bearer {token}",
     }
 
+def _close_all_existing_positions() -> dict[str, Any]:
+    """Hard-close every open position via the global exit-all service.
+
+    This is the broker-native ``exit_positions`` call used by
+    ``OrderService.exit_all_positions`` (no order IDs required). It is run
+    unconditionally before a new GTT placement — "nothing to close" is a
+    normal, non-fatal outcome.
+
+    Import is lazy to avoid any module-load-order coupling with
+    ``services.order_service``.
+
+    Raises:
+        GTTServiceError: if the square-off request fails, so the caller can
+            abort GTT placement instead of stacking a new order on an
+            un-closed book.
+    """
+    try:
+        from services.order_service import OrderService
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        logger.exception("Could not import OrderService for pre-GTT square-off")
+        raise GTTServiceError(
+            "Could not load the order service required to close existing "
+            "positions before placing a GTT.",
+            status_code=500,
+        ) from exc
+
+    try:
+        result = OrderService().exit_all_positions()
+    except Exception as exc:
+        logger.exception("Pre-GTT global square-off failed; aborting GTT placement")
+        raise GTTServiceError(
+            "Existing positions could not be closed, so the new GTT was not "
+            "placed. Resolve the square-off failure and retry.",
+            status_code=502,
+            payload={"square_off_error": f"{type(exc).__name__}: {exc}"},
+        ) from exc
+
+    order_ids = list(result.get("order_ids") or [])
+    logger.info(
+        "Pre-GTT global square-off submitted: status=%s exit_order_ids=%s",
+        result.get("status"),
+        order_ids or "none-returned",
+    )
+    return result
 
 def get_live_ltp(instrument_key: str, token: str | None = None) -> float:
     token = token or fetch_access_token()
@@ -100,7 +147,6 @@ def get_live_ltp(instrument_key: str, token: str | None = None) -> float:
     if ltp <= 0:
         raise GTTServiceError("Upstox returned an invalid live price.", status_code=502)
     return ltp
-
 
 def build_gtt_payload(
     *,
@@ -151,7 +197,6 @@ def build_gtt_payload(
         ],
     }
 
-
 def place_gtt_order(
     instrument_key: str,
     entry: float | None = None,
@@ -163,11 +208,18 @@ def place_gtt_order(
     trading_symbol: str | None = None,
     product: str = "I",
     transaction_type: str = "BUY",
+    cancel_existing: bool = True,
 ) -> dict[str, Any]:
     """Place a multi-leg BUY GTT.
 
     Example: place_gtt_order("NSE_FO|...", None, 150, 130)
     means one lot, ENTRY at current LTP, TARGET 150 and STOPLOSS 130.
+
+    By default (``cancel_existing=True``) every existing position is
+    hard-closed first through the global broker-native ``exit_positions``
+    service (``OrderService.exit_all_positions``), regardless of whether
+    anything was actually open. If that square-off fails, the GTT is not
+    placed. Pass ``cancel_existing=False`` to skip this step explicitly.
     """
     if UPSTOX_SANDBOX:
         raise GTTServiceError(
@@ -186,6 +238,13 @@ def place_gtt_order(
         raise GTTServiceError("lot must be at least 1.")
     if transaction_type != "BUY":
         raise GTTServiceError("This application currently supports BUY-entry GTT orders only.")
+
+    # Mandatory pre-step: hard-close the whole book before opening anything new.
+    # Runs after the safety gates so a sandbox/disabled config never fires a
+    # live square-off. Failures abort placement.
+    closed_existing: dict[str, Any] | None = None
+    if cancel_existing:
+        closed_existing = _close_all_existing_positions()
 
     resolved_lot_size = resolve_lot_size(instrument_key, lot_size, trading_symbol)
     quantity = int(lot) * resolved_lot_size
@@ -231,7 +290,7 @@ def place_gtt_order(
         "GTT order accepted: instrument=%s quantity=%s lots=%s gtt_ids=%s",
         instrument_key, quantity, lot, ids,
     )
-    return {
+    result: dict[str, Any] = {
         "success": True,
         "instrument_key": instrument_key,
         "entry_price": payload["rules"][0]["trigger_price"],
@@ -245,4 +304,14 @@ def place_gtt_order(
         "gtt_order_ids": ids,
         "broker_response": broker_payload,
         "request": payload,
+        "existing_positions_closed": (
+            {
+                "attempted": True,
+                "status": closed_existing.get("status"),
+                "exit_order_ids": list(closed_existing.get("order_ids") or []),
+            }
+            if closed_existing is not None
+            else {"attempted": False}
+        ),
     }
+    return result
