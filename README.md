@@ -621,7 +621,21 @@ when available. The quote receive timestamp is stored separately; it is
 not represented as an exact historical fill at the signal candle time.
 If no quote exists, the signal is recorded with a null entry price.
 
-No broker SDK is called and no real order is submitted.
+By default, the engine remains simulation-only. An optional server-to-server
+GTT integration can be enabled with GTT_ORDERS_ENABLED=true. For each newly
+created, priced live Supertrend dummy entry, OrderFlow submits the calculated
+target and stop-loss to the configured GTT endpoint. The entry property is
+intentionally omitted so the receiving service uses its own live LTP. The
+request uses the dummy order lot count, verified instrument lot-size metadata
+when available, trading symbol and configured product.
+
+This hook runs only for new live signal entries. Startup historical recovery
+never submits GTT orders. Submission state, GTT IDs, HTTP status and errors
+are saved inside the dummy order in local and MongoDB persistence. An
+ambiguous network failure is marked UNKNOWN and is not automatically retried
+because the remote service may already have accepted the request. Existing
+dummy reversal/exit logic does not cancel or square off a previously submitted
+broker GTT; its target/stop-loss lifecycle remains broker-managed.
 
 Configuration:
 ```env
@@ -672,3 +686,34 @@ Telegram alerts are event-based and designed to remain readable in desktop and m
 - **Startup recovery:** one compact reconciliation summary instead of a repeated dump of every strategy's state.
 
 All simulated-order notifications retain an explicit `SIMULATION ONLY • No live order sent` notice. Instrument keys are retained for traceability, while the trading symbol is the primary human-readable label.
+
+
+## Optional live GTT integration
+
+Configure these values in the private OrderFlow server .env file:
+
+```env
+GTT_ORDERS_ENABLED=false
+GTT_API_URL=https://sandbox.novag7.in/api/v1/gtt/place
+GTT_API_TOKEN=
+GTT_PRODUCT=I
+GTT_REQUEST_TIMEOUT_SECONDS=12
+```
+
+Set GTT_API_TOKEN to the exact 32-character secret configured as
+EXTERNAL_API_SOURCE_TOKEN on the receiving order service. The token is
+loaded directly from the process environment and is included only in the
+server-to-server JSON request. It is never exposed to the browser or written
+to logs, order records, or Git. Enabling GTT requires HTTPS and a 32-character
+token; configuration validation fails otherwise.
+
+The outgoing request contains instrument_key, trading_symbol, target,
+stoploss, lot, optional verified lot_size, product, transaction_type and
+api_token. It deliberately does not contain entry. The receiving service
+obtains its own current LTP for its immediate-entry GTT rule. Target and
+stop-loss are calculated by the existing OrderFlow dummy-order rules.
+
+Keep GTT_ORDERS_ENABLED=false until the receiving service is configured for
+the intended account, the token is set privately, and all price/quantity
+calculations have been checked. Turning this flag on submits live GTT requests
+for newly created eligible orders.

@@ -183,7 +183,16 @@ def format_order_entry_notification(
     if (source_symbol or source_key) and not same_source:
         source_label = source_symbol or source_key
         lines.append(f"Signal source: {source_label}")
-    lines.append("SIMULATION ONLY • No live order sent")
+    gtt = order.get("gtt_submission") if isinstance(order.get("gtt_submission"), dict) else {}
+    if gtt.get("status") == "SUBMITTED":
+        lines.append("🟢 LIVE GTT accepted by execution API")
+        ids = gtt.get("gtt_order_ids") or []
+        if ids:
+            lines.append("GTT ID: " + ", ".join(str(item) for item in ids))
+    elif gtt.get("status") in {"FAILED", "UNKNOWN"}:
+        lines.append("⚠️ LIVE GTT " + str(gtt.get("status")) + ": inspect order record before retry")
+    else:
+        lines.append("SIMULATION ONLY • No live order sent")
     return "\n".join(lines)
 
 
@@ -224,7 +233,11 @@ def format_order_completion_notification(
     instrument_key = _first_text(order, "target_instrument_key", "instrument_key")
     if instrument_key:
         lines.append(f"Key: {instrument_key}")
-    lines.append("SIMULATION ONLY • No live order sent")
+    gtt = order.get("gtt_submission") if isinstance(order.get("gtt_submission"), dict) else {}
+    if gtt.get("status") == "SUBMITTED":
+        lines.append("Linked live GTT was submitted separately; verify its broker lifecycle.")
+    else:
+        lines.append("SIMULATION ONLY • No live order sent")
     return "\n".join(lines)
 
 

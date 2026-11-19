@@ -96,6 +96,13 @@ class Settings:
     log_level: str
     logs_dir: str
 
+    # Optional server-to-server live GTT placement. Disabled by default.
+    gtt_orders_enabled: bool = False
+    gtt_api_url: str = "https://sandbox.novag7.in/api/v1/gtt/place"
+    gtt_api_token: str = ""
+    gtt_product: str = "I"
+    gtt_request_timeout_seconds: int = 12
+
     def __post_init__(self) -> None:
         if not 1 <= self.live_feed_port <= 65535:
             raise ValueError("LIVE_FEED_PORT must be between 1 and 65535")
@@ -133,6 +140,15 @@ class Settings:
             raise ValueError("DAILY_DATA_BACKUP_HOUR must be 0..23")
         if not 0 <= self.daily_data_backup_minute < 60:
             raise ValueError("DAILY_DATA_BACKUP_MINUTE must be 0..59")
+        if self.gtt_orders_enabled:
+            if not self.gtt_api_url.startswith("https://"):
+                raise ValueError("GTT_API_URL must use HTTPS")
+            if len(self.gtt_api_token) != 32:
+                raise ValueError("GTT_API_TOKEN must be configured as an exact 32-character secret when GTT_ORDERS_ENABLED=true")
+            if self.gtt_product not in {"I", "D", "MTF"}:
+                raise ValueError("GTT_PRODUCT must be I, D or MTF")
+        if self.gtt_request_timeout_seconds < 3:
+            raise ValueError("GTT_REQUEST_TIMEOUT_SECONDS must be >= 3")
 
 
     @property
@@ -220,4 +236,9 @@ def load_settings() -> Settings:
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         logs_dir=os.getenv("LOGS_DIR", "./logs"),
+        gtt_orders_enabled=_env_bool("GTT_ORDERS_ENABLED", False),
+        gtt_api_url=os.getenv("GTT_API_URL", "https://sandbox.novag7.in/api/v1/gtt/place").strip(),
+        gtt_api_token=os.getenv("GTT_API_TOKEN", "").strip(),
+        gtt_product=os.getenv("GTT_PRODUCT", "I").strip().upper(),
+        gtt_request_timeout_seconds=_env_int("GTT_REQUEST_TIMEOUT_SECONDS", 12),
     )
