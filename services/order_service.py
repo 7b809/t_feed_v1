@@ -5,6 +5,7 @@ import ast
 import json
 import re
 import threading
+import time
 import uuid
 from typing import Any
 
@@ -34,13 +35,111 @@ from zoneinfo import ZoneInfo as _ZoneInfo
 
 _TZ = _ZoneInfo(TIMEZONE)
 
+TERMINAL_ORDER_STATUSES = {
+    "complete",
+    "rejected",
+    "cancelled",
+    "cancelled_partially",
+    "failed",
+    "failed_partially",
+    "expired",
+}
+
+INSUFFICIENT_FUNDS_KEYWORDS = (
+    "insufficient",
+    "margin",
+    "fund",
+    "shortfall",
+    "balance",
+    "rms:",
+)
+
+# Official Upstox UDAPI error code descriptions (Place Order V3, Cancel Order,
+# Get Order Details, and US Stocks / segment routing documentation).
+UDAPI_ERROR_CATALOG: dict[str, str] = {
+    # Order & GTT validation / request errors
+    "UDAPI1004": "Valid order type is required.",
+    "UDAPI1006": "Product is required.",
+    "UDAPI1007": "Validity is required.",
+    "UDAPI1008": "Price is required.",
+    "UDAPI1010": "Order ID accepts only alphanumeric characters and '-'.",
+    "UDAPI1023": "Order ID is required.",
+    "UDAPI1026": "Instrument key is required.",
+    "UDAPI1038": "Trigger price should be greater than limit price.",
+    "UDAPI1040": "Price is not required for this order type.",
+    "UDAPI1052": "Order quantity cannot be zero.",
+    "UDAPI1054": "The 'product' value is invalid.",
+    "UDAPI1055": "The 'validity' value is invalid.",
+    "UDAPI1056": "The 'order_type' is invalid.",
+    "UDAPI1057": "The 'transaction_type' is invalid.",
+    "UDAPI1118": "Maximum sliced order limit exceeded.",
+    "UDAPI1119": "Tag length exceeds the 40-character limit.",
+    "UDAPI1134": "GTT order ID is required.",
+    "UDAPI1135": "GTT order ID must start with 'GTT-'.",
+    "UDAPI1136": "SINGLE GTT order must contain a single rule.",
+    "UDAPI1137": "MULTIPLE GTT order rules list is invalid.",
+    "UDAPI1154": "Access blocked due to static IP restrictions.",
+    "UDAPI1156": "Invalid X-Algo-Name in request headers.",
+    "UDAPI1158": "Market orders are not allowed; place a limit order instead.",
+    # Cross-segment routing errors on Indian order APIs
+    "UDAPI1250": "Instrument segment cannot be traded through this API.",
+    "UDAPI1251": "US stocks cannot be ordered through Indian order APIs; use US order API.",
+    # US Stocks validation, account, and service errors
+    "UDAPI1300": "Invalid US instrument key.",
+    "UDAPI1301": "US stock is not currently tradable.",
+    "UDAPI1302": "Provide exactly one of quantity or amount.",
+    "UDAPI1303": "US order quantity must be > 0 (up to 9 decimal places).",
+    "UDAPI1304": "Fractional quantity is not allowed for this US stock.",
+    "UDAPI1305": "Amount must be > 0 (up to 2 decimal places).",
+    "UDAPI1306": "Amount orders require a fractionable US stock.",
+    "UDAPI1307": "Price must be > 0 for a US limit order.",
+    "UDAPI1308": "Price is not allowed for a US market order (omit or send 0).",
+    "UDAPI1309": "Invalid decimal precision on US order price.",
+    "UDAPI1310": "US order value must be at least $1.",
+    "UDAPI1311": "US order size cannot exceed 999,999.",
+    "UDAPI1313": "Quantity is required.",
+    "UDAPI1314": "Price must be greater than 0.",
+    "UDAPI1315": "Provide at least one order in the margin request.",
+    "UDAPI1316": "US stocks is not activated on this Upstox account.",
+    "UDAPI1317": "US stocks order service is temporarily unavailable.",
+    "UDAPI1318": "US stocks trading is in its daily maintenance window.",
+    "UDAPI1319": "US order service timed out; check order book before retrying.",
+    "UDAPI1320": "US stocks funds service is temporarily unavailable.",
+    "UDAPI1321": "Last traded price is unavailable for this US stock.",
+    "UDAPI1322": "US market status is unavailable; order was not placed.",
+    "UDAPI1323": "US order value cannot exceed $40,000.",
+    # Common / operational UDAPI codes
+    "UDAPI10000": "Request is not supported by Upstox API.",
+    "UDAPI10005": "API rate limit exceeded.",
+    "UDAPI100010": "Order not found.",
+    "UDAPI100011": "Invalid instrument key.",
+    "UDAPI100039": "AMO orders cannot be placed during active market hours.",
+    "UDAPI100040": "Order is already in a final state and cannot be cancelled.",
+    "UDAPI100049": "Access to this API is restricted for this account.",
+    "UDAPI100072": "Funds service is available from 5:30 AM to 12:00 AM IST daily.",
+    "UDAPI100074": "Place order API is available from 5:30 AM to 12:00 AM IST daily.",
+    "UDAPI100500": "US broker rejected the request (check message for details).",
+}
+
 # Friendly messages mapped by Upstox error codes / common causes.
 # Raw Upstox messages are still preserved inside `broker_error.errors[].message`.
 _FRIENDLY_ERROR_MESSAGES: dict[str, str] = {
     "UDAPI1154": "Order not placed due to static IP restriction.",
     "UDAPI1134": "GTT order ID is required.",
     "UDAPI1135": "GTT order ID must start with 'GTT-'.",
+    "UDAPI1136": "SINGLE GTT order must contain a single rule.",
+    "UDAPI1137": "MULTIPLE GTT order rules list is invalid.",
     "UDAPI1156": "Invalid algo name in request headers.",
+    "UDAPI1158": "Market orders are not allowed; place a limit order instead.",
+    "UDAPI1251": "US stocks cannot be ordered through this API; use US order API.",
+    "UDAPI100039": "AMO orders cannot be placed during active market hours.",
+    "UDAPI100040": "Order is already completed, cancelled, rejected, or expired.",
+    "UDAPI100049": "Access to this order endpoint is restricted for this account.",
+    "UDAPI100072": "Funds service is accessible from 5:30 AM to 12:00 AM IST daily.",
+    "UDAPI100074": "Place order API is accessible from 5:30 AM to 12:00 AM IST daily.",
+    "UDAPI1318": "US stocks trading is in its daily maintenance window.",
+    "UDAPI1320": "US stocks funds service is temporarily unavailable.",
+    "UDAPI1322": "US market status is unavailable; order was not placed.",
     "TRADING_DISABLED": "Order not placed because trading is disabled.",
 }
 
@@ -108,6 +207,12 @@ def _format_success_response(response: Any, *, default_status: int = 200) -> dic
     return formatted
 
 
+def _is_insufficient_funds_message(text: str | None) -> bool:
+    """Detect margin/funds rejection text from RMS/exchange/broker messages."""
+    lowered = (text or "").lower()
+    return any(keyword in lowered for keyword in INSUFFICIENT_FUNDS_KEYWORDS)
+
+
 def _simplify_error_message(
     error_code: str | None, raw_message: str, action: str = "order"
 ) -> str:
@@ -136,11 +241,14 @@ def _simplify_error_message(
     if "trading_enabled" in lower_raw or "trading is disabled" in lower_raw:
         return "Order not placed because trading is disabled."
 
-    if "insufficient" in lower_raw or "margin" in lower_raw or "fund" in lower_raw:
-        return "Order not placed due to insufficient funds or margin."
+    if _is_insufficient_funds_message(raw_message):
+        return "Order rejected/not placed due to insufficient funds or margin."
 
     if "market" in lower_raw and ("closed" in lower_raw or "outside" in lower_raw):
         return "Order not placed because the market is closed."
+
+    if code in UDAPI_ERROR_CATALOG and not raw_message:
+        return UDAPI_ERROR_CATALOG[code]
 
     first_line = (raw_message or "").splitlines()[0].strip()
     if len(first_line) > 160:
@@ -195,7 +303,10 @@ def _parse_api_exception(exc: Exception, *, action: str = "order") -> dict:
                     for err in errors:
                         if isinstance(err, dict):
                             code = err.get("errorCode") or err.get("error_code")
-                            exact_msg = err.get("message") or ""
+                            exact_msg = (
+                                err.get("message")
+                                or UDAPI_ERROR_CATALOG.get(str(code or ""), "")
+                            )
                             prop = err.get("propertyPath") or err.get("property_path")
                             inv_val = err.get("invalidValue") or err.get("invalid_value")
                             normalized_errors.append(
@@ -287,7 +398,7 @@ def _event_details(**details) -> dict:
 
 
 class OrderService:
-    """Place, cancel and square-off orders, recording every action."""
+    """Place, cancel, inspect and square-off orders, recording every action."""
 
     def __init__(self, repository: OrderRepository | None = None) -> None:
         self.repository = repository or OrderRepository()
@@ -392,10 +503,167 @@ class OrderService:
                 f"Persistence failed before {action}; no Upstox request was sent."
             ) from exc
 
+    def _order_details(self, order_v2, order_id: str) -> dict:
+        response = order_v2.get_order_status(order_id=order_id)
+        return _response_data(response)
+
+    def _interpret_order_details(self, order_id: str, details: dict) -> dict[str, Any]:
+        """Translate Get Order Details fields into normalized execution & failure info.
+
+        Upstox `place_order` can return HTTP 200 with an `order_id` while RMS or
+        the exchange rejects the order asynchronously with `status == "rejected"`
+        and a human/RMS reason in `status_message` / `status_message_raw`.
+        """
+        broker_status = str(details.get("status") or "").strip().lower()
+        status_message = details.get("status_message")
+        status_message_raw = details.get("status_message_raw")
+        combined_reason = " | ".join(
+            str(x).strip()
+            for x in (status_message, status_message_raw)
+            if x and str(x).strip()
+        )
+        insufficient_funds = (
+            broker_status in {"rejected", "failed", "failed_partially"}
+            and _is_insufficient_funds_message(combined_reason)
+        )
+
+        if broker_status in {"rejected", "failed", "failed_partially"}:
+            local_status = "REJECTED"
+            failure_reason = (
+                combined_reason
+                or f"Order {order_id} ended with broker status '{broker_status}'."
+            )
+            failure_category = (
+                "INSUFFICIENT_FUNDS_OR_MARGIN"
+                if insufficient_funds
+                else "BROKER_OR_EXCHANGE_REJECTED"
+            )
+        elif broker_status == "complete":
+            local_status = "COMPLETE"
+            failure_reason = None
+            failure_category = None
+        elif broker_status in {"cancelled", "cancelled_partially", "expired"}:
+            local_status = broker_status.upper()
+            failure_reason = combined_reason or None
+            failure_category = "CANCELLED_OR_EXPIRED"
+        else:
+            local_status = broker_status.upper() if broker_status else "OPEN"
+            failure_reason = None
+            failure_category = None
+
+        return {
+            "order_id": order_id,
+            "broker_status": broker_status or None,
+            "local_status": local_status,
+            "is_terminal": broker_status in TERMINAL_ORDER_STATUSES,
+            "insufficient_funds": insufficient_funds,
+            "failure_category": failure_category,
+            "failure_reason": failure_reason,
+            "status_message": status_message,
+            "status_message_raw": status_message_raw,
+            "filled_quantity": int(details.get("filled_quantity") or 0),
+            "pending_quantity": int(details.get("pending_quantity") or 0),
+            "average_price": details.get("average_price"),
+            "exchange_order_id": details.get("exchange_order_id"),
+            "raw_details": details,
+        }
+
+    def sync_order_status(self, order_id: str) -> dict[str, Any]:
+        """Fetch latest order details from Upstox V2 and record rejections/fills."""
+        with self._operation_lock:
+            entry = self._get_or_create_order_entry(order_id)
+            _, order_v2 = self._clients()
+            details = self._order_details(order_v2, order_id)
+            summary = self._interpret_order_details(order_id, details)
+
+            event_type = (
+                "ORDER_REJECTED_BY_BROKER"
+                if summary["local_status"] == "REJECTED"
+                else "ORDER_STATUS_SYNCED"
+            )
+            self._append_event(
+                entry["local_id"],
+                self._new_event(
+                    event_type,
+                    order_id=order_id,
+                    broker_status=summary["broker_status"],
+                    local_status=summary["local_status"],
+                    insufficient_funds=summary["insufficient_funds"],
+                    failure_category=summary["failure_category"],
+                    status_message=summary["status_message"],
+                    status_message_raw=summary["status_message_raw"],
+                    filled_quantity=summary["filled_quantity"],
+                    pending_quantity=summary["pending_quantity"],
+                    average_price=summary["average_price"],
+                    order_details=details,
+                ),
+                status=summary["local_status"],
+                require_mongo=False,
+            )
+
+            entry_updates: dict[str, Any] = {
+                "broker_order_status": summary["broker_status"],
+                "status_message": summary["status_message"],
+                "status_message_raw": summary["status_message_raw"],
+                "filled_quantity": summary["filled_quantity"],
+                "pending_quantity": summary["pending_quantity"],
+                "average_price": summary["average_price"],
+                "last_order_details": details,
+                "last_modified_time": now_iso(),
+            }
+            if summary["failure_reason"]:
+                entry_updates["error"] = summary["failure_reason"]
+                entry_updates["failure_category"] = summary["failure_category"]
+                entry_updates["insufficient_funds"] = summary["insufficient_funds"]
+            self.repository.update_entry(
+                entry["local_id"], entry_updates, require_mongo=False
+            )
+
+            if summary["local_status"] == "REJECTED":
+                notify_event(
+                    "Order rejected after placement"
+                    + (" — insufficient funds/margin" if summary["insufficient_funds"] else ""),
+                    [
+                        f"Order ID: {order_id}",
+                        f"Broker Status: {summary['broker_status']}",
+                        f"Reason: {summary['failure_reason']}",
+                    ],
+                    "ERROR",
+                )
+            return summary
+
+    def wait_for_terminal_order_state(
+        self,
+        order_id: str,
+        *,
+        timeout_seconds: float = 5.0,
+        poll_interval_seconds: float = 0.5,
+    ) -> dict[str, Any]:
+        """Poll Get Order Details until terminal status or timeout."""
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        latest = self.sync_order_status(order_id)
+        while not latest["is_terminal"] and time.monotonic() < deadline:
+            sleep_for = min(
+                max(0.05, poll_interval_seconds),
+                max(0.0, deadline - time.monotonic()),
+            )
+            if sleep_for <= 0:
+                break
+            time.sleep(sleep_for)
+            latest = self.sync_order_status(order_id)
+        return latest
+
     # ---------------------------------------------------------------
     # PLACE ORDER
     # ---------------------------------------------------------------
-    def place_order(self, request: PlaceOrderRequest) -> dict:
+    def place_order(
+        self,
+        request: PlaceOrderRequest,
+        *,
+        confirm_execution: bool = False,
+        confirmation_timeout_seconds: float = 3.0,
+        confirmation_poll_seconds: float = 0.5,
+    ) -> dict:
         """Place a V3 order. Defaults are BUY, 65 units, MARKET and Intraday."""
         payload = request.model_dump()
         entry = self._new_entry(
@@ -524,14 +792,48 @@ class OrderService:
                 ],
                 "ORDER",
             )
-            return {
-                "status": "placed",
+
+            synced_orders: list[dict[str, Any]] = []
+            rejected_orders: list[dict[str, Any]] = []
+            if confirm_execution:
+                for oid in ids:
+                    try:
+                        status_summary = self.wait_for_terminal_order_state(
+                            oid,
+                            timeout_seconds=confirmation_timeout_seconds,
+                            poll_interval_seconds=confirmation_poll_seconds,
+                        )
+                        synced_orders.append(status_summary)
+                        if status_summary["local_status"] == "REJECTED":
+                            rejected_orders.append(status_summary)
+                    except Exception:
+                        logger.exception(
+                            "Post-placement status confirmation failed for order_id=%s",
+                            oid,
+                        )
+
+            effective_status = "rejected" if rejected_orders else "placed"
+            result: dict[str, Any] = {
+                "status": effective_status,
                 "order_ids": ids,
                 "order": updates,
                 "broker_response": formatted_resp,
                 "persistence": persistence,
                 "sandbox": UPSTOX_SANDBOX,
             }
+            if synced_orders:
+                result["order_statuses"] = synced_orders
+            if rejected_orders:
+                result["rejected_orders"] = rejected_orders
+                result["insufficient_funds"] = any(
+                    item.get("insufficient_funds") for item in rejected_orders
+                )
+                result["rejection_reasons"] = [
+                    item.get("failure_reason")
+                    for item in rejected_orders
+                    if item.get("failure_reason")
+                ]
+            return result
         except TradingDisabledError:
             raise
         except Exception as exc:
@@ -703,10 +1005,6 @@ class OrderService:
                 )
         return results
 
-    def _order_details(self, order_v2, order_id: str) -> dict:
-        response = order_v2.get_order_status(order_id=order_id)
-        return _response_data(response)
-
     # ---------------------------------------------------------------
     # EXIT (SQUARE-OFF) SINGLE ORDER
     # ---------------------------------------------------------------
@@ -743,11 +1041,7 @@ class OrderService:
                     exit_detail = self._order_details(order_v2, exit_id)
                     pending_qty = int(exit_detail.get("pending_quantity") or 0)
                     status = str(exit_detail.get("status") or "").lower()
-                    if pending_qty > 0 and status not in {
-                        "complete",
-                        "cancelled",
-                        "rejected",
-                    }:
+                    if pending_qty > 0 and status not in TERMINAL_ORDER_STATUSES:
                         pending_exit_ids.append(exit_id)
                     exited_qty += int(exit_detail.get("filled_quantity") or 0)
 
