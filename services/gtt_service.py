@@ -36,10 +36,16 @@ class GTTServiceError(RuntimeError):
         self.payload = payload or {}
 
 
-def resolve_lot_size(instrument_key: str, supplied_lot_size: int | None = None) -> int:
+def resolve_lot_size(
+    instrument_key: str,
+    supplied_lot_size: int | None = None,
+    trading_symbol: str | None = None,
+) -> int:
     if supplied_lot_size:
         return supplied_lot_size
-    normalized = instrument_key.upper()
+    # Instrument keys are often opaque numeric IDs; use the selected
+    # instrument's trading symbol for the static fallback when available.
+    normalized = f"{instrument_key} {trading_symbol or ''}".upper()
     for symbol, size in LOT_SIZE_MAP.items():
         if symbol in normalized:
             return size
@@ -153,6 +159,7 @@ def place_gtt_order(
     lot: int = 1,
     *,
     lot_size: int | None = None,
+    trading_symbol: str | None = None,
     product: str = "I",
     transaction_type: str = "BUY",
 ) -> dict[str, Any]:
@@ -179,7 +186,7 @@ def place_gtt_order(
     if transaction_type != "BUY":
         raise GTTServiceError("This application currently supports BUY-entry GTT orders only.")
 
-    resolved_lot_size = resolve_lot_size(instrument_key, lot_size)
+    resolved_lot_size = resolve_lot_size(instrument_key, lot_size, trading_symbol)
     quantity = int(lot) * resolved_lot_size
     token = fetch_access_token()
     ltp = get_live_ltp(instrument_key, token)
