@@ -17,6 +17,7 @@
       <div class="nav-caption">WORKSPACE</div>
       <a class="side-link {% if active_page == 'dashboard' %}active{% endif %}" href="/"><i class="bi bi-grid-1x2"></i><span>Orders dashboard</span></a>
       <a class="side-link {% if active_page == 'buy' %}active{% endif %}" href="/buy"><i class="bi bi-plus-circle"></i><span>Buy instrument</span></a>
+      <a class="side-link {% if active_page == 'gtt' %}active{% endif %}" href="/gtt"><i class="bi bi-bullseye"></i><span>GTT orders</span></a>
       <div class="sidebar-foot"><span class="pulse"></span> Order service <span class="muted">· 8004</span></div>
     </aside>
     <main class="main-area">
@@ -25,7 +26,7 @@
           <button class="mobile-menu-btn" id="mobileNavToggle" aria-label="Open navigation"><i class="bi bi-grid"></i></button>
           <div><div class="eyebrow">TRADING WORKSPACE</div><div class="topbar-title">{% block page_heading %}Orders overview{% endblock %}</div></div>
         </div>
-        <div class="topbar-right"><span class="environment-pill"><i class="bi bi-shield-check"></i> SANDBOX MODE</span><span class="avatar">N7</span></div>
+        <div class="topbar-right"><span class="environment-pill"><i class="bi bi-shield-check"></i> ACCOUNT MODE CONFIGURED</span><span class="avatar">N7</span></div>
       </header>
       <div class="page-content">{% block content %}{% endblock %}</div>
     </main>
@@ -33,9 +34,10 @@
   <div class="mobile-dock" id="mobileDock">
     <a href="/" aria-label="Orders dashboard" class="{% if active_page == 'dashboard' %}active{% endif %}"><i class="bi bi-grid-1x2"></i><span>Orders</span></a>
     <a href="/buy" aria-label="Buy instrument" class="{% if active_page == 'buy' %}active{% endif %}"><i class="bi bi-plus-circle"></i><span>Buy</span></a>
+    <a href="/gtt" aria-label="GTT orders" class="{% if active_page == 'gtt' %}active{% endif %}"><i class="bi bi-bullseye"></i><span>GTT</span></a>
   </div>
   <div class="mobile-nav-backdrop" id="mobileNavBackdrop"></div>
-  <div class="mobile-fab-wrap"><button id="mobileFab" class="mobile-fab" aria-label="Open pages"><i class="bi bi-grid-3x3-gap"></i></button><div id="mobileFabMenu" class="mobile-fab-menu"><a href="/"><i class="bi bi-grid-1x2"></i> Orders</a><a href="/buy"><i class="bi bi-cart-plus"></i> Buy order</a></div></div>
+  <div class="mobile-fab-wrap"><button id="mobileFab" class="mobile-fab" aria-label="Open pages"><i class="bi bi-grid-3x3-gap"></i></button><div id="mobileFabMenu" class="mobile-fab-menu"><a href="/"><i class="bi bi-grid-1x2"></i> Orders</a><a href="/buy"><i class="bi bi-cart-plus"></i> Buy order</a><a href="/gtt"><i class="bi bi-bullseye"></i> GTT order</a></div></div>
   <div id="toastArea" class="toast-area" aria-live="polite"></div>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="/static/app.js"></script>
