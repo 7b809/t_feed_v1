@@ -740,54 +740,6 @@ class DummyOrderEngine:
                     isolation_id, indicator, order,
                     meta.get("instrument_context") or {}, completed=False,
                 )
-                    order["gtt_submission"] = {
-                        "status": "SUBMITTING",
-                        "requested_at": requested_at,
-                        "endpoint": self._config.gtt_api_url,
-                        "entry_sent": False,
-                    }
-                    await asyncio.to_thread(self._store.save, isolation_id, state)
-                    await self._persist_mongo_order_update(
-                        meta.get("date_key") or self._date_key(state, isolation_id),
-                        isolation_id, indicator, order,
-                        meta.get("instrument_context") or {}, completed=False,
-                    )
-                    try:
-                        gtt_result = await asyncio.to_thread(submit_gtt_order, self._config, order)
-                    except GTTOrderSubmissionError as exc:
-                        order["gtt_submission"] = {
-                            "status": "UNKNOWN" if exc.outcome_unknown else "FAILED",
-                            "requested_at": requested_at,
-                            "updated_at": _now().isoformat(),
-                            "http_status": exc.http_status,
-                            "error": str(exc),
-                            "entry_sent": False,
-                        }
-                        logger.error(
-                            "Live GTT submission %s for iso=%s instrument=%s: %s",
-                            order["gtt_submission"]["status"], isolation_id, target_key, str(exc),
-                        )
-                    except Exception:
-                        order["gtt_submission"] = {
-                            "status": "UNKNOWN",
-                            "requested_at": requested_at,
-                            "updated_at": _now().isoformat(),
-                            "error": "Unexpected client failure; inspect the receiving service before retrying.",
-                            "entry_sent": False,
-                        }
-                        logger.exception(
-                            "Unexpected live GTT submission failure iso=%s instrument=%s",
-                            isolation_id, target_key,
-                        )
-                    else:
-                        order["gtt_submission"] = gtt_result
-                state["updated_at"] = _now().isoformat()
-                await asyncio.to_thread(self._store.save, isolation_id, state)
-                await self._persist_mongo_order_update(
-                    meta.get("date_key") or self._date_key(state, isolation_id),
-                    isolation_id, indicator, order,
-                    meta.get("instrument_context") or {}, completed=False,
-                )
             await self._notify_entry(state, order)
 
 
