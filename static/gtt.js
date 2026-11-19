@@ -42,7 +42,7 @@
     if(!confirm("Place live BUY GTT?\n\nInstrument: "+(selected.trading_symbol||selected.instrument_key)+"\nEntry: "+(entry===null?"Current LTP (IMMEDIATE)":entry)+"\nTarget: "+target+"\nStop-loss: "+sl+"\nLots: "+lots+" × "+selected.lot_size+" = "+(lots*selected.lot_size)+" units\n\nTARGET and STOPLOSS legs are SELL orders. Ensure EDIS authorization is complete."))return;
     const btn=$("gttPlaceBtn"); btn.disabled=true; btn.textContent="Submitting to Upstox…";
     try{
-      const r=await apiRequest("/api/v1/gtt/place",{method:"POST",body:JSON.stringify({instrument_key:selected.instrument_key,entry,target,stoploss:sl,lot:lots,lot_size:Number(selected.lot_size),product:$("gttProduct").value})});
+      const r=await apiRequest("/api/v1/gtt/place",{method:"POST",body:JSON.stringify({instrument_key:selected.instrument_key,trading_symbol:selected.trading_symbol||selected.short_name||selected.name,entry,target,stoploss:sl,lot:lots,lot_size:selected.lot_size?Number(selected.lot_size):null,product:$("gttProduct").value})});
       show("GTT placed. ID(s): "+((r.gtt_order_ids||[]).join(", ")||"See broker response")+" · Quantity "+r.quantity+" · Entry "+r.entry_price+" ("+r.entry_trigger_type+")","success");
     }catch(err){show("GTT not confirmed: "+err.message);}
     finally{btn.disabled=false;btn.innerHTML='<i class="bi bi-bullseye me-2"></i>Review and place GTT';}
