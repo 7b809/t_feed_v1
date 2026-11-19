@@ -399,9 +399,17 @@ def search_instruments(
 def lookup_instrument(
     instrument_key: str = Query(..., min_length=3),
 ) -> dict[str, Any]:
-    """Return metadata for one instrument by exact key."""
+    """Return metadata for one instrument by exact key.
+
+    A registry entry containing only an exchange-token placeholder is not
+    considered a successful metadata hit; retry the exact key against Upstox.
+    """
     entry = instrument_registry.get(instrument_key)
-    if entry:
+    suffix = instrument_key.split("|", 1)[-1].strip()
+    current_symbol = str((entry or {}).get("trading_symbol") or "").strip()
+    has_real_symbol = bool(current_symbol) and not current_symbol.isdigit() and current_symbol != suffix
+
+    if entry and has_real_symbol:
         return {
             "status": "success",
             "source": "registry",
@@ -417,10 +425,12 @@ def lookup_instrument(
                     normalize_strike_type(entry.get("strike_type")) or
                     entry.get("strike_type"),
                 "expiry": entry.get("expiry"),
-                "segment": (
-                    "NSE_FO" if not entry.get("is_index") else "NSE_INDEX"
+                "lot_size": entry.get("lot_size"),
+                "tick_size": entry.get("tick_size"),
+                "segment": entry.get("segment") or (
+                    "NSE_INDEX" if entry.get("is_index") else "NSE_FO"
                 ),
-                "exchange": "NSE",
+                "exchange": entry.get("exchange") or "NSE",
             },
         }
 
@@ -431,9 +441,26 @@ def lookup_instrument(
     )
     for item in data.get("data", []):
         if item.get("instrument_key") == instrument_key:
+            try:
+                instrument_registry.register_adhoc(
+                    instrument_key,
+                    trading_symbol=item.get("trading_symbol"),
+                    underlying=item.get("underlying_symbol") or item.get("name"),
+                    strike_price=item.get("strike_price"),
+                    strike_type=item.get("instrument_type"),
+                    expiry=item.get("expiry"),
+                    lot_size=item.get("lot_size"),
+                    tick_size=item.get("tick_size"),
+                    exchange=item.get("exchange"),
+                    segment=item.get("segment") or item.get("instrument_type"),
+                )
+            except Exception:
+                logger.exception(
+                    "Unable to register Upstox lookup metadata for %s",
+                    instrument_key,
+                )
             return {"status": "success", "source": "upstox", "data": item}
     return {"status": "not_found", "data": None}
-
 
 # ---------------------------------------------------------------------------
 # Candles (proxy only — no processing) — single instrument
