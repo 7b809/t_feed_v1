@@ -37,6 +37,7 @@ from fastapi.templating import Jinja2Templates
 from core import config  # (likely already imported; add if missing)
 
 from services.instrument_registry import instrument_registry
+from routes.upstox_routes import lookup_instrument
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,30 @@ def _resolve_underlying_name(entry: dict[str, Any]) -> str:
 def _build_instrument_context(instrument_key: str) -> dict[str, Any]:
     """Return the ``instrument`` dict the chart template expects."""
     entry = instrument_registry.get(instrument_key)
+
+    # A chart URL may be opened directly, after a process restart, or on a
+    # different Railway worker than the one that handled search. In those
+    # cases the in-memory search registration is unavailable. Resolve the
+    # exact key from Upstox before rendering so the first HTML response has
+    # the human trading symbol and option metadata.
+    suffix = instrument_key.split("|", 1)[-1].strip()
+    current_symbol = str((entry or {}).get("trading_symbol") or "").strip()
+    needs_lookup = (
+        entry is None
+        or not current_symbol
+        or current_symbol.isdigit()
+        or current_symbol == suffix
+    )
+    if needs_lookup:
+        try:
+            lookup = lookup_instrument(instrument_key)
+            if lookup.get("status") == "success" and isinstance(lookup.get("data"), dict):
+                entry = instrument_registry.get(instrument_key)
+        except Exception:
+            logger.exception(
+                "Chart metadata lookup failed for %s; rendering key fallback",
+                instrument_key,
+            )
     if entry is None:
         return {
             "instrument_key": instrument_key,
