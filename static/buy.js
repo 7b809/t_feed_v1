@@ -38,7 +38,7 @@
     $("quantity").value = defaults.quantity || 65;
     $("tradingDisabledNotice").classList.toggle("d-none", defaults.trading_enabled);
     $("placeBuyBtn").disabled = !defaults.trading_enabled;
-    $("placeBuyBtn").innerHTML = defaults.trading_enabled ? '<i class="bi bi-bag-check me-2"></i>Review and place BUY order' : '<i class="bi bi-shield-lock me-2"></i>Trading disabled';
+    $("placeBuyBtn").innerHTML = defaults.trading_enabled ? '<i class="bi bi-bag-check me-2"></i>Place BUY order' : '<i class="bi bi-shield-lock me-2"></i>Trading disabled';
   });
   $("buyOrderForm").addEventListener("submit", async event => {
     event.preventDefault();
@@ -46,9 +46,6 @@
     if (!defaults.trading_enabled) return showToast("Trading is disabled in the server configuration.", "error");
     const quantity = Number($("quantity").value);
     if (!Number.isInteger(quantity) || quantity < 1) return showToast("Enter a valid whole-number quantity.", "error");
-    const name = selected.trading_symbol || selected.name || selected.instrument_key;
-    const message = "Confirm BUY order\n\nInstrument: " + name + "\nKey: " + selected.instrument_key + "\nQuantity: " + quantity + "\nOrder: MARKET · Intraday · DAY\n\nSubmit to Upstox?";
-    if (!confirm(message)) return;
     $("placeBuyBtn").disabled = true;
     try {
       const response = await apiRequest("/api/v1/orders/place", {
@@ -58,7 +55,7 @@
       showToast("BUY order submitted. Order IDs: " + ((response.order_ids || []).join(", ") || response.order_id || "See dashboard"), "success");
       console.info("Place order response", response);
     } catch (error) { showToast("Order was not submitted: " + error.message, "error"); }
-    finally { $("placeBuyBtn").disabled = false; }
+    finally { $("placeBuyBtn").disabled = !defaults.trading_enabled; }
   });
   apiRequest("/api/v1/config/order-defaults").then(value => {
     defaults = value;
