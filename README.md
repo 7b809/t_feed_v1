@@ -132,25 +132,40 @@ The request is sent to `POST https://api.upstox.com/v3/order/gtt/place` as a `MU
 **Live-trading safety:** GTT placement is disabled unless `UPSTOX_SANDBOX=false` and `TRADING_ENABLED=true`. The GTT endpoint refuses sandbox mode. Use a valid live token and verify all prices, lot size, product and account before enabling. No live GTT has been submitted as part of deploying this code.
 
 
+
 ## External API authentication
 
-External server-to-server trading integrations use a separate API namespace:
-`/api/external/v1`. The existing `/api/v1` routes remain the dashboard routes and do not require browser-exposed shared secrets.
+External server-to-server trading integrations use the separate `/api/external/v1` namespace. Existing dashboard routes under `/api/v1` remain unchanged.
 
-Configure these values in the private server `.env` file:
+Configure one shared secret in the private server `.env` file:
 
-- `EXTERNAL_API_AUTH_ENABLED=true` — enables authentication for every external mutation route.
-- `EXTERNAL_API_SOURCE_TOKEN` — independently generated secret of exactly 32 characters.
-- `EXTERNAL_API_DESTINATION_TOKEN` — independently generated secret of exactly 32 characters.
+```env
+EXTERNAL_API_AUTH_ENABLED=true
+EXTERNAL_API_SOURCE_TOKEN=your_exactly_32_character_secret
+```
 
-When authentication is enabled, external requests must include both headers:
+When enabled, every external mutation request must include the same token in its JSON payload using the `api_token` property. The value must match `EXTERNAL_API_SOURCE_TOKEN` exactly and be 32 characters long. The service compares it using constant-time comparison. Missing or incorrect values return HTTP 401; if the server-side token is not exactly 32 characters, the service fails closed with HTTP 503.
 
-- `X-Source-Token: <source token>`
-- `X-Destination-Token: <destination token>`
+Example order placement payload:
 
-Both values are checked independently using constant-time comparison. Missing or invalid headers return HTTP 401. If authentication is enabled but either server-side token is not exactly 32 characters, the API fails closed with HTTP 503. When `EXTERNAL_API_AUTH_ENABLED=false` (the default), the external endpoints do not require either header.
+```json
+{
+  "api_token": "your_exactly_32_character_secret",
+  "instrument_token": "NSE_FO|12345",
+  "quantity": 65,
+  "transaction_type": "BUY"
+}
+```
 
-Authenticated external mutation endpoints:
+For single-order cancel/exit endpoints, which otherwise have no request body, send a JSON body containing the token:
+
+```json
+{
+  "api_token": "your_exactly_32_character_secret"
+}
+```
+
+External mutation endpoints:
 
 - `POST /api/external/v1/orders/place`
 - `POST /api/external/v1/orders/cancel/bulk`
@@ -160,14 +175,4 @@ Authenticated external mutation endpoints:
 - `POST /api/external/v1/orders/exit-all`
 - `POST /api/external/v1/gtt/place`
 
-Example:
-
-```bash
-curl -X POST "https://your-host/api/external/v1/orders/place" \\
-  -H "Content-Type: application/json" \\
-  -H "X-Source-Token: 32-character-source-secret-here" \\
-  -H "X-Destination-Token: 32-character-destination-secret" \\
-  -d '{"instrument_token":"NSE_FO|12345","quantity":65,"transaction_type":"BUY"}'
-```
-
-Generate two independent random secrets; do not reuse the Upstox access token, commit these secrets, place them in frontend JavaScript, or send them over plain HTTP. Use HTTPS. Authentication is an additional gate and does not override `TRADING_ENABLED`, `UPSTOX_SANDBOX`, model validation, or Upstox account restrictions.
+When `EXTERNAL_API_AUTH_ENABLED=false`, external requests do not require the token. Never commit the real secret, expose it in browser JavaScript, or send it over plain HTTP. Use HTTPS. This authentication gate does not override `TRADING_ENABLED`, `UPSTOX_SANDBOX`, request validation, or broker account restrictions.
