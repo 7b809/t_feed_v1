@@ -112,6 +112,17 @@ def _norm_strike(value: Any) -> str:
     return normalize_strike(value)
 
 
+def _is_placeholder_symbol(value: Any, instrument_key: str) -> bool:
+    """Return True for missing or token-only metadata that richer data can replace."""
+    if value is None:
+        return True
+    text = str(value).strip()
+    if not text or text.isdigit():
+        return True
+    raw_suffix = str(instrument_key or "").split("|", 1)[-1].strip()
+    return bool(raw_suffix) and text == raw_suffix
+
+
 # --------------------------------------------------------------------------- #
 # Canonical path helpers                                                     #
 # --------------------------------------------------------------------------- #
@@ -225,6 +236,10 @@ class InstrumentRegistry:
                 "strike_type": normalize_strike_type(type_raw),
                 "expiry": payload.get("expiry"),
                 "trading_symbol": payload.get("trading_symbol"),
+                "lot_size": payload.get("lot_size"),
+                "tick_size": payload.get("tick_size"),
+                "exchange": payload.get("exchange"),
+                "segment": payload.get("segment"),
                 # Real backup-tree paths — never overwrite these with
                 # the canonical fallback; that would point readers at
                 # an empty file instead of the actual backup data.
@@ -261,6 +276,10 @@ class InstrumentRegistry:
         strike_price: Any | None = None,
         strike_type: str | None = None,
         expiry: Any | None = None,
+        lot_size: Any | None = None,
+        tick_size: Any | None = None,
+        exchange: str | None = None,
+        segment: str | None = None,
     ) -> dict[str, Any]:
         """Register an instrument that is not present in the backup.
 
@@ -294,8 +313,8 @@ class InstrumentRegistry:
         existing = self._by_key.get(key)
         if existing is not None:
             changed = False
-            if underlying is not None and not existing.get("underlying"):
-                existing["underlying"] = normalize_underlying(underlying)
+            if underlying is not None and _is_placeholder_symbol(existing.get("underlying"), key):
+                existing["underlying"] = normalize_underlying(underlying) or str(underlying).strip()
                 changed = True
             if (
                 strike_price is not None
@@ -309,9 +328,18 @@ class InstrumentRegistry:
             if expiry is not None and not existing.get("expiry"):
                 existing["expiry"] = expiry
                 changed = True
-            if trading_symbol and not existing.get("trading_symbol"):
+            if trading_symbol and _is_placeholder_symbol(existing.get("trading_symbol"), key):
                 existing["trading_symbol"] = trading_symbol
                 changed = True
+            for field, value in (
+                ("lot_size", lot_size),
+                ("tick_size", tick_size),
+                ("exchange", exchange),
+                ("segment", segment),
+            ):
+                if value is not None and existing.get(field) in (None, ""):
+                    existing[field] = value
+                    changed = True
 
             # Backfill the path fields. Only when the existing value is
             # empty — do NOT clobber paths that ``load()`` derived from
@@ -333,12 +361,14 @@ class InstrumentRegistry:
 
         # ---- 2. Build a fresh entry ---------------------------------- #
         is_idx = key.startswith(_INDEX_PREFIXES)
-        symbol = trading_symbol or key.split("|", 1)[-1]
+        raw_suffix = key.split("|", 1)[-1]
+        has_alpha = any(ch.isalpha() for ch in raw_suffix)
+        symbol = trading_symbol or (raw_suffix if has_alpha else None)
 
         if underlying:
-            u = normalize_underlying(underlying)
+            u = normalize_underlying(underlying) or str(underlying).strip()
         elif is_idx:
-            u = symbol
+            u = symbol or ""
         else:
             u = symbol.split()[0] if symbol else ""
 
@@ -347,7 +377,7 @@ class InstrumentRegistry:
         inferred_type = normalize_strike_type(strike_type)
         inferred_strike = strike_price
         if not inferred_type or inferred_strike in (None, ""):
-            parts = str(symbol).split()
+            parts = str(symbol or "").split()
             if len(parts) >= 2:
                 if not inferred_strike:
                     try:
@@ -364,6 +394,10 @@ class InstrumentRegistry:
             "strike_type": inferred_type,
             "expiry": expiry,
             "trading_symbol": symbol,
+            "lot_size": lot_size,
+            "tick_size": tick_size,
+            "exchange": exchange,
+            "segment": segment,
             # Both paths always populated so downstream callers can do
             # ``Path(entry["ema_path"]).with_name(...)`` without a
             # ``ValueError: PosixPath('.') has an empty name``.
