@@ -92,10 +92,10 @@ def _build_instrument_context(instrument_key: str) -> dict[str, Any]:
         "expiry": entry.get("expiry"),
         "underlying_symbol": _resolve_underlying_name(entry),
         "underlying": _resolve_underlying_name(entry),
-        "exchange": "NSE",
-        "segment": "NSE_INDEX" if is_index else "NSE_FO",
-        "lot_size": None,
-        "tick_size": None,
+        "exchange": entry.get("exchange") or "NSE",
+        "segment": entry.get("segment") or ("NSE_INDEX" if is_index else "NSE_FO"),
+        "lot_size": entry.get("lot_size"),
+        "tick_size": entry.get("tick_size"),
         "name": entry.get("trading_symbol"),
     }
 
