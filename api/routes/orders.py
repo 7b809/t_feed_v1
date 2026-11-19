@@ -1,17 +1,17 @@
 """HTTP endpoints for order execution, instrument search and order history."""
 from __future__ import annotations
 
-import json
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import upstox_client
 from fastapi import APIRouter, HTTPException, Query
 
 from core.config import (
     DEFAULT_ORDER_QUANTITY,
-    DEFAULT_PRODUCT,
     DEFAULT_ORDER_TYPE,
+    DEFAULT_PRODUCT,
     DEFAULT_VALIDITY,
     ORDERS_DATA_DIR,
     TRADING_ENABLED,
@@ -28,6 +28,8 @@ from services.order_service import (
     OrderService,
     OrderServiceError,
     TradingDisabledError,
+    _exception_text,
+    _parse_api_exception,
 )
 
 logger = get_logger(__file__)
@@ -36,84 +38,127 @@ _service = OrderService()
 _repository = OrderRepository()
 
 
-def _extract_upstox_error(exc: Exception) -> tuple[str | None, str | None]:
-    """Best-effort extraction of (error_code, message) from an Upstox ApiException.
-
-    The SDK stores the raw HTTP body on ``exc.body`` (bytes). We parse it
-    defensively: any failure returns ``(None, None)`` and never masks the
-    original exception. The envelope we look for is::
-
-        {"status":"error","errors":[{"errorCode":"UDAPI100050",
-                                     "message":"Invalid token used to access API"}]}
-    """
-    body = getattr(exc, "body", None)
-    if not body:
-        return None, None
-    try:
-        if isinstance(body, (bytes, bytearray)):
-            body = body.decode("utf-8", errors="replace")
-        payload = json.loads(body)
-    except (ValueError, TypeError):
-        return None, None
-    if not isinstance(payload, dict):
-        return None, None
-    errors = payload.get("errors")
-    if isinstance(errors, list) and errors and isinstance(errors[0], dict):
-        first = errors[0]
-        code = first.get("errorCode") or first.get("error_code")
-        return code, first.get("message")
-    return None, None
+def _infer_action_from_exc(exc: Exception) -> str:
+    """Best-effort action label so simplified error messages match the operation."""
+    msg = str(exc).lower()
+    if "cancel" in msg:
+        return "cancel"
+    if "exit" in msg:
+        return "exit"
+    return "order"
 
 
-def _raise_http(exc: Exception):
+def _build_error_detail(
+    exc: Exception,
+    *,
+    status_code: int,
+    action: str | None = None,
+    override_message: str | None = None,
+) -> dict[str, Any]:
+    """Return a clean, frontend-ready error payload with simplified `error` and `broker_error`."""
+    resolved_action = action or _infer_action_from_exc(exc)
+    broker_error = _parse_api_exception(exc, action=resolved_action)
+    if broker_error.get("http_status") is None:
+        broker_error["http_status"] = status_code
+
+    simplified_error = (
+        override_message
+        or _exception_text(exc, action=resolved_action)
+        or f"{resolved_action.capitalize()} failed."
+    )
+
+    detail: dict[str, Any] = {
+        "status": "error",
+        "error": simplified_error,
+        "message": simplified_error,
+        "broker_error": broker_error,
+    }
+
+    first_err = (
+        broker_error.get("errors")[0]
+        if isinstance(broker_error.get("errors"), list) and broker_error.get("errors")
+        else {}
+    )
+    upstox_code = first_err.get("errorCode") or first_err.get("error_code")
+    upstox_message = first_err.get("message")
+    if upstox_code:
+        detail["upstox_error_code"] = upstox_code
+    if upstox_message:
+        detail["upstox_message"] = upstox_message
+
+    return detail
+
+
+def _raise_http(exc: Exception, *, action: str | None = None):
     """Translate service-layer exceptions into HTTP responses.
 
     Order of checks:
 
     1. ``TradingDisabledError``           -> 403
-    2. ``upstox_client.rest.ApiException`` -> 401 / 429, else fall through
+    2. ``upstox_client.rest.ApiException`` -> upstream status (401/403/429/etc., default 502)
     3. ``OrderServiceError`` / ``ValueError`` / ``KeyError`` -> 400
     4. Anything else                       -> 502 (with traceback in the log)
     """
+    resolved_action = action or _infer_action_from_exc(exc)
+
     if isinstance(exc, TradingDisabledError):
-        raise HTTPException(status_code=403, detail=str(exc))
+        raise HTTPException(
+            status_code=403,
+            detail=_build_error_detail(
+                exc,
+                status_code=403,
+                action=resolved_action,
+                override_message=str(exc)
+                or "Order not placed because trading is disabled.",
+            ),
+        ) from exc
 
     if isinstance(exc, upstox_client.rest.ApiException):
-        status = getattr(exc, "status", None)
-        upstox_code, upstox_message = _extract_upstox_error(exc)
+        raw_status = getattr(exc, "status", None)
+        status_code = (
+            raw_status if isinstance(raw_status, int) and 400 <= raw_status < 600 else 502
+        )
 
-        if status == 401:
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "message": (
-                        "Upstox rejected the access token. Refresh "
-                        "app_tokens/upstox_access_token in MongoDB "
-                        "(access_token field) and retry."
-                    ),
-                    "upstream": "upstox",
-                    "upstream_status": 401,
-                    "upstox_error_code": upstox_code,
-                    "upstox_message": upstox_message,
-                },
-            ) from exc
+        override_msg: str | None = None
+        if status_code == 401:
+            override_msg = (
+                "Upstox rejected the access token. Please refresh the token and retry."
+            )
+        elif status_code == 429:
+            override_msg = "Upstox rate limit reached. Please retry shortly."
 
-        if status == 429:
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "message": "Upstox rate limit reached. Retry shortly.",
-                    "upstream": "upstox",
-                    "upstream_status": 429,
-                    "upstox_error_code": upstox_code,
-                },
-            ) from exc
+        if status_code >= 500:
+            logger.exception("Upstox API returned server error %s", status_code)
+
+        raise HTTPException(
+            status_code=status_code,
+            detail=_build_error_detail(
+                exc,
+                status_code=status_code,
+                action=resolved_action,
+                override_message=override_msg,
+            ),
+        ) from exc
 
     if isinstance(exc, (OrderServiceError, ValueError, KeyError)):
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(
+            status_code=400,
+            detail=_build_error_detail(
+                exc,
+                status_code=400,
+                action=resolved_action,
+            ),
+        ) from exc
 
     logger.exception("Order API operation failed")
-    raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}")
+    raise HTTPException(
+        status_code=502,
+        detail=_build_error_detail(
+            exc,
+            status_code=502,
+            action=resolved_action,
+        ),
+    ) from exc
 
 
 def _normalize_enum(value: str | None) -> str | None:
@@ -251,7 +296,7 @@ def place_order(body: PlaceOrderRequest):
     try:
         return _service.place_order(body)
     except Exception as exc:
-        _raise_http(exc)
+        _raise_http(exc, action="order")
 
 
 @router.get("/orders/today")
@@ -267,7 +312,7 @@ def cancel_orders(body: OrderIdsRequest):
     try:
         return {"results": _service.cancel_orders(body.order_ids)}
     except Exception as exc:
-        _raise_http(exc)
+        _raise_http(exc, action="cancel")
 
 
 @router.post("/orders/exit-by-ids")
@@ -275,7 +320,7 @@ def exit_orders_by_ids(body: OrderIdsRequest):
     try:
         return {"results": _service.exit_orders(body.order_ids)}
     except Exception as exc:
-        _raise_http(exc)
+        _raise_http(exc, action="exit")
 
 
 @router.post("/orders/exit-all")
@@ -283,7 +328,7 @@ def exit_all_positions(body: ExitAllRequest = ExitAllRequest()):
     try:
         return _service.exit_all_positions(tag=body.tag, segment=body.segment)
     except Exception as exc:
-        _raise_http(exc)
+        _raise_http(exc, action="exit")
 
 
 @router.post("/orders/{order_id}/cancel")
@@ -291,7 +336,7 @@ def cancel_single_order(order_id: str):
     try:
         return _service.cancel_order(order_id)
     except Exception as exc:
-        _raise_http(exc)
+        _raise_http(exc, action="cancel")
 
 
 @router.post("/orders/{order_id}/exit")
@@ -299,7 +344,7 @@ def exit_single_order(order_id: str):
     try:
         return _service.exit_order(order_id)
     except Exception as exc:
-        _raise_http(exc)
+        _raise_http(exc, action="exit")
 
 
 @router.get("/orders/{order_id}")

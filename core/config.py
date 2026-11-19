@@ -107,3 +107,5 @@ TOKEN_CHECK_ENABLED = env_bool("TOKEN_CHECK_ENABLED", True)
 TOKEN_CHECK_INTERVAL_MINUTES = max(
     1, int(os.getenv("TOKEN_CHECK_INTERVAL_MINUTES", "30"))
 )
+
+ORDERS_VERBOSE: bool = os.getenv("ORDERS_VERBOSE", "false").lower() in ("1", "true", "yes")
