@@ -1,50 +1,38 @@
-"""Shared-secret authentication for external order integrations."""
+"""Single shared-secret authentication for external order integrations."""
 from __future__ import annotations
 
 import hmac
 
-from fastapi import Header, HTTPException
+from fastapi import HTTPException, Request
 
-from core.config import (
-    EXTERNAL_API_AUTH_ENABLED,
-    EXTERNAL_API_DESTINATION_TOKEN,
-    EXTERNAL_API_SOURCE_TOKEN,
-)
+from core.config import EXTERNAL_API_AUTH_ENABLED, EXTERNAL_API_SOURCE_TOKEN
 
 
-def require_external_api_auth(
-    source_token: str | None = Header(default=None, alias="X-Source-Token"),
-    destination_token: str | None = Header(default=None, alias="X-Destination-Token"),
-) -> None:
-    """Require independently configured 32-character source and destination tokens.
-
-    This dependency is attached only to /api/external/v1 mutation routes. The
-    dashboard's same-origin /api/v1 routes intentionally do not use browser-held
-    secrets.
-    """
+async def require_external_api_auth(request: Request) -> None:
+    """Match payload.api_token against the single server-side source token."""
     if not EXTERNAL_API_AUTH_ENABLED:
         return
 
-    configured = (EXTERNAL_API_SOURCE_TOKEN, EXTERNAL_API_DESTINATION_TOKEN)
-    if any(len(value) != 32 for value in configured):
+    expected = EXTERNAL_API_SOURCE_TOKEN
+    if len(expected) != 32:
         raise HTTPException(
             status_code=503,
-            detail="External API authentication is enabled but its server tokens are not configured correctly.",
+            detail="External API authentication is enabled but EXTERNAL_API_SOURCE_TOKEN is not configured as a 32-character token.",
         )
 
-    if not source_token or not destination_token:
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = None
+
+    supplied = payload.get("api_token") if isinstance(payload, dict) else None
+    if not isinstance(supplied, str) or len(supplied) != 32:
         raise HTTPException(
             status_code=401,
-            detail="Both X-Source-Token and X-Destination-Token headers are required.",
+            detail="A valid 32-character api_token is required in the JSON request payload.",
         )
 
-    if len(source_token) != 32 or len(destination_token) != 32:
-        raise HTTPException(status_code=401, detail="Invalid external API credentials.")
-
-    source_ok = hmac.compare_digest(source_token.encode('utf-8'), EXTERNAL_API_SOURCE_TOKEN.encode('utf-8'))
-    destination_ok = hmac.compare_digest(
-        destination_token.encode('utf-8'),
-        EXTERNAL_API_DESTINATION_TOKEN.encode('utf-8'),
-    )
-    if not (source_ok and destination_ok):
-        raise HTTPException(status_code=401, detail="Invalid external API credentials.")
+    if not hmac.compare_digest(
+        supplied.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(status_code=401, detail="Invalid external API token.")
