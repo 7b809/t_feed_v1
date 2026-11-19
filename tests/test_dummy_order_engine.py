@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
+from app.services import dummy_order_engine as engine_module
 from app.services.dummy_order_engine import DummyOrderEngine
 from app.services.dummy_order_store import DummyOrderStore
 
@@ -24,7 +26,15 @@ class FakeTelegram:
 
 
 def build(tmp_path, **overrides):
+    # Existing strategy tests replay a fixed historical trading session.
+    # Explicitly simulate its clock and WebSocket provenance; strict freshness
+    # defaults are covered in the dedicated gate tests below.
+    fixed_now = datetime(2026, 11, 12, 10, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
+    engine_module._now = lambda: fixed_now
     values = dict(
+        gtt_max_signal_age_seconds=7200,
+        gtt_max_quote_age_seconds=7200,
+        gtt_live_frame_max_age_seconds=5,
         dummy_orders_enabled=True,
         dummy_supertrend_orders_enabled=True, dummy_order_quantity=1,
         dummy_order_state_dir=str(tmp_path), dummy_order_stop_loss_percent=30,
@@ -35,7 +45,18 @@ def build(tmp_path, **overrides):
     values.update(overrides)
     config = SimpleNamespace(**values)
     store, telegram = DummyOrderStore(config), FakeTelegram()
-    return DummyOrderEngine(config, store, FakeFeed(), telegram), store
+    engine = DummyOrderEngine(config, store, FakeFeed(), telegram)
+    original_handler = engine.on_supertrend_frame
+
+    async def live_test_frame(payload, instrument_key, leg_role, isolation_id):
+        await original_handler(
+            payload, instrument_key, leg_role, isolation_id,
+            event_origin="live_websocket",
+            live_event_received_at=fixed_now.isoformat(),
+        )
+
+    engine.on_supertrend_frame = live_test_frame
+    return engine, store
 
 
 def isolation_payload():
@@ -411,3 +432,68 @@ def test_signal_before_0915_is_ignored(tmp_path):
         assert store.load(isolation_id)["orders"]["supertrend"] is None
     asyncio.run(run())
 
+
+
+def test_live_execution_gate_rejects_stale_confirmation_and_quote(tmp_path):
+    fixed_now = datetime(2026, 11, 19, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    engine_module._now = lambda: fixed_now
+
+    class Feed:
+        def __init__(self, received_at):
+            self.received_at = received_at
+
+        def latest(self, key):
+            return {"received_at": self.received_at, "data": {"ltpc": {"ltp": 123.45}}}
+
+    config = SimpleNamespace(
+        dummy_order_stop_loss_percent=30, dummy_target_upper_threshold=200,
+        dummy_target_lower_threshold=100, dummy_target_points_above_upper=60,
+        dummy_target_points_middle=50, dummy_target_points_below_lower=40,
+        gtt_max_signal_age_seconds=60, gtt_max_quote_age_seconds=10,
+        gtt_live_frame_max_age_seconds=5,
+    )
+    engine = DummyOrderEngine(config, DummyOrderStore(config), Feed(fixed_now.isoformat()))
+    state = {"trade_date_ist": fixed_now.date().isoformat()}
+    payload = {"event": "supertrend_signal"}
+    signal = {"dt": fixed_now - timedelta(seconds=15), "time": "fresh"}
+    accepted = engine._live_execution_eligibility(
+        payload, signal, "NSE_FO|TEST", state, "live_websocket", fixed_now.isoformat()
+    )
+    assert accepted["eligible"] is True
+    assert accepted["stop_loss_price"] < accepted["entry"] < accepted["target_price"]
+
+    stale_signal = dict(signal, dt=fixed_now - timedelta(seconds=61))
+    rejected_signal = engine._live_execution_eligibility(
+        payload, stale_signal, "NSE_FO|TEST", state, "live_websocket", fixed_now.isoformat()
+    )
+    assert rejected_signal["reason"] == "CONFIRMATION_TIME_STALE_OR_FUTURE"
+
+    engine._live_feed = Feed((fixed_now - timedelta(seconds=11)).isoformat())
+    rejected_quote = engine._live_execution_eligibility(
+        payload, signal, "NSE_FO|TEST", state, "live_websocket", fixed_now.isoformat()
+    )
+    assert rejected_quote["reason"] == "LIVE_QUOTE_STALE"
+
+
+def test_live_execution_gate_rejects_missing_websocket_provenance(tmp_path):
+    fixed_now = datetime(2026, 11, 19, 10, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+    engine_module._now = lambda: fixed_now
+
+    class Feed:
+        def latest(self, key):
+            return {"received_at": fixed_now.isoformat(), "data": {"ltpc": {"ltp": 123.45}}}
+
+    config = SimpleNamespace(
+        dummy_order_stop_loss_percent=30, dummy_target_upper_threshold=200,
+        dummy_target_lower_threshold=100, dummy_target_points_above_upper=60,
+        dummy_target_points_middle=50, dummy_target_points_below_lower=40,
+        gtt_max_signal_age_seconds=60, gtt_max_quote_age_seconds=10,
+        gtt_live_frame_max_age_seconds=5,
+    )
+    engine = DummyOrderEngine(config, DummyOrderStore(config), Feed())
+    signal = {"dt": fixed_now - timedelta(seconds=5), "time": "fresh"}
+    result = engine._live_execution_eligibility(
+        {"event": "supertrend_signal"}, signal, "NSE_FO|TEST",
+        {"trade_date_ist": fixed_now.date().isoformat()}, None, fixed_now.isoformat()
+    )
+    assert result["reason"] == "MISSING_LIVE_WEBSOCKET_PROVENANCE"

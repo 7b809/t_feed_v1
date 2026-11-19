@@ -98,10 +98,13 @@ class Settings:
 
     # Optional server-to-server live GTT placement. Disabled by default.
     gtt_orders_enabled: bool = False
-    gtt_api_url: str = "https://sandbox.novag7.in/api/v1/gtt/place"
+    gtt_api_url: str = "https://sandbox.novag7.in/api/external/v1/gtt/place"
     gtt_api_token: str = ""
     gtt_product: str = "I"
     gtt_request_timeout_seconds: int = 12
+    gtt_max_signal_age_seconds: int = 60
+    gtt_max_quote_age_seconds: int = 10
+    gtt_live_frame_max_age_seconds: int = 5
 
     def __post_init__(self) -> None:
         if not 1 <= self.live_feed_port <= 65535:
@@ -149,6 +152,12 @@ class Settings:
                 raise ValueError("GTT_PRODUCT must be I, D or MTF")
         if self.gtt_request_timeout_seconds < 3:
             raise ValueError("GTT_REQUEST_TIMEOUT_SECONDS must be >= 3")
+        if self.gtt_max_signal_age_seconds < 1:
+            raise ValueError("GTT_MAX_SIGNAL_AGE_SECONDS must be >= 1")
+        if self.gtt_max_quote_age_seconds < 1:
+            raise ValueError("GTT_MAX_QUOTE_AGE_SECONDS must be >= 1")
+        if self.gtt_live_frame_max_age_seconds < 1:
+            raise ValueError("GTT_LIVE_FRAME_MAX_AGE_SECONDS must be >= 1")
 
 
     @property
@@ -237,8 +246,11 @@ def load_settings() -> Settings:
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         logs_dir=os.getenv("LOGS_DIR", "./logs"),
         gtt_orders_enabled=_env_bool("GTT_ORDERS_ENABLED", False),
-        gtt_api_url=os.getenv("GTT_API_URL", "https://sandbox.novag7.in/api/v1/gtt/place").strip(),
+        gtt_api_url=os.getenv("GTT_API_URL", "https://sandbox.novag7.in/api/external/v1/gtt/place").strip(),
         gtt_api_token=os.getenv("GTT_API_TOKEN", "").strip(),
         gtt_product=os.getenv("GTT_PRODUCT", "I").strip().upper(),
         gtt_request_timeout_seconds=_env_int("GTT_REQUEST_TIMEOUT_SECONDS", 12),
+        gtt_max_signal_age_seconds=_env_int("GTT_MAX_SIGNAL_AGE_SECONDS", 60),
+        gtt_max_quote_age_seconds=_env_int("GTT_MAX_QUOTE_AGE_SECONDS", 10),
+        gtt_live_frame_max_age_seconds=_env_int("GTT_LIVE_FRAME_MAX_AGE_SECONDS", 5),
     )

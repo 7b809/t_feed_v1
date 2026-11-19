@@ -235,6 +235,57 @@ class DummyOrderEngine:
             return float(getattr(self._config, "dummy_target_points_middle", 30))
         return float(getattr(self._config, "dummy_target_points_below_lower", 15))
 
+    def _live_execution_eligibility(
+        self, payload: dict, signal: dict, target_key: str, state: dict,
+        event_origin: str | None, live_event_received_at: str | None,
+    ) -> dict:
+        """Fail-closed gate shared by live dummy-entry creation and GTT submission."""
+        now = _now()
+        if payload.get("event") != "supertrend_signal":
+            return {"eligible": False, "reason": "NOT_A_LIVE_SIGNAL_EVENT"}
+        if event_origin != "live_websocket" or not live_event_received_at:
+            return {"eligible": False, "reason": "MISSING_LIVE_WEBSOCKET_PROVENANCE"}
+        frame_time = _dt(live_event_received_at)
+        if frame_time is None:
+            return {"eligible": False, "reason": "INVALID_LIVE_FRAME_RECEIVE_TIME"}
+        frame_age = (now - frame_time).total_seconds()
+        if frame_age < -2 or frame_age > int(getattr(self._config, "gtt_live_frame_max_age_seconds", 5)):
+            return {"eligible": False, "reason": "LIVE_FRAME_RECEIVE_TIME_STALE"}
+        signal_time = signal.get("dt")
+        if not isinstance(signal_time, datetime) or signal_time.date() != now.date():
+            return {"eligible": False, "reason": "CONFIRMATION_NOT_FROM_TODAY"}
+        signal_age = (now - signal_time).total_seconds()
+        if signal_age < -2 or signal_age > int(getattr(self._config, "gtt_max_signal_age_seconds", 60)):
+            return {"eligible": False, "reason": "CONFIRMATION_TIME_STALE_OR_FUTURE"}
+        trade_date = str(state.get("trade_date_ist") or "").strip()[:10]
+        if trade_date and trade_date != now.date().isoformat():
+            return {"eligible": False, "reason": "ISOLATION_NOT_FROM_CURRENT_TRADING_DATE"}
+        quote = self._live_feed.latest(target_key)
+        quote_time = _dt((quote or {}).get("received_at"))
+        if quote_time is None or quote_time.date() != now.date():
+            return {"eligible": False, "reason": "NO_CURRENT_SESSION_LIVE_QUOTE"}
+        quote_age = (now - quote_time).total_seconds()
+        if quote_age < -2 or quote_age > int(getattr(self._config, "gtt_max_quote_age_seconds", 10)):
+            return {"eligible": False, "reason": "LIVE_QUOTE_STALE"}
+        entry = _market_ltp((quote or {}).get("data") or {})
+        if entry is None or entry <= 0:
+            return {"eligible": False, "reason": "LIVE_QUOTE_HAS_NO_VALID_LTP"}
+        stop_loss_percent = float(getattr(self._config, "dummy_order_stop_loss_percent", 30))
+        target_points = self._target_points(entry)
+        stop_loss = round(entry * (1 - stop_loss_percent / 100), 2)
+        target_price = round(entry + target_points, 2)
+        if not (0 < stop_loss < entry < target_price):
+            return {"eligible": False, "reason": "INVALID_LIVE_ENTRY_OR_RISK_LEVELS"}
+        return {
+            "eligible": True, "reason": None, "entry": entry,
+            "quote_received_at": quote_time.isoformat(),
+            "quote_age_seconds": round(quote_age, 3),
+            "signal_age_seconds": round(signal_age, 3),
+            "frame_received_at": frame_time.isoformat(),
+            "stop_loss_price": stop_loss, "target_points": target_points,
+            "target_price": target_price,
+        }
+
     async def _persist_mongo_isolation(self, date_key: str, isolation_id: str,
                                        isolated_instrument: dict) -> None:
         if self._mongo_store is None:
@@ -357,25 +408,35 @@ class DummyOrderEngine:
             state["status"], state["updated_at"] = "CLOSED", _now().isoformat()
             await asyncio.to_thread(self._store.save, isolation_id, state)
 
-    async def on_supertrend_frame(self, payload: dict, instrument_key: str,
-                                  leg_role: str, isolation_id: str) -> None:
+    async def on_supertrend_frame(
+        self, payload: dict, instrument_key: str, leg_role: str, isolation_id: str,
+        *, event_origin: str | None = None,
+        live_event_received_at: str | None = None,
+    ) -> None:
         if not self._indicator_enabled() or payload.get("event") not in {"snapshot", "supertrend_signal"}:
             return
         if leg_role != "isolated":
             return
         try:
-            if payload.get("event") == "snapshot" and self._is_mid_session_startup():
-                await self._recover_supertrend_history(isolation_id, payload)
-                recovered = await asyncio.to_thread(self._store.load, isolation_id)
-                recovery_status = (recovered or {}).get("supertrend_startup_recovery", {}).get("status")
-                if recovery_status in {"COMPLETED", "SKIPPED_EXISTING_ORDER"}:
-                    return
-            await self._process(payload, instrument_key, leg_role, isolation_id)
+            # Snapshots are history/recovery inputs only and can never fall
+            # through into live order creation, whatever the recovery status.
+            if payload.get("event") == "snapshot":
+                if self._is_mid_session_startup():
+                    await self._recover_supertrend_history(isolation_id, payload)
+                return
+            await self._process(
+                payload, instrument_key, leg_role, isolation_id,
+                event_origin=event_origin,
+                live_event_received_at=live_event_received_at,
+            )
         except Exception:
             logger.exception("Dummy Supertrend entry failed for %s", isolation_id)
 
-    async def _process(self, payload: dict, source_key: str,
-                       source_role: str, isolation_id: str) -> None:
+    async def _process(
+        self, payload: dict, source_key: str, source_role: str, isolation_id: str,
+        *, event_origin: str | None = None,
+        live_event_received_at: str | None = None,
+    ) -> None:
         indicator = "supertrend"
         async with self._lock(isolation_id):
             state = await asyncio.to_thread(self._store.load, isolation_id)
@@ -440,6 +501,15 @@ class DummyOrderEngine:
             target_key = meta["legs"].get(role)
             if not target_key:
                 logger.warning("Dummy order target role %s missing for %s", role, isolation_id)
+                return
+            eligibility = self._live_execution_eligibility(
+                payload, signal, target_key, state, event_origin, live_event_received_at
+            )
+            if not eligibility.get("eligible"):
+                logger.info(
+                    "Supertrend live execution rejected iso=%s reason=%s signal_time=%s",
+                    isolation_id, eligibility.get("reason"), signal.get("time"),
+                )
                 return
             # Enforce the entry cap before reversal logic. A rejected later
             # signal must never close or modify the existing target/SL-managed order.
@@ -526,24 +596,14 @@ class DummyOrderEngine:
                             isolation_id, order_count, MAX_SUPERTREND_ORDERS_PER_ISOLATION)
                 return
 
-            quote = await asyncio.to_thread(self._live_feed.latest, target_key)
-            quote_received_at = (quote or {}).get("received_at")
-            quote_time = _dt(quote_received_at)
-            trade_date = state.get("trade_date_ist") or isolation_id.split("__", 1)[0]
-            # latest.json survives restarts; never use a previous-session
-            # quote as today's simulated entry reference.
-            quote_is_today = bool(
-                quote_time and quote_time.strftime("%Y-%m-%d") == trade_date
-            )
-            entry = _price((quote or {}).get("data") or {}) if quote_is_today else None
-            if entry is None and target_key == source_key:
-                fallback = trigger.get("signal_price", payload.get("current_price"))
-                if isinstance(fallback, (int, float)) and fallback > 0:
-                    entry = float(fallback)
+            # Entry comes only from a fresh current-session live-feed LTP.
+            # Signal payload prices and persisted stale quotes are never fallbacks.
+            entry = eligibility["entry"]
+            quote_received_at = eligibility["quote_received_at"]
             now_ist = _now()
             target_meta = (meta.get("instrument_meta") or {}).get(role) or {}
             stop_loss_percent = float(getattr(self._config, "dummy_order_stop_loss_percent", 30))
-            target_points = self._target_points(entry) if entry is not None else None
+            target_points = eligibility["target_points"]
             order = {
                 "order_id": f"DUMMY-{indicator.upper()}-{isolation_id}-{signal['dt'].strftime('%H%M%S')}",
                 "mode": "DUMMY_ONLY", "indicator": indicator.upper(), "side": "BUY",
@@ -575,26 +635,31 @@ class DummyOrderEngine:
                 "exit_reason": None,
                 "exit_price": None,
                 "stop_loss_percent": stop_loss_percent,
-                "stop_loss_price": round(entry * (1 - stop_loss_percent / 100), 2) if entry is not None else None,
+                "stop_loss_price": eligibility["stop_loss_price"],
                 "target_points": target_points,
-                "target_price": round(entry + target_points, 2) if entry is not None and target_points is not None else None,
+                "target_price": eligibility["target_price"],
                 "target_rule": (
                     "entry > upper threshold" if entry is not None and entry > float(getattr(self._config, "dummy_target_upper_threshold", 200))
                     else "lower threshold <= entry <= upper threshold" if entry is not None and entry >= float(getattr(self._config, "dummy_target_lower_threshold", 100))
                     else "entry < lower threshold" if entry is not None else None
                 ),
-                "price_source": ("latest_local_market_feed" if quote and entry is not None else
-                                 "indicator_payload_fallback" if entry is not None else None),
-                "quote_received_at": quote_received_at if quote_is_today else None,
-                "quote_age_seconds": round((_now() - quote_time).total_seconds(), 3) if quote_is_today else None,
+                "price_source": "fresh_live_market_feed",
+                "quote_received_at": quote_received_at,
+                "quote_age_seconds": eligibility["quote_age_seconds"],
+                "live_execution_gate": {
+                    "event_origin": event_origin,
+                    "frame_received_at": eligibility["frame_received_at"],
+                    "signal_age_seconds": eligibility["signal_age_seconds"],
+                    "quote_age_seconds": eligibility["quote_age_seconds"],
+                },
                 "trigger": trigger, "placed_at": now_ist.isoformat(),
-                "order_sequence": order_count + 1 if entry is not None else None,
+                "order_sequence": order_count + 1,
                 "max_orders_per_isolation": order_limit,
-                "status": "DUMMY_PLACED" if entry is not None else "DUMMY_SIGNAL_RECORDED_NO_QUOTE",
+                "status": "DUMMY_PLACED",
                 "broker_order_id": None, "real_order_submitted": False,
             }
             state.setdefault("orders", {})[indicator] = order
-            state["supertrend_order_count"] = order_count + (1 if entry is not None else 0)
+            state["supertrend_order_count"] = order_count + 1
             state["supertrend_order_limit"] = order_limit
             state["supertrend_entry_window_mode"] = entry_window_mode
             state["updated_at"] = now_ist.isoformat()
@@ -606,17 +671,75 @@ class DummyOrderEngine:
             self._index_open_orders(isolation_id, state)
             logger.info("Dummy %s entry saved iso=%s target=%s trigger=%s",
                         indicator, isolation_id, target_key, trigger.get("confirmed_time"))
-            # Optional live GTT side-effect. Historical startup recovery does not
-            # pass through this hook, so it can never submit orders for past signals.
-            if self._config.gtt_orders_enabled:
-                if entry is None or order.get("target_price") is None or order.get("stop_loss_price") is None:
+            # Re-run the same fail-closed gate immediately before the broker
+            # side-effect. The live entry must still match the quote used for levels.
+            if getattr(self._config, "gtt_orders_enabled", False):
+                gtt_gate = self._live_execution_eligibility(
+                    payload, signal, target_key, state, event_origin, live_event_received_at
+                )
+                gate_reason = None
+                if not gtt_gate.get("eligible"):
+                    gate_reason = gtt_gate.get("reason") or "LIVE_GATE_RECHECK_FAILED"
+                elif abs(float(gtt_gate["entry"]) - float(order["entry_price"])) > 0.000001:
+                    gate_reason = "LIVE_ENTRY_CHANGED_BEFORE_GTT_SUBMISSION"
+                if gate_reason:
                     order["gtt_submission"] = {
-                        "status": "SKIPPED_NO_ENTRY_OR_LEVELS",
-                        "reason": "A priced dummy entry with calculated target and stop-loss is required.",
+                        "status": "SKIPPED_LIVE_GATE_FAILED",
+                        "reason": gate_reason,
                         "updated_at": _now().isoformat(),
+                        "entry_sent": False,
                     }
                 else:
                     requested_at = _now().isoformat()
+                    order["gtt_submission"] = {
+                        "status": "SUBMITTING",
+                        "requested_at": requested_at,
+                        "endpoint": self._config.gtt_api_url,
+                        "entry_sent": False,
+                        "live_gate_rechecked": True,
+                    }
+                    await asyncio.to_thread(self._store.save, isolation_id, state)
+                    await self._persist_mongo_order_update(
+                        meta.get("date_key") or self._date_key(state, isolation_id),
+                        isolation_id, indicator, order,
+                        meta.get("instrument_context") or {}, completed=False,
+                    )
+                    try:
+                        gtt_result = await asyncio.to_thread(submit_gtt_order, self._config, order)
+                    except GTTOrderSubmissionError as exc:
+                        order["gtt_submission"] = {
+                            "status": "UNKNOWN" if exc.outcome_unknown else "FAILED",
+                            "requested_at": requested_at,
+                            "updated_at": _now().isoformat(),
+                            "http_status": exc.http_status,
+                            "error": str(exc),
+                            "entry_sent": False,
+                        }
+                        logger.error(
+                            "Live GTT submission %s for iso=%s instrument=%s: %s",
+                            order["gtt_submission"]["status"], isolation_id, target_key, str(exc),
+                        )
+                    except Exception:
+                        order["gtt_submission"] = {
+                            "status": "UNKNOWN",
+                            "requested_at": requested_at,
+                            "updated_at": _now().isoformat(),
+                            "error": "Unexpected client failure; inspect the receiving service before retrying.",
+                            "entry_sent": False,
+                        }
+                        logger.exception(
+                            "Unexpected live GTT submission failure iso=%s instrument=%s",
+                            isolation_id, target_key,
+                        )
+                    else:
+                        order["gtt_submission"] = gtt_result
+                state["updated_at"] = _now().isoformat()
+                await asyncio.to_thread(self._store.save, isolation_id, state)
+                await self._persist_mongo_order_update(
+                    meta.get("date_key") or self._date_key(state, isolation_id),
+                    isolation_id, indicator, order,
+                    meta.get("instrument_context") or {}, completed=False,
+                )
                     order["gtt_submission"] = {
                         "status": "SUBMITTING",
                         "requested_at": requested_at,

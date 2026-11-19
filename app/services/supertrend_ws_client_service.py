@@ -204,7 +204,11 @@ class SupertrendWsClientService:
             await asyncio.to_thread(self._state_store.save_signal, payload,
                                     self._instrument_key, self._leg_role, self._isolation_id)
             if self._order_engine is not None:
-                await self._order_engine.on_supertrend_frame(payload, self._instrument_key, self._leg_role, self._isolation_id)
+                await self._order_engine.on_supertrend_frame(
+                    payload, self._instrument_key, self._leg_role, self._isolation_id,
+                    event_origin="live_websocket",
+                    live_event_received_at=_now_ist_iso(),
+                )
             logger.info("Supertrend confirmed signal leg=%s key=%s signal=%s time=%s price=%s",
                         self._leg_role, self._instrument_key, payload.get("signal"),
                         payload.get("confirmed_time"), payload.get("price"))

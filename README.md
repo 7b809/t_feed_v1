@@ -616,21 +616,29 @@ signal is before 09:40, or one entry when it is at/after 09:40. The
 selected mode and count survive restarts; overwrite=true resets that
 isolation's dummy-order state.
 
-The engine captures the latest locally persisted target-leg market quote
-when available. The quote receive timestamp is stored separately; it is
-not represented as an exact historical fill at the signal candle time.
-If no quote exists, the signal is recorded with a null entry price.
+New Supertrend dummy entries are created only from a confirmed signal received
+through the active Supertrend WebSocket. Snapshot, startup-recovery and
+backfill signals are history-only and cannot create live entries. Confirmation
+time must be from the current IST date and within the configured age limit;
+the WebSocket frame itself must also have a fresh receive timestamp. A fresh
+same-session local market-feed LTP is mandatory. Signal payload prices and
+persisted stale quotes are never used as entry fallbacks.
 
 By default, the engine remains simulation-only. An optional server-to-server
 GTT integration can be enabled with GTT_ORDERS_ENABLED=true. For each newly
-created, priced live Supertrend dummy entry, OrderFlow submits the calculated
-target and stop-loss to the configured GTT endpoint. The entry property is
-intentionally omitted so the receiving service uses its own live LTP. The
+created live Supertrend dummy entry, OrderFlow rechecks the live-event gate
+immediately before submitting the calculated target and stop-loss to the
+authenticated external GTT endpoint. The entry property is intentionally
+omitted so the receiving service uses its own live LTP. The
 request uses the dummy order lot count, verified instrument lot-size metadata
 when available, trading symbol and configured product.
 
-This hook runs only for new live signal entries. Startup historical recovery
-never submits GTT orders. Submission state, GTT IDs, HTTP status and errors
+The shared fail-closed gate requires a live WebSocket signal event, a current
+confirmation timestamp, a fresh WebSocket receive timestamp, a fresh current-
+session quote, and valid calculated entry/stop-loss/target levels. The gate is
+checked before dummy-order creation and again before GTT submission. Snapshot,
+startup historical recovery and backfill processing never submit GTT orders
+or create live dummy entries. Submission state, GTT IDs, HTTP status and errors
 are saved inside the dummy order in local and MongoDB persistence. An
 ambiguous network failure is marked UNKNOWN and is not automatically retried
 because the remote service may already have accepted the request. Existing
@@ -642,6 +650,10 @@ Configuration:
 DUMMY_ORDERS_ENABLED=true
 DUMMY_ORDER_QUANTITY=1
 DUMMY_ORDER_STATE_DIR=./data/dummy_orders
+GTT_API_URL=https://sandbox.novag7.in/api/external/v1/gtt/place
+GTT_MAX_SIGNAL_AGE_SECONDS=60
+GTT_MAX_QUOTE_AGE_SECONDS=10
+GTT_LIVE_FRAME_MAX_AGE_SECONDS=5
 ```
 ## Dummy order history dashboard and API
 
@@ -694,7 +706,7 @@ Configure these values in the private OrderFlow server .env file:
 
 ```env
 GTT_ORDERS_ENABLED=false
-GTT_API_URL=https://sandbox.novag7.in/api/v1/gtt/place
+GTT_API_URL=https://sandbox.novag7.in/api/external/v1/gtt/place
 GTT_API_TOKEN=
 GTT_PRODUCT=I
 GTT_REQUEST_TIMEOUT_SECONDS=12
