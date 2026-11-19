@@ -760,6 +760,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 </style>
 {% endblock %}
 {% block content %}
+{% set _sym = (instrument.get('trading_symbol') or '') | string | trim %}
+{% set _sym_ok = _sym and not _sym.isdigit() %}
+{% set display_symbol = _sym if _sym_ok else (instrument_name or instrument_key) %}
 
 <div class="sub-header px-3 d-flex align-items-center gap-2">
   <div class="global-search">
@@ -773,7 +776,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   <div class="ms-auto d-flex align-items-center gap-3 flex-shrink-0">
     <div class="symbol-price-block">
       <div class="symbol-block">
-        <div class="symbol-name" id="topSymbolName">{{ instrument.get('trading_symbol') or instrument_name or instrument_key }}</div>
+        <div class="symbol-name" id="topSymbolName">{{ display_symbol }}</div>
         <div class="symbol-key" id="topSymbolKey">{{ instrument_key }}</div>
       </div>
       <div class="price-block">
@@ -1073,7 +1076,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     <div class="instrument-info-header" id="instrumentInfoHeader">
       <div class="instrument-info-title">
         <i class="bi bi-info-circle text-primary"></i>
-        <span class="symbol">{{ instrument.get('trading_symbol') or instrument_name or instrument_key }}</span>
+        <span class="symbol">{{ display_symbol }}</span>
         {% if _type in ['CE', 'CALL', 'C'] %}
           <span class="type-pill ce">CE</span>
         {% elif _type in ['PE', 'PUT', 'P'] %}
@@ -1092,7 +1095,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </div>
 
     <div class="instrument-info-body">
-      <div class="info-tile"><span class="info-label">Symbol</span><span class="info-value">{{ instrument.get('trading_symbol') or instrument_name or '—' }}</span></div>
+      <div class="info-tile"><span class="info-label">Symbol</span><span class="info-value">{{ display_symbol }}</span></div>
       <div class="info-tile"><span class="info-label">Strike</span><span class="info-value accent-blue">{% if instrument.get('strike_price') is not none %}{{ instrument.get('strike_price') }}{% else %}—{% endif %}</span></div>
       <div class="info-tile"><span class="info-label">Option Type</span><span class="info-value {% if _type in ['CE','CALL','C'] %}accent-green{% elif _type in ['PE','PUT','P'] %}accent-red{% endif %}">{{ _type or '—' }}</span></div>
       <div class="info-tile"><span class="info-label">Expiry</span><span class="info-value accent-yellow">{{ instrument.get('expiry') or '—' }}</span></div>
