@@ -362,7 +362,37 @@ def search_instruments(
     if atm_offset is not None:
         params["atm_offset"] = atm_offset
 
-    return _upstox_get("/v2/instruments/search", params=params)
+    payload = _upstox_get("/v2/instruments/search", params=params)
+
+    # Preserve the complete search metadata in the in-memory registry before
+    # the browser navigates to /chart/<instrument_key>. The response payload
+    # itself is intentionally returned unchanged.
+    for item in payload.get("data", []) if isinstance(payload, dict) else []:
+        if not isinstance(item, dict):
+            continue
+        instrument_key = str(item.get("instrument_key") or "").strip()
+        if not instrument_key:
+            continue
+        try:
+            instrument_registry.register_adhoc(
+                instrument_key,
+                trading_symbol=item.get("trading_symbol"),
+                underlying=item.get("underlying_symbol") or item.get("name"),
+                strike_price=item.get("strike_price"),
+                strike_type=item.get("instrument_type"),
+                expiry=item.get("expiry"),
+                lot_size=item.get("lot_size"),
+                tick_size=item.get("tick_size"),
+                exchange=item.get("exchange"),
+                segment=item.get("segment") or item.get("instrument_type"),
+            )
+        except Exception:
+            logger.exception(
+                "Unable to register Upstox search metadata for %s",
+                instrument_key,
+            )
+
+    return payload
 
 
 @router.get("/instrument")
