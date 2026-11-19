@@ -101,3 +101,32 @@ The dashboard asks for confirmation before submitting exit or cancel requests. A
 ## Persistence and audit
 
 Each trading date has one MongoDB document in `UPSTOX_APP_V2.sandbox_orders` with `_id` and `date` set to YYYY-MM-DD, an `orders` array, `created_time`, and `last_modified_time`. The same daily document is mirrored to `data/orders/YYYY-MM-DD.json`. The existing service records order requests, broker responses, exits, cancellations and exceptions.
+
+
+## GTT orders (Upstox v3)
+
+The **/gtt** page provides a BUY-entry, multi-leg GTT ticket. It searches the same Upstox instrument catalogue as the BUY ticket and uses the selected instrument's returned `lot_size` metadata to convert lots to units.
+
+API:
+- `GET /api/v1/gtt/config` — GTT capability and default lot-size map.
+- `POST /api/v1/gtt/place` — place a multi-leg GTT.
+- `GET /gtt` — responsive GTT ticket.
+
+Example request:
+```json
+{
+  "instrument_key": "NSE_FO|<instrument-id>",
+  "entry": null,
+  "target": 150,
+  "stoploss": 130,
+  "lot": 1,
+  "lot_size": 65,
+  "product": "I"
+}
+```
+
+A blank/null entry fetches the current LTP from Upstox and uses an ENTRY rule with `trigger_type: IMMEDIATE` at that price. A specified entry uses `ABOVE` when above LTP and `BELOW` when below LTP. The BUY-side validation requires `stoploss < entry < target`. Quantity sent to Upstox is `lot × lot_size`; Upstox expects quantity in units, not number of lots. The instrument-search result's lot-size metadata is preferred; the service's static symbol map is only a fallback and may need updating when exchange lot sizes change.
+
+The request is sent to `POST https://api.upstox.com/v3/order/gtt/place` as a `MULTIPLE` GTT with ENTRY, TARGET and STOPLOSS rules. Per Upstox documentation, TARGET and STOPLOSS are exit-side SELL legs for a BUY entry, and SELL GTT legs require EDIS authorization. Complete EDIS authorization on an Upstox platform before placing these GTT orders. GTT legs execute as LIMIT orders when triggered; a GTT can remain active up to one year, subject to Upstox's rules.
+
+**Live-trading safety:** GTT placement is disabled unless `UPSTOX_SANDBOX=false` and `TRADING_ENABLED=true`. The GTT endpoint refuses sandbox mode. Use a valid live token and verify all prices, lot size, product and account before enabling. No live GTT has been submitted as part of deploying this code.
