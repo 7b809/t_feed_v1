@@ -32,6 +32,7 @@ def place_gtt(request: PlaceGTTRequest):
             stoploss=request.stoploss,
             lot=request.lot,
             lot_size=request.lot_size,
+            trading_symbol=request.trading_symbol,
             product=request.product,
             transaction_type=request.transaction_type,
         )
