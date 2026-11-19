@@ -130,3 +130,44 @@ A blank/null entry fetches the current LTP from Upstox and uses an ENTRY rule wi
 The request is sent to `POST https://api.upstox.com/v3/order/gtt/place` as a `MULTIPLE` GTT with ENTRY, TARGET and STOPLOSS rules. Per Upstox documentation, TARGET and STOPLOSS are exit-side SELL legs for a BUY entry, and SELL GTT legs require EDIS authorization. Complete EDIS authorization on an Upstox platform before placing these GTT orders. GTT legs execute as LIMIT orders when triggered; a GTT can remain active up to one year, subject to Upstox's rules.
 
 **Live-trading safety:** GTT placement is disabled unless `UPSTOX_SANDBOX=false` and `TRADING_ENABLED=true`. The GTT endpoint refuses sandbox mode. Use a valid live token and verify all prices, lot size, product and account before enabling. No live GTT has been submitted as part of deploying this code.
+
+
+## External API authentication
+
+External server-to-server trading integrations use a separate API namespace:
+`/api/external/v1`. The existing `/api/v1` routes remain the dashboard routes and do not require browser-exposed shared secrets.
+
+Configure these values in the private server `.env` file:
+
+- `EXTERNAL_API_AUTH_ENABLED=true` — enables authentication for every external mutation route.
+- `EXTERNAL_API_SOURCE_TOKEN` — independently generated secret of exactly 32 characters.
+- `EXTERNAL_API_DESTINATION_TOKEN` — independently generated secret of exactly 32 characters.
+
+When authentication is enabled, external requests must include both headers:
+
+- `X-Source-Token: <source token>`
+- `X-Destination-Token: <destination token>`
+
+Both values are checked independently using constant-time comparison. Missing or invalid headers return HTTP 401. If authentication is enabled but either server-side token is not exactly 32 characters, the API fails closed with HTTP 503. When `EXTERNAL_API_AUTH_ENABLED=false` (the default), the external endpoints do not require either header.
+
+Authenticated external mutation endpoints:
+
+- `POST /api/external/v1/orders/place`
+- `POST /api/external/v1/orders/cancel/bulk`
+- `POST /api/external/v1/orders/{order_id}/cancel`
+- `POST /api/external/v1/orders/exit-by-ids`
+- `POST /api/external/v1/orders/{order_id}/exit`
+- `POST /api/external/v1/orders/exit-all`
+- `POST /api/external/v1/gtt/place`
+
+Example:
+
+```bash
+curl -X POST "https://your-host/api/external/v1/orders/place" \\
+  -H "Content-Type: application/json" \\
+  -H "X-Source-Token: 32-character-source-secret-here" \\
+  -H "X-Destination-Token: 32-character-destination-secret" \\
+  -d '{"instrument_token":"NSE_FO|12345","quantity":65,"transaction_type":"BUY"}'
+```
+
+Generate two independent random secrets; do not reuse the Upstox access token, commit these secrets, place them in frontend JavaScript, or send them over plain HTTP. Use HTTPS. Authentication is an additional gate and does not override `TRADING_ENABLED`, `UPSTOX_SANDBOX`, model validation, or Upstox account restrictions.
