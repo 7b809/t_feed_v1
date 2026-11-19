@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class PlaceGTTRequest(BaseModel):
     instrument_key: str = Field(min_length=3, max_length=100)
+    trading_symbol: str | None = Field(default=None, max_length=100)
     entry: float | None = Field(default=None, gt=0)
     target: float = Field(gt=0)
     stoploss: float = Field(gt=0)
