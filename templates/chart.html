@@ -28,7 +28,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .index-live-pill { padding: 2px 6px; border-radius: 4px; background: rgba(8,153,129,0.15); color: var(--green); font-size: 10px; font-weight: 700; flex-shrink: 0; }
 .index-live-pill.closed { background: rgba(120,123,134,0.15); color: var(--muted); }
 
-/* ---------- Global search ---------- */
+/* ---------- Global search (top bar) ---------- */
 .global-search { position: relative; flex: 1 1 320px; max-width: 460px; min-width: 180px; }
 .global-search .bi-search { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; font-size: 13px; }
 .global-search input { width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 6px 10px 6px 30px; font-size: 12px; font-weight: 600; }
@@ -174,12 +174,14 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .label-toggle-btn[data-indicator="emaCross"].active { background: linear-gradient(90deg, #089981 0%, #f23645 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLevels"].active { background: linear-gradient(90deg, #FF0000 0%, #233dee 100%); border-color: transparent; }
 .label-toggle-btn[data-indicator="srLabels"].active { background: linear-gradient(90deg, #f5c451 0%, #a855f7 100%); border-color: transparent; color: #111; }
+/* Supertrend toggle active state (green→red gradient) */
 .label-toggle-btn[data-indicator="supertrend"].active {
   background: linear-gradient(90deg, #089981 0%, #f23645 100%);
   border-color: transparent;
   color: #ffffff;
   box-shadow: 0 2px 8px rgba(8,153,129,0.4);
 }
+/* Prev-Day-AVG indicator active state (pink→violet gradient) */
 .label-toggle-btn[data-indicator="dayAvg"].active {
   background: linear-gradient(90deg, #ec4899 0%, #8b5cf6 100%);
   border-color: transparent;
@@ -187,22 +189,110 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   box-shadow: 0 2px 8px rgba(236,72,153,0.4);
 }
 
-/* ---------- Timeframe Selector ---------- */
-.tf-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.tf-presets .label-toggle-btn { min-width: 40px; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; padding: 5px 10px; }
-.tf-presets .label-toggle-btn.active { background: linear-gradient(90deg, #2962ff 0%, #089981 100%); border-color: transparent; color: #fff; box-shadow: 0 2px 8px rgba(41,98,255,0.35); }
-.tf-divider { width: 1px; height: 22px; background: var(--border); margin: 0 6px; flex-shrink: 0; }
-.tf-current-badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 20px; background: rgba(41,98,255,0.12); border: 1px solid rgba(41,98,255,0.4); color: #7ea6ff; font-size: 10.5px; font-weight: 800; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: 0.03em; white-space: nowrap; flex-shrink: 0; }
-.tf-current-badge .tf-badge-dot { width: 6px; height: 6px; border-radius: 50%; background: #089981; box-shadow: 0 0 6px rgba(8,153,129,0.9); animation: tfDotPulse 1.6s ease-in-out infinite; }
-@keyframes tfDotPulse { 0%,100% { opacity: 0.6; transform: scale(0.9); } 50% { opacity: 1; transform: scale(1.15); } }
+/* ---------- Timeframe / Interval Selector ---------- */
+.tf-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.tf-presets .label-toggle-btn {
+  min-width: 40px;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  padding: 5px 10px;
+}
+.tf-presets .label-toggle-btn.active {
+  background: linear-gradient(90deg, #2962ff 0%, #089981 100%);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 2px 8px rgba(41,98,255,0.35);
+}
+.tf-divider {
+  width: 1px; height: 22px; background: var(--border); margin: 0 6px;
+  flex-shrink: 0;
+}
+.tf-current-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  background: rgba(41,98,255,0.12);
+  border: 1px solid rgba(41,98,255,0.4);
+  color: #7ea6ff;
+  font-size: 10.5px; font-weight: 800;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tf-current-badge .tf-badge-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #089981;
+  box-shadow: 0 0 6px rgba(8,153,129,0.9);
+  animation: tfDotPulse 1.6s ease-in-out infinite;
+}
+@keyframes tfDotPulse {
+  0%,100% { opacity: 0.6; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
 
-/* ---------- SR / Date params ---------- */
-.sr-param-field { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 800; color: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; flex-shrink: 0; }
-.sr-param-input { width: 58px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: 700; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
-.sr-param-input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(41,98,255,0.22); }
-.sr-date-input { width: 126px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 3px 6px; font-size: 10.5px; font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
-.sr-date-input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 2px rgba(41,98,255,0.22); }
-.sr-param-hint { font-size: 10.5px; color: var(--green); font-weight: 700; margin-left: 4px; opacity: 0; transition: opacity 0.25s ease; letter-spacing: 0.02em; }
+/* ---------- SR Params & Date Filter card ---------- */
+.sr-param-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--muted);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.sr-param-input {
+  width: 58px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.sr-param-input:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(41,98,255,0.22);
+}
+.sr-date-input {
+  width: 126px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 3px 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.sr-date-input:focus {
+  outline: none;
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(41,98,255,0.22);
+}
+.sr-param-hint {
+  font-size: 10.5px;
+  color: var(--green);
+  font-weight: 700;
+  margin-left: 4px;
+  opacity: 0;
+  transition: opacity 0.25s ease;
+  letter-spacing: 0.02em;
+}
 .sr-param-hint.visible { opacity: 1; }
 .sr-param-hint.error { color: var(--red); }
 
@@ -221,6 +311,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .level-label-layer { position: absolute; top: 0; left: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; z-index: 5; }
 .level-line-label { position: absolute; display: none; transform: translateY(-50%); padding: 1px 5px; font-size: 10px; font-weight: 700; line-height: 1.2; font-family: inherit; letter-spacing: 0.02em; color: #ffffff; border-radius: 3px; white-space: nowrap; pointer-events: none; z-index: 6; box-shadow: 0 1px 2px rgba(0,0,0,0.25); }
 
+/* ---------- NEW: Prev-Day-AVG label (distinct pink→violet design) ---------- */
 .day-avg-label {
   position: absolute;
   display: none;
@@ -241,6 +332,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   text-shadow: 0 1px 2px rgba(0,0,0,0.35);
 }
 
+/* ============================================================
+   NEW: SUPERTREND BUY/SELL LABELS (bubble labels only — no lines)
+   ============================================================ */
 .st-label-layer {
   position: absolute; top: 0; left: 0; width: 100%; height: 100%;
   overflow: hidden; pointer-events: none; z-index: 8;
@@ -262,13 +356,50 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   letter-spacing: 0.02em;
   z-index: 9;
 }
-.st-label.buy { background: rgba(8,153,129,0.96); transform: translate(-50%, -100%); margin-top: -10px; }
-.st-label.sell { background: rgba(242,54,69,0.96); transform: translate(-50%, 0); margin-top: 10px; }
-.st-label .st-label-title { font-size: 11px; font-weight: 800; letter-spacing: 0.08em; margin-bottom: 3px; padding-bottom: 3px; border-bottom: 1px solid rgba(255,255,255,0.28); }
+.st-label.buy {
+  background: rgba(8,153,129,0.96);
+  transform: translate(-50%, -100%);
+  margin-top: -10px;
+}
+.st-label.sell {
+  background: rgba(242,54,69,0.96);
+  transform: translate(-50%, 0);
+  margin-top: 10px;
+}
+.st-label .st-label-title {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  margin-bottom: 3px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(255,255,255,0.28);
+}
 .st-label .st-label-row { font-size: 9px; opacity: 0.95; white-space: nowrap; }
 .st-label .st-label-row strong { font-weight: 800; opacity: 1; }
-.st-label.buy::after { content: ""; position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 6px solid rgba(8,153,129,0.96); }
-.st-label.sell::after { content: ""; position: absolute; top: -6px; left: 50%; transform: translateX(-50%); width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 6px solid rgba(242,54,69,0.96); }
+/* Pointer triangle — points down toward the signal level for BUY */
+.st-label.buy::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid rgba(8,153,129,0.96);
+}
+/* Pointer triangle — points up toward the signal level for SELL */
+.st-label.sell::after {
+  content: "";
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 0; height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-bottom: 6px solid rgba(242,54,69,0.96);
+}
 @media (max-width: 720px) {
   .st-label { font-size: 8.5px; padding: 4px 7px; }
   .st-label .st-label-title { font-size: 9.5px; }
@@ -291,10 +422,30 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   border: 1px solid rgba(255,255,255,0.18);
   min-width: 145px;
 }
-.sr-label.resistance { background: rgba(255, 0, 0, 0.92); transform: translate(-50%, -100%); margin-top: -4px; }
-.sr-label.support { background: rgba(35, 61, 238, 0.92); transform: translate(-50%, 0); margin-top: 4px; }
-.sr-label .sr-label-title { font-weight: 800; font-size: 10.5px; letter-spacing: 0.05em; margin-bottom: 2px; padding-bottom: 2px; border-bottom: 1px solid rgba(255,255,255,0.28); }
-.sr-label .sr-label-row { font-size: 9.5px; opacity: 0.96; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: nowrap; }
+.sr-label.resistance {
+  background: rgba(255, 0, 0, 0.92);
+  transform: translate(-50%, -100%);
+  margin-top: -4px;
+}
+.sr-label.support {
+  background: rgba(35, 61, 238, 0.92);
+  transform: translate(-50%, 0);
+  margin-top: 4px;
+}
+.sr-label .sr-label-title {
+  font-weight: 800;
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid rgba(255,255,255,0.28);
+}
+.sr-label .sr-label-row {
+  font-size: 9.5px;
+  opacity: 0.96;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap;
+}
 .sr-label .sr-label-row strong { font-weight: 700; opacity: 1; }
 .sr-label .sr-label-row .sr-label-key { opacity: 0.72; }
 
@@ -401,7 +552,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .info-tile.wide { grid-column: span 2; }
 }
 
-/* ---------- Swap Option FAB ---------- */
+/* ============================================================
+   SWAP OPTION FAB (CE <-> PE)
+   ============================================================ */
 .swap-option-fab {
   position: fixed;
   left: 20px;
@@ -424,20 +577,35 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   font-family: inherit;
 }
 .swap-option-fab[hidden] { display: none !important; }
-.swap-option-fab:hover { background: var(--blue); color: #ffffff; border-color: var(--blue); transform: translateY(-2px); }
+.swap-option-fab:hover {
+  background: var(--blue);
+  color: #ffffff;
+  border-color: var(--blue);
+  transform: translateY(-2px);
+}
 .swap-option-fab:active { transform: translateY(0) scale(0.98); }
 .swap-option-fab.loading,
-.swap-option-fab:disabled { opacity: 0.65; cursor: wait; transform: none; }
+.swap-option-fab:disabled {
+  opacity: 0.65;
+  cursor: wait;
+  transform: none;
+}
 .swap-option-fab i { font-size: 15px; }
 .swap-option-fab .swap-option-label { white-space: nowrap; }
 
 @media (max-width: 720px) {
-  .swap-option-fab { left: 10px; bottom: 14px; padding: 8px 12px; font-size: 11px; gap: 6px; }
+  .swap-option-fab {
+    left: 10px;
+    bottom: 14px;
+    padding: 8px 12px;
+    font-size: 11px;
+    gap: 6px;
+  }
   .swap-option-fab .swap-option-label { display: none; }
   .swap-option-fab i { font-size: 17px; }
 }
 
-/* ---------- JSON export card ---------- */
+/* ---------- Reliable native JSON export disclosure card ---------- */
 .json-export-card {
   width: 100%;
   margin: 12px 0;
@@ -469,27 +637,111 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 .json-export-body { padding: 12px 14px 14px; border-top: 1px solid var(--border); }
 .json-export-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .json-export-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-.json-export-field label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
-.json-export-field input { width: 100%; min-width: 0; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 7px 8px; font-size: 11px; font-weight: 700; }
+.json-export-field label {
+  color: var(--muted); font-size: 9px; font-weight: 800;
+  letter-spacing: .05em; text-transform: uppercase;
+}
+.json-export-field input {
+  width: 100%; min-width: 0; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 8px; font-size: 11px; font-weight: 700;
+}
 .json-export-field input:focus { outline: none; border-color: var(--blue); }
 
-.json-export-radio-group { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 2px 0; }
-.json-export-radio-label { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; color: var(--text); cursor: pointer; text-transform: none; letter-spacing: 0; padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease; }
+.json-export-radio-group {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 2px 0;
+}
+.json-export-radio-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
 .json-export-field label.json-export-radio-label { font-size: 11px; text-transform: none; letter-spacing: 0; }
 .json-export-radio-label:hover { border-color: var(--blue); }
-.json-export-radio-label input[type="radio"] { accent-color: var(--blue); cursor: pointer; width: 13px; height: 13px; margin: 0; }
-.json-export-radio-label:has(input:checked) { background: rgba(41,98,255,0.14); border-color: var(--blue); color: #7ea6ff; }
+.json-export-radio-label input[type="radio"] {
+  accent-color: var(--blue);
+  cursor: pointer;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
+.json-export-radio-label:has(input:checked) {
+  background: rgba(41,98,255,0.14);
+  border-color: var(--blue);
+  color: #7ea6ff;
+}
 
-.json-export-preset-list { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0; }
-.json-export-preset-item { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 700; color: var(--text); cursor: pointer; text-transform: none; letter-spacing: 0; padding: 5px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease; user-select: none; }
-.json-export-field label.json-export-preset-item { font-size: 11.5px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.json-export-preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+}
+.json-export-preset-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+  user-select: none;
+}
+.json-export-field label.json-export-preset-item {
+  font-size: 11.5px;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
 .json-export-preset-item:hover { border-color: var(--blue); }
-.json-export-preset-item input[type="checkbox"] { accent-color: var(--blue); cursor: pointer; width: 13px; height: 13px; margin: 0; }
-.json-export-preset-item:has(input:checked) { background: rgba(41,98,255,0.14); border-color: var(--blue); color: #7ea6ff; }
-.json-export-preset-hint { font-size: 10px; color: var(--muted); font-weight: 600; margin-top: 2px; text-transform: none; letter-spacing: 0.01em; }
+.json-export-preset-item input[type="checkbox"] {
+  accent-color: var(--blue);
+  cursor: pointer;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+}
+.json-export-preset-item:has(input:checked) {
+  background: rgba(41,98,255,0.14);
+  border-color: var(--blue);
+  color: #7ea6ff;
+}
+.json-export-preset-hint {
+  font-size: 10px;
+  color: var(--muted);
+  font-weight: 600;
+  margin-top: 2px;
+  text-transform: none;
+  letter-spacing: 0.01em;
+}
 
 .json-export-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
-.json-export-button { border: 0; border-radius: 8px; background: var(--blue); color: #fff; padding: 9px 15px; font-size: 11px; font-weight: 800; cursor: pointer; }
+.json-export-button {
+  border: 0; border-radius: 8px; background: var(--blue); color: #fff;
+  padding: 9px 15px; font-size: 11px; font-weight: 800; cursor: pointer;
+}
 .json-export-button:hover { filter: brightness(1.12); }
 .json-export-button:disabled { opacity: .55; cursor: wait; }
 .json-export-status { color: var(--muted); font-size: 10px; }
@@ -504,6 +756,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
   .json-export-preset-list { gap: 6px; }
   .json-export-preset-item { font-size: 10.5px; padding: 4px 8px; }
 }
+
 </style>
 {% endblock %}
 {% block content %}
@@ -553,10 +806,14 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     </button>
   </div>
 
-  <!-- Timeframe / Interval Selector -->
+  <!-- ============================================================
+       TIMEFRAME / INTERVAL SELECTOR (TradingView-style)
+       ============================================================ -->
   <div class="chart-toggles-card" id="timeframeBar">
     <div class="chart-toggles-title"><i class="bi bi-clock-history me-1"></i>Timeframe</div>
-    <div class="tf-presets" id="tfPresets"></div>
+    <div class="tf-presets" id="tfPresets">
+      <!-- Populated dynamically by JS from INTERVAL_PRESETS -->
+    </div>
     <div class="tf-divider"></div>
     <label class="sr-param-field" for="customIntervalInput">
       Custom
@@ -585,24 +842,28 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
     <div class="chart-toggles-title"><i class="bi bi-graph-up-arrow me-1"></i>Indicators</div>
     <button type="button" class="label-toggle-btn" data-indicator="ema9" title="Show / hide EMA 9 line">EMA 9</button>
     <button type="button" class="label-toggle-btn" data-indicator="ema21" title="Show / hide EMA 21 line">EMA 21</button>
-    <button type="button" class="label-toggle-btn" data-indicator="emaCross" title="Show / hide EMA 9/21 crossover BUY / SELL signals"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
+    <button type="button" class="label-toggle-btn active" data-indicator="emaCross" title="Show / hide EMA 9/21 crossover BUY / SELL signals"><i class="bi bi-arrow-left-right me-1"></i>EMA Cross</button>
     <button type="button" class="label-toggle-btn" data-indicator="srLevels" title="Show / hide pivot-based Support/Resistance lines (red=resistance, blue=support)">
       <i class="bi bi-hr me-1"></i>SR Levels
     </button>
     <button type="button" class="label-toggle-btn" data-indicator="srLabels" title="Show / hide pivot confirmation labels (Resistance / Support with pivot price/time + confirmed price/time)">
       <i class="bi bi-tag me-1"></i>SR Labels
     </button>
-    <button type="button" class="label-toggle-btn active" data-indicator="supertrend"
+    <!-- NEW: Supertrend BUY / SELL labels toggle -->
+    <button type="button" class="label-toggle-btn" data-indicator="supertrend"
             title="Show / hide Supertrend BUY / SELL text labels (labels only — no line plots)">
       <i class="bi bi-shuffle me-1"></i>Supertrend
     </button>
-    <button type="button" class="label-toggle-btn active" data-indicator="dayAvg"
+    <!-- Prev-Day-AVG indicator -->
+    <button type="button" class="label-toggle-btn" data-indicator="dayAvg"
             title="Plot the PREVIOUS trading day's average — (prevDayHigh + prevDayLow) / 2 — as a dashed pink line inside the current day's session">
       <i class="bi bi-activity me-1"></i>Prev Day AVG
     </button>
   </div>
 
-  <!-- Supertrend Settings Card -->
+  <!-- ============================================================
+       NEW: SUPERTREND SETTINGS CARD
+       ============================================================ -->
   <div class="chart-toggles-card" id="supertrendParamsCard">
     <div class="chart-toggles-title"><i class="bi bi-shuffle me-1"></i>Supertrend</div>
     <label class="sr-param-field" for="stPeriodInput">
@@ -688,6 +949,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           <label for="jsonExportEmaSlow">EMA slow</label>
           <input type="number" id="jsonExportEmaSlow" min="2" max="1000" step="1" value="21">
         </div>
+
+        <!-- NEW: Supertrend export config -->
         <div class="json-export-field">
           <label for="jsonExportStPeriod">ST ATR period</label>
           <input type="number" id="jsonExportStPeriod" min="1" max="200" step="1" value="10">
@@ -696,6 +959,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           <label for="jsonExportStMultiplier">ST multiplier</label>
           <input type="number" id="jsonExportStMultiplier" min="0.1" max="20" step="0.1" value="3.0">
         </div>
+
+        <!-- SR input mode selector -->
         <div class="json-export-field" style="grid-column: span 2;">
           <label>SR input mode</label>
           <div class="json-export-radio-group" role="radiogroup" aria-label="SR input mode">
@@ -709,6 +974,8 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
             </label>
           </div>
         </div>
+
+        <!-- Manual SR fields -->
         <div class="json-export-field" data-sr-mode="manual">
           <label for="jsonExportSrLeft">SR left bars</label>
           <input type="number" id="jsonExportSrLeft" min="1" max="200" step="1" value="15">
@@ -717,7 +984,10 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
           <label for="jsonExportSrRight">SR right bars</label>
           <input type="number" id="jsonExportSrRight" min="1" max="200" step="1" value="3">
         </div>
-        <div class="json-export-field" data-sr-mode="presets" style="display:none; grid-column: 1 / -1;">
+
+        <!-- Preset SR fields -->
+        <div class="json-export-field" data-sr-mode="presets"
+             style="display:none; grid-column: 1 / -1;">
           <label>SR presets — select all that apply (one level-set exported per preset)</label>
           <div class="json-export-preset-list" role="group" aria-label="SR presets">
             <label class="json-export-preset-item">
@@ -889,7 +1159,7 @@ const MARKET_CLOSE_HOUR_IST  = 15;
 const MARKET_CLOSE_MIN_IST   = 30;
 const MARKET_TZ              = "Asia/Kolkata";
 const IST_UTC_OFFSET_MIN     = 330;
-const SESSION_START_OFFSET_SECONDS = 13500; // 09:15 IST in unix seconds
+const SESSION_START_OFFSET_SECONDS = 13500; // 09:15 IST in unix seconds (5:30 offset already handled)
 
 const DEFAULT_DAYS_CANDLES = 15;
 
@@ -1124,7 +1394,7 @@ const reconnectMaximumDelay = 15000;
 const INDICATOR_PREFS_KEY = "chart.indicators.prefs";
 const SR_PARAMS_KEY = "chart.sr.params";
 const TIMEFRAME_PREFS_KEY = "chart.timeframe.prefs";
-const SUPERTREND_PARAMS_KEY = "chart.supertrend.params";
+const SUPERTREND_PARAMS_KEY = "chart.supertrend.params";   // NEW
 
 let rawCandles = [];
 let currentIntervalMin = 1;
@@ -1160,13 +1430,10 @@ const plotDateFilter = {
   isDefaultToday: true
 };
 
-// ═══════════════════════════════════════════════════════════════
-// DEFAULT INDICATOR STATE — EMA indicators OFF, Supertrend & DayAvg ON
-// ═══════════════════════════════════════════════════════════════
 const indicatorState = {
   ema9:     { enabled: false, series: null, length: 9,  color: "#2962ff" },
   ema21:    { enabled: false, series: null, length: 21, color: "#f5c451" },
-  emaCross: { enabled: false, markers: [] },
+  emaCross: { enabled: true,  markers: [] },
   srLevels: {
     enabled: false,
     leftBars: {{ sr_left_bars | tojson }},
@@ -1179,20 +1446,22 @@ const indicatorState = {
     elements: [],
     layer: null,
   },
+  // Prev-Day-AVG indicator state
   dayAvg: {
-    enabled: true,               // ✅ enabled by default
+    enabled: false,
     lines: [],
     labels: [],
     data: {},
   },
+  // ── NEW: Supertrend — LABELS ONLY (no line plots, no markers) ──
   supertrend: {
-    enabled: true,               // ✅ enabled by default
+    enabled: false,
     period: 10,
     multiplier: 3.0,
     useATR: true,
-    labels: [],
+    labels: [],       // [{ element, meta:{ time, y, type } }]
     layer: null,
-    computed: [],
+    computed: [],     // latest calculated rows (for JSON export)
     lastCandleTime: null,
   },
 };
@@ -1215,6 +1484,7 @@ const indicatorState = {
   } catch (e) {}
 })();
 
+// ── NEW: restore Supertrend period & multiplier from localStorage ──
 (function loadSupertrendPrefs() {
   try {
     const saved = JSON.parse(localStorage.getItem(SUPERTREND_PARAMS_KEY) || "{}");
@@ -1232,7 +1502,7 @@ let emaCrossCache = { crosses: null, lastTime: null };
 let emaIncrementalRaf = null;
 let lastMarkerRebuildTime = null;
 let srLabelUpdateScheduled = false;
-let stLabelUpdateScheduled = false;
+let stLabelUpdateScheduled = false;   // NEW
 
 const dynamicPriceScale = {
   currentUnit: null, currentPrecision: null, currentMinMove: null,
@@ -1280,7 +1550,10 @@ function aggregateCandles(candles, intervalMin) {
     if (!existing) {
       buckets.set(bucketKey, {
         time: isDaily ? c.time : bucketKey,
-        open: c.open, high: c.high, low: c.low, close: c.close,
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close,
         volume: Number(c.volume) || 0,
         _isDailyBucket: isDaily,
       });
@@ -1323,8 +1596,11 @@ function getLastAggregatedBucket(candles, intervalMin) {
       ? getDateKeyIST(c.time)
       : Math.floor((c.time - SESSION_START_OFFSET_SECONDS) / intervalSecs) * intervalSecs
         + SESSION_START_OFFSET_SECONDS;
-    if (key === targetKey) { bucket.unshift(c); }
-    else if (key < targetKey) { break; }
+    if (key === targetKey) {
+      bucket.unshift(c);
+    } else if (key < targetKey) {
+      break;
+    }
   }
   if (bucket.length === 0) return null;
 
@@ -1338,7 +1614,9 @@ function getLastAggregatedBucket(candles, intervalMin) {
 
   return {
     time: isDaily ? first.time : targetTime,
-    open: Number(first.open), high, low,
+    open: Number(first.open),
+    high,
+    low,
     close: Number(bucket[bucket.length - 1].close),
     volume: vol,
   };
@@ -1415,7 +1693,7 @@ function applyTimeframe(intervalMin) {
   try { clearSRLabels(); } catch (e) {}
   try { removeSRLines(); } catch (e) {}
   try { removeDayAvgLines(); } catch (e) {}
-  try { clearSupertrendLabels(); } catch (e) {}
+  try { clearSupertrendLabels(); } catch (e) {}   // NEW
   try { applyMarkersToCandleSeries([]); } catch (e) {}
 
   candleSeries.setData(aggregated);
@@ -1438,12 +1716,16 @@ function applyTimeframe(intervalMin) {
 let timeframeHintTimer = null;
 function showTimeframeHint(text, isError) {
   if (!currentIntervalBadge) return;
+  const badge = currentIntervalBadge;
+  if (timeframeHintTimer) clearTimeout(timeframeHintTimer);
+  badge.classList.toggle("error", !!isError);
+  badge.style.borderColor = isError ? "var(--red)" : "rgba(41,98,255,0.4)";
+  badge.title = text || "";
   const srHint = document.getElementById("srParamsHint");
   if (srHint) {
     srHint.textContent = text || "";
     srHint.classList.toggle("error", !!isError);
     srHint.classList.add("visible");
-    if (timeframeHintTimer) clearTimeout(timeframeHintTimer);
     timeframeHintTimer = setTimeout(() => {
       srHint.classList.remove("visible");
       srHint.classList.remove("error");
@@ -1577,7 +1859,6 @@ function updateDynamicPriceScale() {
     dynamicPriceScale.lastBottomPrice = rangeInfo.maxPrice;
     scheduleLevelLabelUpdate();
     scheduleSRLabelUpdate();
-    scheduleSupertrendLabelUpdate();
   }
   const paneHeight = getPaneHeight();
   const unit = getDynamicPriceUnit(rangeInfo.minPrice, rangeInfo.maxPrice, paneHeight);
@@ -1594,7 +1875,6 @@ function updateDynamicPriceScale() {
   dynamicPriceScale.currentMinMove = effectiveMinMove;
   scheduleLevelLabelUpdate();
   scheduleSRLabelUpdate();
-  scheduleSupertrendLabelUpdate();
 }
 
 function startPriceScaleWatcher() {
@@ -1827,65 +2107,60 @@ function getOrComputeEMACrosses(candles) {
   return crosses;
 }
 
-// ═══════════════════════════════════════════════════════════════
-// MARKERS — v5 API (createSeriesMarkers) with persistent handle
-// ═══════════════════════════════════════════════════════════════
-let seriesMarkersPrimitive = null;
+let markersPrimitive = null;
+let markersApiKind = "unknown";
+
+function setMarkersV5(markers) {
+  markersPrimitive = null;
+  try {
+    markersPrimitive = LightweightCharts.createSeriesMarkers(candleSeries, markers || []);
+    return true;
+  } catch (err) {
+    console.warn("[markers] createSeriesMarkers threw:", err);
+    markersPrimitive = null;
+    return false;
+  }
+}
 
 function applyMarkersToCandleSeries(markers) {
   if (!candleSeries) return;
   const list = Array.isArray(markers) ? markers : [];
-
-  if (!seriesMarkersPrimitive) {
-    if (typeof LightweightCharts.createSeriesMarkers !== "function") {
-      console.warn("[markers] createSeriesMarkers is unavailable in this build.");
-      return;
-    }
-    seriesMarkersPrimitive = LightweightCharts.createSeriesMarkers(candleSeries, list);
-    return;
+  if (typeof LightweightCharts.createSeriesMarkers === "function") {
+    const ok = setMarkersV5(list);
+    markersApiKind = "v5";
+    if (ok) return;
   }
-  seriesMarkersPrimitive.setMarkers(list);
+  if (typeof candleSeries.setMarkers === "function") {
+    try { candleSeries.setMarkers(list); markersApiKind = "v4"; return; }
+    catch (err) { console.warn("[markers] candleSeries.setMarkers threw:", err); }
+  }
+  if (markersApiKind === "unknown") {
+    markersApiKind = "none";
+    console.warn("[markers] No markers API available on this LWC build.");
+  }
 }
 
 function renderEMALines(candles) {
   if (!chart) return;
-
-  // EMA 9
   if (indicatorState.ema9.enabled) {
     if (!indicatorState.ema9.series) {
-      indicatorState.ema9.series = addLineSeriesSafe({
-        color: indicatorState.ema9.color,
-        lineWidth: 2,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerVisible: false,
-        title: "EMA 9",
-        autoscaleInfoProvider: () => null,
-      });
+      indicatorState.ema9.series = addLineSeriesSafe({ color: indicatorState.ema9.color, lineWidth: 2, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "EMA 9", autoscaleInfoProvider: () => null });
     }
     if (indicatorState.ema9.series) {
-      indicatorState.ema9.series.setData(getOrComputeEMA(indicatorState.ema9.length, candles));
+      const data = getOrComputeEMA(indicatorState.ema9.length, candles);
+      indicatorState.ema9.series.setData(data);
     }
   } else if (indicatorState.ema9.series) {
     try { chart.removeSeries(indicatorState.ema9.series); } catch (e) {}
     indicatorState.ema9.series = null;
   }
-
-  // EMA 21
   if (indicatorState.ema21.enabled) {
     if (!indicatorState.ema21.series) {
-      indicatorState.ema21.series = addLineSeriesSafe({
-        color: indicatorState.ema21.color,
-        lineWidth: 2,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        crosshairMarkerVisible: false,
-        title: "EMA 21",
-        autoscaleInfoProvider: () => null,
-      });
+      indicatorState.ema21.series = addLineSeriesSafe({ color: indicatorState.ema21.color, lineWidth: 2, priceLineVisible: false, lastValueVisible: true, crosshairMarkerVisible: false, title: "EMA 21", autoscaleInfoProvider: () => null });
     }
     if (indicatorState.ema21.series) {
-      indicatorState.ema21.series.setData(getOrComputeEMA(indicatorState.ema21.length, candles));
+      const data = getOrComputeEMA(indicatorState.ema21.length, candles);
+      indicatorState.ema21.series.setData(data);
     }
   } else if (indicatorState.ema21.series) {
     try { chart.removeSeries(indicatorState.ema21.series); } catch (e) {}
@@ -1894,7 +2169,9 @@ function renderEMALines(candles) {
 }
 
 // ============================================================
-// ★ SUPERTREND — LABELS ONLY (v5 compatible)
+// ★ SUPERTREND — LABELS ONLY (no plots, no markers)
+//    Faithful port of the Pine @version=5 script logic.
+//    Emits one HTML bubble per trend-flip bar.
 // ============================================================
 function calculateSupertrend(candles, period, multiplier, useATR) {
   if (!Array.isArray(candles) || candles.length === 0) return [];
@@ -1902,14 +2179,16 @@ function calculateSupertrend(candles, period, multiplier, useATR) {
   const mult = Number.isFinite(Number(multiplier)) ? Number(multiplier) : 3.0;
   const n    = candles.length;
 
+  // 1) True Range
   const tr = new Array(n);
   for (let i = 0; i < n; i++) {
     const c = candles[i];
     const h = Number(c.high);
     const l = Number(c.low);
     if (!Number.isFinite(h) || !Number.isFinite(l)) { tr[i] = NaN; continue; }
-    if (i === 0) { tr[i] = h - l; }
-    else {
+    if (i === 0) {
+      tr[i] = h - l;
+    } else {
       const prevClose = Number(candles[i - 1].close);
       tr[i] = Number.isFinite(prevClose)
         ? Math.max(h - l, Math.abs(h - prevClose), Math.abs(l - prevClose))
@@ -1917,6 +2196,7 @@ function calculateSupertrend(candles, period, multiplier, useATR) {
     }
   }
 
+  // 2) ATR — Wilder's RMA (default) or simple SMA when useATR = false
   const atr = new Array(n).fill(NaN);
   if (useATR) {
     let sum = 0;
@@ -1939,6 +2219,7 @@ function calculateSupertrend(candles, period, multiplier, useATR) {
     }
   }
 
+  // 3) Supertrend loop (hl2 source + ratchet + trend flip)
   const result = [];
   let prevUp = null, prevDn = null, trend = 1;
 
@@ -1952,21 +2233,25 @@ function calculateSupertrend(candles, period, multiplier, useATR) {
     if (!Number.isFinite(h) || !Number.isFinite(l) || !Number.isFinite(close)) continue;
 
     const prevClose = i > 0 ? Number(candles[i - 1].close) : close;
-    const src  = (h + l) / 2;
+    const src  = (h + l) / 2;                   // hl2
     const band = mult * atr[i];
 
+    // Pine: up  := close[1] > up1 ? max(up, up1) : up
     let newUp = src - band;
     if (prevUp !== null && Number.isFinite(prevClose) && prevClose > prevUp) {
       newUp = Math.max(newUp, prevUp);
     }
+    // Pine: dn  := close[1] < dn1 ? min(dn, dn1) : dn
     let newDn = src + band;
     if (prevDn !== null && Number.isFinite(prevClose) && prevClose < prevDn) {
       newDn = Math.min(newDn, prevDn);
     }
 
+    // Pine: up1 = nz(up[1], up) / dn1 = nz(dn[1], dn)
     const up1 = prevUp !== null ? prevUp : newUp;
     const dn1 = prevDn !== null ? prevDn : newDn;
 
+    // Pine: trend := trend == -1 and close > dn1 ? 1 : trend == 1 and close < up1 ? -1 : trend
     let newTrend = trend;
     if (trend === -1 && close > dn1) newTrend = 1;
     else if (trend === 1 && close < up1) newTrend = -1;
@@ -2030,7 +2315,9 @@ function formatSignalTime(unixSeconds) {
       timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false
     }).format(date);
     return `${d} ${t}`;
-  } catch (e) { return "—"; }
+  } catch (e) {
+    return "—";
+  }
 }
 
 function renderSupertrendLabels(candles) {
@@ -2055,6 +2342,7 @@ function renderSupertrendLabels(candles) {
   st.computed = computed;
   st.lastCandleTime = source[source.length - 1].time;
 
+  // Filter to flip bars inside the plot-date-filter range
   const signals = [];
   for (const d of computed) {
     if (!d.buySignal && !d.sellSignal) continue;
@@ -2083,9 +2371,15 @@ function renderSupertrendLabels(candles) {
       `<div class="st-label-row">${timeStr}</div>` +
       `<div class="st-label-row">Price: <strong>${priceStr}</strong></div>`;
 
+    // Pine anchors BUY at `up` and SELL at `dn` — reproduce that.
     const anchorPrice = isBuy ? d.up : d.dn;
 
-    el._stMeta = { time: d.time, price: anchorPrice, type: isBuy ? "buy" : "sell" };
+    el._stMeta = {
+      time: d.time,
+      price: anchorPrice,
+      type: isBuy ? "buy" : "sell",
+    };
+
     layer.appendChild(el);
     st.labels.push({ element: el, meta: el._stMeta });
   });
@@ -2203,7 +2497,7 @@ function scheduleSupertrendLabelUpdate() {
 })();
 
 // ============================================================
-// SR LEVELS INDICATOR
+// SR LEVELS INDICATOR — Pivot lines & labels filtered by date
 // ============================================================
 function ensureSRLevelsState() {
   if (!indicatorState.srLevels) {
@@ -2238,6 +2532,7 @@ function performFullSRScan(candles) {
 
   for (let i = leftBars; i < candles.length - rightBars; i++) {
     const c = candles[i];
+
     if (!isTimestampInFilterRange(c.time)) continue;
 
     const cHigh = Number(c.high);
@@ -2303,46 +2598,36 @@ function renderSRLines() {
         break;
       }
     }
+    if (!Number.isFinite(endTime) || endTime <= p.pivotTime) return;
 
-    const color = p.type === "resistance" ? "#FF0000" : "#233dee";
-    const line = addLineSeriesSafe({
-      color,
-      lineWidth: 1,
-      lineStyle: LightweightCharts.LineStyle.Dashed,
-      priceLineVisible: false,
-      lastValueVisible: false,
+    const isRes = p.type === "resistance";
+    const color = isRes ? "#FF0000" : "#233dee";
+    const series = addLineSeriesSafe({
+      color, lineWidth: 2,
+      lineStyle: LightweightCharts.LineStyle.Solid,
+      priceLineVisible: false, lastValueVisible: false,
       crosshairMarkerVisible: false,
       autoscaleInfoProvider: () => null,
     });
-    if (!line) return;
-
-    const data = [];
-    for (const c of candles) {
-      if (c.time >= p.pivotTime && c.time <= endTime) {
-        data.push({ time: c.time, value: p.price });
-      }
+    if (!series) return;
+    try {
+      series.setData([
+        { time: p.pivotTime, value: p.price },
+        { time: endTime,     value: p.price },
+      ]);
+      indicatorState.srLevels.lines.push(series);
+    } catch (err) {
+      console.warn("[sr-levels] failed to set line data:", err);
     }
-    if (data.length > 0) line.setData(data);
-    indicatorState.srLevels.lines.push(line);
   });
 }
 
-function clearSRLabels() {
-  ensureSRLevelsState();
-  const state = indicatorState.srLabels;
-  if (!state.layer) {
-    (state.elements || []).forEach(el => { try { el.remove(); } catch (e) {} });
-    state.elements = [];
-    return;
-  }
-  (state.elements || []).forEach(el => { try { el.remove(); } catch (e) {} });
-  state.elements = [];
-}
-
+// ============================================================
+// SR LABELS — Pivot confirmation labels
+// ============================================================
 function ensureSRLabelLayer() {
   ensureSRLevelsState();
-  const state = indicatorState.srLabels;
-  if (state.layer) return state.layer;
+  if (indicatorState.srLabels.layer) return indicatorState.srLabels.layer;
   if (!chartContainer) return null;
   if (getComputedStyle(chartContainer).position === "static") {
     chartContainer.style.position = "relative";
@@ -2350,59 +2635,85 @@ function ensureSRLabelLayer() {
   const layer = document.createElement("div");
   layer.className = "sr-label-layer";
   chartContainer.appendChild(layer);
-  state.layer = layer;
+  indicatorState.srLabels.layer = layer;
   return layer;
 }
 
-function renderSRLabels(candles) {
+function clearSRLabels() {
   ensureSRLevelsState();
+  const els = indicatorState.srLabels.elements || [];
+  els.forEach(el => {
+    try { if (el.parentNode) el.parentNode.removeChild(el); } catch (e) {}
+  });
+  indicatorState.srLabels.elements = [];
+}
+
+function formatShortTime(unixSeconds) {
+  if (!Number.isFinite(unixSeconds)) return "—";
+  const date = new Date(unixSeconds * 1000);
+  if (Number.isNaN(date.getTime())) return "—";
+  try {
+    return new Intl.DateTimeFormat("en-IN", {
+      timeZone: "Asia/Kolkata",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(date);
+  } catch (e) {
+    const hh = String(date.getHours()).padStart(2, "0");
+    const mm = String(date.getMinutes()).padStart(2, "0");
+    return `${hh}:${mm}`;
+  }
+}
+
+function formatPrice2(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n.toFixed(2) : "—";
+}
+
+function renderSRLabels(pivots) {
   clearSRLabels();
-  const state = indicatorState.srLabels;
-  if (!state.enabled) return;
+  if (!indicatorState.srLabels.enabled) return;
   if (!chart || !candleSeries) return;
-
-  const source = candles || candleSeries.data();
-  if (!source || source.length === 0) return;
-
-  const pivots = indicatorState.srLevels.detectedPivots || [];
-  if (pivots.length === 0) return;
-
   const layer = ensureSRLabelLayer();
   if (!layer) return;
+  if (!Array.isArray(pivots) || pivots.length === 0) return;
 
   pivots.forEach(p => {
-    if (!isTimestampInFilterRange(p.pivotTime)) return;
-
+    const isRes = p.type === "resistance";
     const el = document.createElement("div");
-    el.className = `sr-label ${p.type}`;
+    el.className = `sr-label ${isRes ? "resistance" : "support"}`;
     el.style.display = "none";
 
-    const pTime = formatSignalTime(p.pivotTime);
-    const cTime = formatSignalTime(p.confirmTime);
-    const price = Number(p.price).toFixed(2);
-    const cPrice = p.confirmedPrice != null ? Number(p.confirmedPrice).toFixed(2) : "—";
+    const pivotPriceStr = formatPrice2(p.price);
+    const confPriceStr  = formatPrice2(p.confirmedPrice);
+    const pivotTimeStr  = formatShortTime(p.pivotTime);
+    const confTimeStr   = formatShortTime(p.confirmTime);
+    const title = isRes ? "RESISTANCE" : "SUPPORT";
 
     el.innerHTML =
-      `<div class="sr-label-title">${p.type === "resistance" ? "RESISTANCE" : "SUPPORT"}</div>` +
-      `<div class="sr-label-row"><span class="sr-label-key">Pivot:</span> <strong>${price}</strong> @ ${pTime}</div>` +
-      `<div class="sr-label-row"><span class="sr-label-key">Confirmed:</span> <strong>${cPrice}</strong> @ ${cTime}</div>`;
+      `<div class="sr-label-title">${title}</div>` +
+      `<div class="sr-label-row"><span class="sr-label-key">Pivot:</span> <strong>₹${pivotPriceStr}</strong> @ ${pivotTimeStr}</div>` +
+      `<div class="sr-label-row"><span class="sr-label-key">Conf.:</span> <strong>₹${confPriceStr}</strong> @ ${confTimeStr}</div>`;
 
-    el._srMeta = { time: p.pivotTime, price: p.price, type: p.type };
+    el._srMeta = {
+      time: p.confirmTime,
+      price: p.price,
+      type: p.type,
+    };
+
     layer.appendChild(el);
-    state.elements.push(el);
+    indicatorState.srLabels.elements.push(el);
   });
 
-  scheduleSRLabelUpdate();
+  positionSRLabels();
 }
 
 function positionSRLabels() {
-  const state = indicatorState.srLabels;
   if (!chart || !candleSeries) return;
-  const els = state.elements || [];
+  const els = indicatorState.srLabels.elements || [];
   if (els.length === 0) return;
 
   const timeScale = chart.timeScale();
-  const containerWidth  = chartContainer.clientWidth;
+  const containerWidth = chartContainer.clientWidth;
   const containerHeight = chartContainer.clientHeight;
 
   els.forEach(el => {
@@ -2416,14 +2727,15 @@ function positionSRLabels() {
       el.style.display = "none";
       return;
     }
-    if (x < -300 || x > containerWidth + 300 || y < -300 || y > containerHeight + 300) {
+
+    if (x < -240 || x > containerWidth + 240 || y < -120 || y > containerHeight + 120) {
       el.style.display = "none";
       return;
     }
 
     el.style.display = "block";
     el.style.left = Math.round(x) + "px";
-    el.style.top  = Math.round(y) + "px";
+    el.style.top = Math.round(y) + "px";
   });
 }
 
@@ -2436,278 +2748,2301 @@ function scheduleSRLabelUpdate() {
   });
 }
 
-// ============================================================
-// ★ PREV-DAY-AVG INDICATOR (v5 compatible)
-//    Draws a dashed horizontal price line at the previous session's
-//    (high + low) / 2, spanning the current session.
-// ============================================================
-function removeDayAvgLines() {
-  const dayAvg = indicatorState.dayAvg;
-  (dayAvg.lines || []).forEach(item => {
-    try {
-      if (item.series && chart) chart.removeSeries(item.series);
-      if (item.priceLine && item.series) item.series.removePriceLine(item.priceLine);
-    } catch (e) { /* ignore */ }
-  });
-  dayAvg.lines = [];
-  (dayAvg.labels || []).forEach(el => { try { el.remove(); } catch (e) {} });
-  dayAvg.labels = [];
+function refreshSRLevels(candles) {
+  ensureSRLevelsState();
+  const data = candles || (candleSeries ? candleSeries.data() : []);
+  const linesOn = !!indicatorState.srLevels.enabled;
+  const labelsOn = !!indicatorState.srLabels.enabled;
+
+  if (!linesOn && !labelsOn) {
+    removeSRLines();
+    clearSRLabels();
+    return;
+  }
+  if (!data || data.length === 0) {
+    removeSRLines();
+    clearSRLabels();
+    return;
+  }
+
+  performFullSRScan(data);
+
+  if (linesOn) renderSRLines();
+  else removeSRLines();
+
+  if (labelsOn) renderSRLabels(indicatorState.srLevels.detectedPivots);
+  else clearSRLabels();
 }
 
-function renderDayAvg(candles) {
-  const dayAvg = indicatorState.dayAvg;
-  removeDayAvgLines();
-  if (!dayAvg.enabled) return;
-  if (!chart || !candleSeries) return;
-
-  const source = candles || candleSeries.data();
-  if (!source || source.length === 0) return;
-
-  // Group candles by IST date
-  const byDate = new Map();
-  for (const c of source) {
-    const dk = getDateKeyIST(c.time);
-    if (!dk) continue;
-    if (!byDate.has(dk)) byDate.set(dk, []);
-    byDate.get(dk).push(c);
+// ============================================================
+// PREV-DAY-AVG INDICATOR
+// ============================================================
+function computePrevDayAvgInfo(prevDateKey, prevCandles, todayCandles) {
+  if (!Array.isArray(prevCandles) || prevCandles.length === 0) return null;
+  let prevHigh = -Infinity, prevLow = Infinity;
+  for (const c of prevCandles) {
+    const h = Number(c.high);
+    const l = Number(c.low);
+    if (Number.isFinite(h) && h > prevHigh) prevHigh = h;
+    if (Number.isFinite(l) && l < prevLow)  prevLow  = l;
   }
+  if (!Number.isFinite(prevHigh) || !Number.isFinite(prevLow)) return null;
+  if (prevHigh <= prevLow) return null;
+  const avg = (prevHigh + prevLow) / 2;
 
-  const dates = Array.from(byDate.keys()).sort();
-  if (dates.length < 2) return; // need at least a previous session
+  const spanCandles = (Array.isArray(todayCandles) && todayCandles.length > 0)
+    ? todayCandles
+    : prevCandles;
 
-  const layer = ensureDayAvgLabelLayer();
-
-  for (let i = 1; i < dates.length; i++) {
-    const prevDate = dates[i - 1];
-    const currDate = dates[i];
-
-    if (!isTimestampInFilterRange(byDate.get(currDate)[0].time)) continue;
-
-    const prevCandles = byDate.get(prevDate);
-    let prevHigh = -Infinity, prevLow = Infinity;
-    for (const c of prevCandles) {
-      const h = Number(c.high), l = Number(c.low);
-      if (Number.isFinite(h) && h > prevHigh) prevHigh = h;
-      if (Number.isFinite(l) && l < prevLow)  prevLow  = l;
-    }
-    if (!Number.isFinite(prevHigh) || !Number.isFinite(prevLow)) continue;
-
-    const avgPrice = (prevHigh + prevLow) / 2;
-    if (!Number.isFinite(avgPrice)) continue;
-
-    // Create a 2-point line series (first & last candle of current session)
-    const currCandles = byDate.get(currDate);
-    const firstTime = currCandles[0].time;
-    const lastTime  = currCandles[currCandles.length - 1].time;
-
-    const series = addLineSeriesSafe({
-      color: "#ec4899",
-      lineWidth: 2,
-      lineStyle: LightweightCharts.LineStyle.Dashed,
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false,
-      autoscaleInfoProvider: () => null,
-      title: "Prev Day AVG",
-    });
-    if (!series) continue;
-
-    series.setData([
-      { time: firstTime, value: avgPrice },
-      { time: lastTime,  value: avgPrice },
-    ]);
-
-    dayAvg.lines.push({ series, avgPrice, date: currDate, firstTime, lastTime });
-
-    // Optional label
-    if (layer) {
-      const el = document.createElement("div");
-      el.className = "day-avg-label";
-      el.textContent = `AVG ${avgPrice.toFixed(2)}`;
-      el.style.display = "none";
-      el._dayAvgMeta = { time: firstTime, price: avgPrice };
-      layer.appendChild(el);
-      dayAvg.labels.push(el);
-    }
-  }
-
-  positionDayAvgLabels();
+  return {
+    prevDate: prevDateKey,
+    todayDate: (Array.isArray(todayCandles) && todayCandles.length > 0)
+      ? getDateKeyIST(todayCandles[0].time)
+      : null,
+    avg,
+    prevHigh,
+    prevLow,
+    startTime: spanCandles[0].time,
+    endTime: spanCandles[spanCandles.length - 1].time,
+    usedFallbackSpan: !(Array.isArray(todayCandles) && todayCandles.length > 0),
+  };
 }
 
 function ensureDayAvgLabelLayer() {
-  const dayAvg = indicatorState.dayAvg;
-  if (dayAvg.layer) return dayAvg.layer;
-  if (!chartContainer) return null;
-  if (getComputedStyle(chartContainer).position === "static") {
-    chartContainer.style.position = "relative";
-  }
-  const layer = document.createElement("div");
-  layer.className = "level-label-layer";
-  chartContainer.appendChild(layer);
-  dayAvg.layer = layer;
-  return layer;
+  return ensureLevelLabelLayer();
 }
 
-function positionDayAvgLabels() {
-  const dayAvg = indicatorState.dayAvg;
+function drawDayAvgLine(info) {
+  if (!chart || !info) return;
+  const color = "#ec4899";
+  const series = addLineSeriesSafe({
+    color,
+    lineWidth: 2,
+    lineStyle: LightweightCharts.LineStyle.Dashed,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    crosshairMarkerVisible: false,
+    autoscaleInfoProvider: () => null,
+  });
+  if (!series) return;
+
+  const data = [{ time: info.startTime, value: info.avg }];
+  if (info.endTime !== info.startTime) {
+    data.push({ time: info.endTime, value: info.avg });
+  }
+
+  try {
+    series.setData(data);
+    indicatorState.dayAvg.lines.push(series);
+    info.series = series;
+  } catch (err) {
+    console.warn("[prev-day-avg] setData failed:", err);
+    try { chart.removeSeries(series); } catch (e) {}
+    return;
+  }
+
+  const layer = ensureDayAvgLabelLayer();
+  if (!layer) return;
+  const el = document.createElement("div");
+  el.className = "day-avg-label";
+  el.textContent = `PREV DAY AVG · ${info.prevDate} · ₹${info.avg.toFixed(2)}`;
+  el.style.display = "none";
+  layer.appendChild(el);
+  info.labelElement = el;
+
+  indicatorState.dayAvg.labels.push({
+    element: el,
+    meta: { startTime: info.startTime, avg: info.avg, prevDate: info.prevDate },
+  });
+}
+
+function removeDayAvgForDate(key) {
+  const info = indicatorState.dayAvg.data[key];
+  if (!info) return;
+
+  if (info.series) {
+    try { chart.removeSeries(info.series); } catch (e) {}
+    const idx = indicatorState.dayAvg.lines.indexOf(info.series);
+    if (idx >= 0) indicatorState.dayAvg.lines.splice(idx, 1);
+  }
+  if (info.labelElement) {
+    try { if (info.labelElement.parentNode) info.labelElement.parentNode.removeChild(info.labelElement); } catch (e) {}
+    const idx = indicatorState.dayAvg.labels.findIndex(l => l.element === info.labelElement);
+    if (idx >= 0) indicatorState.dayAvg.labels.splice(idx, 1);
+  }
+  delete indicatorState.dayAvg.data[key];
+}
+
+function removeDayAvgLines() {
+  if (chart) {
+    indicatorState.dayAvg.lines.forEach(series => {
+      try { chart.removeSeries(series); } catch (e) {}
+    });
+  }
+  indicatorState.dayAvg.lines = [];
+  indicatorState.dayAvg.labels.forEach(entry => {
+    try { if (entry.element && entry.element.parentNode) entry.element.parentNode.removeChild(entry.element); } catch (e) {}
+  });
+  indicatorState.dayAvg.labels = [];
+  indicatorState.dayAvg.data = {};
+}
+
+function refreshDayAvgLines(candles) {
+  removeDayAvgLines();
+  if (!indicatorState.dayAvg.enabled) return;
   if (!chart || !candleSeries) return;
-  const labels = dayAvg.labels || [];
-  if (labels.length === 0) return;
+  if (!Array.isArray(candles) || candles.length === 0) return;
+
+  const byDate = {};
+  for (const c of candles) {
+    const key = getDateKeyIST(c.time);
+    if (!key) continue;
+    if (!byDate[key]) byDate[key] = [];
+    byDate[key].push(c);
+  }
+  const sortedDates = Object.keys(byDate).sort();
+  if (sortedDates.length < 2) return;
+
+  for (let i = 1; i < sortedDates.length; i++) {
+    const todayKey = sortedDates[i];
+    const prevKey  = sortedDates[i - 1];
+
+    const prevCandles  = byDate[prevKey].slice().sort((a, b) => a.time - b.time);
+    const todayCandles = byDate[todayKey].slice().sort((a, b) => a.time - b.time);
+    if (todayCandles.length === 0) continue;
+
+    const info = computePrevDayAvgInfo(prevKey, prevCandles, todayCandles);
+    if (!info) continue;
+
+    indicatorState.dayAvg.data[todayKey] = info;
+    drawDayAvgLine(info);
+  }
+
+  try { updateDayAvgLabelPositions(); } catch (e) {}
+}
+
+function updateLastDayAvgLine(candles) {
+  if (!indicatorState.dayAvg.enabled) return;
+  if (!chart || !candleSeries) return;
+  if (!Array.isArray(candles) || candles.length === 0) return;
+
+  const byDate = {};
+  for (const c of candles) {
+    const key = getDateKeyIST(c.time);
+    if (!key) continue;
+    if (!byDate[key]) byDate[key] = [];
+    byDate[key].push(c);
+  }
+  const sortedDates = Object.keys(byDate).sort();
+
+  if (sortedDates.length < 2) {
+    removeDayAvgLines();
+    return;
+  }
+
+  const expectedTodayKeys = sortedDates.slice(1);
+  const existingKeys = Object.keys(indicatorState.dayAvg.data);
+
+  const hasAllExpected  = expectedTodayKeys.every(k => existingKeys.includes(k));
+  const hasOnlyExpected = existingKeys.every(k => expectedTodayKeys.includes(k));
+
+  if (!hasAllExpected || !hasOnlyExpected) {
+    refreshDayAvgLines(candles);
+    return;
+  }
+
+  const lastTodayKey = sortedDates[sortedDates.length - 1];
+  const lastInfo = indicatorState.dayAvg.data[lastTodayKey];
+  if (!lastInfo) { refreshDayAvgLines(candles); return; }
+
+  const todayCandles = byDate[lastTodayKey].slice().sort((a, b) => a.time - b.time);
+  if (todayCandles.length === 0) return;
+
+  const newStart = todayCandles[0].time;
+  const newEnd   = todayCandles[todayCandles.length - 1].time;
+  if (lastInfo.startTime === newStart && lastInfo.endTime === newEnd) {
+    return;
+  }
+
+  removeDayAvgForDate(lastTodayKey);
+  lastInfo.startTime = newStart;
+  lastInfo.endTime   = newEnd;
+  indicatorState.dayAvg.data[lastTodayKey] = lastInfo;
+  drawDayAvgLine(lastInfo);
+  scheduleDayAvgLabelUpdate();
+}
+
+let dayAvgLabelUpdateScheduled = false;
+function scheduleDayAvgLabelUpdate() {
+  if (dayAvgLabelUpdateScheduled) return;
+  dayAvgLabelUpdateScheduled = true;
+  requestAnimationFrame(() => {
+    dayAvgLabelUpdateScheduled = false;
+    try { updateDayAvgLabelPositions(); } catch (err) { console.warn("Day-AVG label position error:", err); }
+  });
+}
+
+function updateDayAvgLabelPositions() {
+  if (!chart || !candleSeries) return;
+  if (!indicatorState.dayAvg.enabled) return;
+  const entries = indicatorState.dayAvg.labels || [];
+  if (entries.length === 0) return;
 
   const timeScale = chart.timeScale();
-  const containerWidth  = chartContainer.clientWidth;
-  const containerHeight = chartContainer.clientHeight;
+  const containerWidth = chartContainer.clientWidth;
+  const paneHeight = getPaneHeight();
 
-  labels.forEach(el => {
-    const meta = el._dayAvgMeta;
-    if (!meta) { el.style.display = "none"; return; }
+  entries.forEach(entry => {
+    const el = entry.element;
+    const meta = entry.meta;
+    if (!el || !meta) return;
 
-    const x = timeScale.timeToCoordinate(meta.time);
-    const y = candleSeries.priceToCoordinate(meta.price);
+    const x = timeScale.timeToCoordinate(meta.startTime);
+    const y = candleSeries.priceToCoordinate(meta.avg);
 
     if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) {
       el.style.display = "none";
       return;
     }
-    if (x < -200 || x > containerWidth + 200 || y < -200 || y > containerHeight + 200) {
+    if (y < -8 || y > paneHeight + 8 || x < -200 || x > containerWidth + 200) {
       el.style.display = "none";
       return;
     }
 
     el.style.display = "block";
-    el.style.left = (Math.round(x) + 8) + "px";
+    el.style.left = Math.round(x + 4) + "px";
     el.style.top  = Math.round(y) + "px";
   });
 }
 
-function scheduleDayAvgLabelUpdate() {
-  requestAnimationFrame(() => {
-    try { positionDayAvgLabels(); } catch (err) { console.warn("DayAvg label position error:", err); }
+// ============================================================
+// MARKERS / INDICATOR REFRESH
+// ============================================================
+function rebuildAllMarkers() {
+  if (!candleSeries) return;
+  const data = candleSeries.data();
+  if (!data || data.length === 0) { applyMarkersToCandleSeries([]); return; }
+
+  const allMarkers = [];
+
+  if (indicatorState.emaCross.enabled) {
+    const crosses = getOrComputeEMACrosses(data);
+    const seenTimes = new Set();
+    for (const c of crosses) {
+      if (seenTimes.has(c.time)) continue;
+      if (!isTimestampInFilterRange(c.time)) continue;
+      seenTimes.add(c.time);
+      const isBull = c.type === "bull";
+      allMarkers.push({
+        time: c.time,
+        position: isBull ? "belowBar" : "aboveBar",
+        color: isBull ? "#089981" : "#f23645",
+        shape: isBull ? "arrowUp" : "arrowDown",
+        text: isBull ? "BUY" : "SELL",
+        size: 2,
+      });
+    }
+  }
+
+  allMarkers.sort((a, b) => a.time - b.time);
+  applyMarkersToCandleSeries(allMarkers);
+  lastMarkerRebuildTime = data[data.length - 1].time;
+}
+
+function refreshIndicators(candles) {
+  try {
+    const data = candles || (candleSeries ? candleSeries.data() : []);
+    if (!data || data.length === 0) return;
+    renderEMALines(data);
+    refreshSRLevels(data);
+    rebuildAllMarkers();
+    refreshDayAvgLines(data);       // Prev-Day-AVG
+    renderSupertrendLabels(data);   // NEW — Supertrend BUY/SELL labels
+  } catch (err) { console.warn("refreshIndicators error (swallowed):", err); }
+}
+
+function scheduleIncrementalEMARefresh() {
+  if (emaIncrementalRaf !== null) return;
+  emaIncrementalRaf = requestAnimationFrame(() => {
+    emaIncrementalRaf = null;
+    try {
+      if (!candleSeries) return;
+      const data = candleSeries.data();
+      if (!data || data.length === 0) return;
+      if (indicatorState.ema9.enabled && indicatorState.ema9.series) {
+        const cached = emaCache.get(indicatorState.ema9.length);
+        if (cached && cached.data.length > 0) indicatorState.ema9.series.update(cached.data[cached.data.length - 1]);
+        else indicatorState.ema9.series.setData(getOrComputeEMA(indicatorState.ema9.length, data));
+      }
+      if (indicatorState.ema21.enabled && indicatorState.ema21.series) {
+        const cached = emaCache.get(indicatorState.ema21.length);
+        if (cached && cached.data.length > 0) indicatorState.ema21.series.update(cached.data[cached.data.length - 1]);
+        else indicatorState.ema21.series.setData(getOrComputeEMA(indicatorState.ema21.length, data));
+      }
+      if (indicatorState.emaCross.enabled || indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) {
+        const lastTime = data[data.length - 1].time;
+        if (lastMarkerRebuildTime !== lastTime) {
+          if (indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) {
+            refreshSRLevels(data);
+          }
+          rebuildAllMarkers();
+        }
+      }
+      if (indicatorState.dayAvg.enabled) {
+        try { updateLastDayAvgLine(data); } catch (err) { console.warn("day-avg incremental refresh:", err); }
+      }
+      // NEW: Supertrend labels — re-render (cheap; only flip bars produce DOM nodes)
+      if (indicatorState.supertrend.enabled) {
+        try { renderSupertrendLabels(data); } catch (err) { console.warn("supertrend incremental refresh:", err); }
+      }
+    } catch (err) { console.warn("incremental EMA refresh error (swallowed):", err); }
+  });
+}
+
+// Indicator toggle buttons
+document.querySelectorAll("#indicatorToggleBar .label-toggle-btn[data-indicator]").forEach(btn => {
+  const key = btn.dataset.indicator;
+  if (!(key in indicatorState)) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem(INDICATOR_PREFS_KEY) || "{}");
+    if (saved[key] === true) { indicatorState[key].enabled = true; }
+  } catch (e) {}
+  btn.classList.toggle("active", !!indicatorState[key].enabled);
+  btn.addEventListener("click", () => {
+    indicatorState[key].enabled = !indicatorState[key].enabled;
+    btn.classList.toggle("active", indicatorState[key].enabled);
+    try {
+      const prefs = {};
+      Object.keys(indicatorState).forEach(k => {
+        if (typeof indicatorState[k].enabled === "boolean") prefs[k] = indicatorState[k].enabled;
+      });
+      localStorage.setItem(INDICATOR_PREFS_KEY, JSON.stringify(prefs));
+    } catch (e) {}
+    refreshIndicators();
+  });
+});
+
+// ============================================================
+// SR PARAMS & DATE RANGE CARD — Apply, Reset & Date Filter
+// ============================================================
+(function initSRParamsCard() {
+  const leftInput   = document.getElementById("srLeftBarsInput");
+  const rightInput  = document.getElementById("srRightBarsInput");
+  const startInput  = document.getElementById("filterStartDate");
+  const endInput    = document.getElementById("filterEndDate");
+  const applyBtn    = document.getElementById("srApplyBtn");
+  const resetBtn    = document.getElementById("srResetTodayBtn");
+  const hintEl      = document.getElementById("srParamsHint");
+  if (!leftInput || !rightInput || !applyBtn || !resetBtn) return;
+
+  leftInput.value  = String(indicatorState.srLevels.leftBars);
+  rightInput.value = String(indicatorState.srLevels.rightBars);
+
+  const todayKey = getTodayDateKeyIST();
+  if (startInput) startInput.value = todayKey;
+  if (endInput)   endInput.value   = todayKey;
+
+  let hintTimer = null;
+  function showHint(text, isError) {
+    if (!hintEl) return;
+    hintEl.textContent = text || "";
+    hintEl.classList.toggle("error", !!isError);
+    hintEl.classList.add("visible");
+    if (hintTimer) clearTimeout(hintTimer);
+    hintTimer = setTimeout(() => {
+      hintEl.classList.remove("visible");
+      hintEl.classList.remove("error");
+    }, 3200);
+  }
+
+  function clampInt(raw, min, max) {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return null;
+    const i = Math.round(n);
+    if (i < min || i > max) return null;
+    return i;
+  }
+
+  function applyParams() {
+    const lb = clampInt(leftInput.value, 1, 200);
+    const rb = clampInt(rightInput.value, 1, 200);
+    if (lb === null) { showHint("Left bars must be 1–200", true); return; }
+    if (rb === null) { showHint("Right bars must be 1–200", true); return; }
+
+    const sDate = startInput ? startInput.value : "";
+    const eDate = endInput   ? endInput.value   : "";
+    if (sDate && eDate && sDate > eDate) {
+      showHint("Start date must be <= End date", true);
+      return;
+    }
+
+    removeSRLines();
+    clearSRLabels();
+    applyMarkersToCandleSeries([]);
+    removeDayAvgLines();
+    clearSupertrendLabels();   // NEW
+
+    indicatorState.srLevels.leftBars  = lb;
+    indicatorState.srLevels.rightBars = rb;
+
+    plotDateFilter.startDate = sDate || null;
+    plotDateFilter.endDate   = eDate || null;
+    plotDateFilter.isDefaultToday = (sDate === getTodayDateKeyIST() && eDate === getTodayDateKeyIST());
+
+    try {
+      localStorage.setItem(SR_PARAMS_KEY, JSON.stringify({ leftBars: lb, rightBars: rb }));
+    } catch (e) {}
+
+    invalidateEMACache();
+    refreshIndicators();
+
+    const pivots = indicatorState.srLevels.detectedPivots || [];
+    const dateLabel = (sDate === eDate && sDate) ? sDate : `${sDate || 'all'} to ${eDate || 'all'}`;
+    showHint(`✓ Applied (${lb}/${rb}) · Dates: ${dateLabel} · ${pivots.length} pivots`, false);
+  }
+
+  function resetToToday() {
+    const today = getTodayDateKeyIST();
+    if (startInput) startInput.value = today;
+    if (endInput)   endInput.value   = today;
+    leftInput.value  = String({{ sr_left_bars | tojson }});
+    rightInput.value = String({{ sr_right_bars | tojson }});
+    applyParams();
+  }
+
+  applyBtn.addEventListener("click", applyParams);
+  resetBtn.addEventListener("click", resetToToday);
+
+  [leftInput, rightInput, startInput, endInput].forEach(inp => {
+    if (!inp) return;
+    inp.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); applyParams(); }
+    });
+  });
+})();
+
+// ============================================================
+// INSTRUMENT INFO CARD FOLD
+// ============================================================
+function setInfoCardCollapsed(collapsed) {
+  if (!instrumentInfoCard) return;
+  instrumentInfoCard.classList.toggle("collapsed", collapsed);
+  if (instrumentInfoChevron) instrumentInfoChevron.className = collapsed ? "bi bi-chevron-down" : "bi bi-chevron-up";
+  if (instrumentInfoToggleText) instrumentInfoToggleText.textContent = collapsed ? "Fold down" : "Fold up";
+}
+function toggleInfoCard() {
+  if (!instrumentInfoCard) return;
+  setInfoCardCollapsed(!instrumentInfoCard.classList.contains("collapsed"));
+}
+if (instrumentInfoHeader) {
+  instrumentInfoHeader.addEventListener("click", function (event) {
+    if (event.target.closest(".instrument-info-toggle")) return;
+    toggleInfoCard();
+  });
+}
+if (instrumentInfoToggle) {
+  instrumentInfoToggle.addEventListener("click", function (event) {
+    event.stopPropagation();
+    toggleInfoCard();
+  });
+}
+if (toggleInfoCardBtn) {
+  toggleInfoCardBtn.addEventListener("click", function () {
+    if (instrumentInfoCard.classList.contains("collapsed")) setInfoCardCollapsed(false);
+    else setInfoCardCollapsed(true);
+    instrumentInfoCard.scrollIntoView({ behavior: "smooth", block: "end" });
   });
 }
 
 // ============================================================
-// v5 SERIES HELPERS
+// SCROLL NAV — buttons + keyboard shortcut (Ctrl + ↑ / ↓)
 // ============================================================
-function addLineSeriesSafe(options) {
-  if (!chart) return null;
+const SCROLL_PAGE_FRACTION = 0.8;
+
+function scrollPageUp() {
+  if (!contentScroll) return;
+  contentScroll.scrollBy({
+    top: -Math.round(contentScroll.clientHeight * SCROLL_PAGE_FRACTION),
+    behavior: "smooth",
+  });
+}
+
+function scrollPageDown() {
+  if (!contentScroll) return;
+  contentScroll.scrollBy({
+    top: Math.round(contentScroll.clientHeight * SCROLL_PAGE_FRACTION),
+    behavior: "smooth",
+  });
+}
+
+if (scrollUpBtn)   scrollUpBtn.addEventListener("click", scrollPageUp);
+if (scrollDownBtn) scrollDownBtn.addEventListener("click", scrollPageDown);
+
+if (scrollUpBtn)   scrollUpBtn.title   = "Scroll up (Ctrl+↑)";
+if (scrollDownBtn) scrollDownBtn.title = "Scroll down (Ctrl+↓)";
+
+(function initScrollKeyboardShortcuts() {
+  function isEditableTarget(el) {
+    if (!el) return false;
+    const tag = String(el.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return true;
+    if (el.isContentEditable) return true;
+    return false;
+  }
+
+  window.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    if (!event.ctrlKey) return;
+    if (event.shiftKey || event.altKey || event.metaKey) return;
+    if (isEditableTarget(event.target)) return;
+
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+
+    event.preventDefault();
+    if (event.key === "ArrowUp") scrollPageUp();
+    else                         scrollPageDown();
+  }, { passive: false });
+})();
+
+// ============================================================
+// CONNECTION STATUS
+// ============================================================
+function setConnectionStatus(status, text) {
+  connectionStatus.classList.remove("connecting", "connected", "disconnected", "closed");
+  connectionStatus.classList.add(status);
+  connectionStatusText.textContent = text;
+}
+
+// ============================================================
+// TIMESTAMP + DATE HELPERS
+// ============================================================
+function parseTimestamp(value) {
+  if (value === null || value === undefined || value === "") return null;
+  if (value instanceof Date) { const ms = value.getTime(); return Number.isFinite(ms) ? Math.floor(ms / 1000) : null; }
+  const numericValue = Number(value);
+  if (Number.isFinite(numericValue)) {
+    const abs = Math.abs(numericValue);
+    if (abs >= 1e18) return Math.floor(numericValue / 1e9);
+    if (abs >= 1e15) return Math.floor(numericValue / 1e6);
+    if (abs >= 1e12) return Math.floor(numericValue / 1e3);
+    return Math.floor(numericValue);
+  }
+  const parsedMs = Date.parse(String(value).trim());
+  if (!Number.isFinite(parsedMs)) return null;
+  return Math.floor(parsedMs / 1000);
+}
+
+function normalizeChartTime(time) {
+  if (time === null || time === undefined) return null;
+  if (typeof time === "number") return Number.isFinite(time) ? time : null;
+  if (typeof time === "string") return parseTimestamp(time);
+  if (typeof time === "object" && Number.isFinite(time.year) && Number.isFinite(time.month) && Number.isFinite(time.day)) {
+    return Math.floor(Date.UTC(time.year, time.month - 1, time.day) / 1000);
+  }
+  return null;
+}
+
+function getChartDate(time) { const ts = normalizeChartTime(time); if (!Number.isFinite(ts)) return null; return new Date(ts * 1000); }
+function formatChartDate(date) { if (!(date instanceof Date)) return ""; return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).format(date); }
+function formatChartTime(date) { if (!(date instanceof Date)) return ""; return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false }).format(date); }
+function formatTimeLabel(time, tickMarkType) {
+  const date = getChartDate(time);
+  if (!date) return "";
+  const TickMarkType = LightweightCharts.TickMarkType || {};
+  if (tickMarkType === TickMarkType.Year || tickMarkType === TickMarkType.Month || tickMarkType === TickMarkType.DayOfMonth) return formatChartDate(date);
+  if (currentIntervalMin >= DAILY_THRESHOLD_MINUTES) return formatChartDate(date);
+  return formatChartTime(date);
+}
+function formatFullDate(time) {
+  const date = getChartDate(time);
+  if (!date) return "";
+  return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(date);
+}
+
+// ============================================================
+// NORMALIZE CANDLE
+// ============================================================
+function normalizeCandle(rawCandle) {
+  if (!rawCandle) return null;
+  if (Array.isArray(rawCandle)) {
+    const time = parseTimestamp(rawCandle[0]);
+    const open = Number(rawCandle[1]);
+    const high = Number(rawCandle[2]);
+    const low  = Number(rawCandle[3]);
+    const close= Number(rawCandle[4]);
+    const volume = rawCandle.length > 5 ? Number(rawCandle[5]) : null;
+    if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return null;
+    return { time, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 };
+  }
+  if (typeof rawCandle !== "object") return null;
+  const rawTime = rawCandle.time ?? rawCandle.timestamp ?? rawCandle.ts ?? rawCandle.start_time ?? rawCandle.candle_start_time;
+  const time = parseTimestamp(rawTime);
+  const open = Number(rawCandle.open ?? rawCandle.o);
+  const high = Number(rawCandle.high ?? rawCandle.h);
+  const low  = Number(rawCandle.low  ?? rawCandle.l);
+  const close= Number(rawCandle.close?? rawCandle.c);
+  const rawVol = rawCandle.volume ?? rawCandle.v;
+  const volume = Number(rawVol);
+  if (!Number.isFinite(time) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return null;
+  return { time, open, high, low, close, volume: Number.isFinite(volume) ? volume : 0 };
+}
+
+// ============================================================
+// PAYLOAD HELPERS (live feed)
+// ============================================================
+function getPayloadInstrumentKey(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  return payload.instrument_key ?? payload.instrumentKey ?? payload.key ?? payload.info?.instrument_key ?? payload.data?.instrument_key ?? payload.data?.instrumentKey ?? payload.feed?.instrument_key ?? payload.feed?.instrumentKey ?? null;
+}
+function getPayloadLtp(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const rawLtp = payload.ltp ?? payload.live_ltp ?? payload.last_price ?? payload.feed?.ltpc?.ltp ?? payload.feed?.ltp ?? payload.feed?.live_ltp ?? payload.data?.ltp ?? payload.data?.live_ltp ?? payload.data?.last_price ?? payload.data?.feed?.ltpc?.ltp;
+  const ltp = Number(rawLtp);
+  return Number.isFinite(ltp) ? ltp : null;
+}
+function getPayloadTimestamp(payload) {
+  if (!payload || typeof payload !== "object") return Math.floor(Date.now() / 1000);
+  return parseTimestamp(payload.timestamp ?? payload.time ?? payload.ts ?? payload.updated_at ?? payload.feed?.ltpc?.ltt ?? payload.feed?.timestamp ?? payload.data?.timestamp ?? payload.data?.time ?? payload.data?.feed?.ltpc?.ltt) ?? Math.floor(Date.now() / 1000);
+}
+function getPayloadCandle(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const candidates = [payload.candle, payload.latest_candle, payload.completed_candle, payload.live_candle, payload.data?.candle, payload.data?.latest_candle, payload.data?.completed_candle, payload.data?.live_candle, payload.feed?.candle, payload.feed?.latest_candle];
+  for (const candidate of candidates) { const candle = normalizeCandle(candidate); if (candle) return candle; }
+  return null;
+}
+function getPayloadVolume(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload.volume ?? payload.vtt ?? payload.data?.volume ?? payload.feed?.volume ?? payload.candle_1m?.volume;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+// ============================================================
+// LIVE PRICE
+// ============================================================
+function updateLivePrice(ltp) {
+  if (!Number.isFinite(ltp)) return;
+  livePrice.textContent = ltp.toFixed(2);
+}
+
+// ============================================================
+// CANDLE UPDATE
+// ============================================================
+function updateCandleOnChart(displayCandle) {
+  if (!candleSeries || !displayCandle) return;
+  if (lastCandle && displayCandle.time < lastCandle.time) return;
+  const isNewBucket = !lastCandle || displayCandle.time > lastCandle.time;
+
+  candleSeries.update(displayCandle);
+  lastCandle = displayCandle;
+  updateLivePrice(displayCandle.close);
+
+  if (indicatorState.ema9.enabled || indicatorState.ema21.enabled || indicatorState.emaCross.enabled ||
+      indicatorState.srLevels.enabled || indicatorState.srLabels.enabled || indicatorState.dayAvg.enabled ||
+      indicatorState.supertrend.enabled) {
+    scheduleIncrementalEMARefresh();
+  }
+  if ((indicatorState.srLevels.enabled || indicatorState.srLabels.enabled) && isNewBucket) {
+    try { refreshSRLevels(); } catch (err) { console.warn("SR live refresh failed:", err); }
+  }
+  const prevDate = currentRenderedDate;
+  const newDate = getDateKeyIST(displayCandle.time);
+  if (newDate && newDate !== prevDate) {
+    currentRenderedDate = newDate;
+    renderOpeningRangeLines();
+  }
+}
+
+function upsertLiveCandle(rawCandle1m) {
+  if (!rawCandle1m || !Number.isFinite(rawCandle1m.time)) return;
+
+  if (rawCandles.length === 0) {
+    rawCandles.push(rawCandle1m);
+  } else {
+    const lastRaw = rawCandles[rawCandles.length - 1];
+    if (rawCandle1m.time > lastRaw.time) {
+      rawCandles.push(rawCandle1m);
+    } else if (rawCandle1m.time === lastRaw.time) {
+      rawCandles[rawCandles.length - 1] = rawCandle1m;
+    } else {
+      let idx = rawCandles.length - 1;
+      while (idx >= 0 && rawCandles[idx].time > rawCandle1m.time) idx--;
+      if (idx >= 0 && rawCandles[idx].time === rawCandle1m.time) rawCandles[idx] = rawCandle1m;
+      else rawCandles.splice(idx + 1, 0, rawCandle1m);
+    }
+  }
+
+  let displayCandle;
+  if (currentIntervalMin === 1) {
+    displayCandle = rawCandle1m;
+  } else {
+    displayCandle = getLastAggregatedBucket(rawCandles, currentIntervalMin);
+    if (!displayCandle) return;
+  }
+
+  updateCandleOnChart(displayCandle);
+}
+
+function updateCandleFromLtp(ltp, timestamp, volume) {
+  if (!Number.isFinite(ltp) || !candleSeries) return;
+  updateLivePrice(ltp);
+  const minuteTimestamp = Math.floor((timestamp || Math.floor(Date.now() / 1000)) / 60) * 60;
+  const vol = Number.isFinite(volume) ? Number(volume) : 0;
+  const lastRaw = rawCandles.length > 0 ? rawCandles[rawCandles.length - 1] : null;
+
+  if (!lastRaw || minuteTimestamp > lastRaw.time) {
+    upsertLiveCandle({ time: minuteTimestamp, open: ltp, high: ltp, low: ltp, close: ltp, volume: vol });
+    return;
+  }
+  if (minuteTimestamp < lastRaw.time) return;
+  upsertLiveCandle({
+    time: lastRaw.time, open: lastRaw.open,
+    high: Math.max(lastRaw.high, ltp), low: Math.min(lastRaw.low, ltp),
+    close: ltp, volume: Math.max(lastRaw.volume || 0, vol),
+  });
+}
+
+// ============================================================
+// FETCH CANDLES FROM UPSTOX PROXY
+// ============================================================
+async function fetchCandlesFromUpstox(instrumentKey) {
+  const today = new Date();
+  const from = new Date(today.getTime() - DEFAULT_DAYS_CANDLES * 86400 * 1000);
+  const toISO    = today.toISOString().slice(0, 10);
+  const fromISO  = from.toISOString().slice(0, 10);
+
+  const [intraRes, histRes] = await Promise.all([
+    fetch(UPSTOX_INTRADAY_URL(instrumentKey)).then(r => r.json()).catch(() => ({})),
+    fetch(UPSTOX_HISTORICAL_URL(instrumentKey, fromISO, toISO)).then(r => r.json()).catch(() => ({})),
+  ]);
+
+  const intraCandles = (intraRes && intraRes.data && intraRes.data.candles) || [];
+  const histCandles  = (histRes  && histRes.data  && histRes.data.candles)  || [];
+
+  const merged = new Map();
+  for (const arr of [histCandles, intraCandles]) {
+    for (const raw of arr) {
+      const c = normalizeCandle(raw);
+      if (c) merged.set(c.time, c);
+    }
+  }
+  return Array.from(merged.values()).sort((a, b) => a.time - b.time);
+}
+
+// ============================================================
+// LOAD OLDER HISTORICAL DATA
+// ============================================================
+async function loadOlderHistoricalData() {
+  if (isLoadingHistory || !hasMoreHistory || !oldestCandleTime) return;
+  isLoadingHistory = true;
+  triggerLoadHistoryBtn.disabled = true;
+  triggerLoadHistoryBtn.textContent = "Loading...";
+  LoadingOverlay.showBuffering("Buffering past candles…");
+
+  const beforeDate = new Date(oldestCandleTime * 1000);
+  const fromDate   = new Date(beforeDate.getTime() - DEFAULT_DAYS_CANDLES * 86400 * 1000);
+  const toISO      = beforeDate.toISOString().slice(0, 10);
+  const fromISO    = fromDate.toISOString().slice(0, 10);
+
   try {
-    // v5 unified API
-    return chart.addSeries(LightweightCharts.LineSeries, options);
+    const response = await fetch(UPSTOX_HISTORICAL_URL(currentInstrumentKey, fromISO, toISO));
+    const result = await response.json();
+    const arr = (result && result.data && result.data.candles) || [];
+    const olderCandles = arr.map(normalizeCandle).filter(c => c !== null);
+
+    if (olderCandles.length > 0) {
+      const rawMap = new Map();
+      olderCandles.forEach(c => rawMap.set(c.time, c));
+      rawCandles.forEach(c => rawMap.set(c.time, c));
+      rawCandles = Array.from(rawMap.values()).sort((a, b) => a.time - b.time);
+
+      const aggregated = aggregateCandles(rawCandles, currentIntervalMin);
+      invalidateEMACache();
+      candleSeries.setData(aggregated);
+
+      lastCandle = aggregated.length > 0 ? aggregated[aggregated.length - 1] : null;
+      oldestCandleTime = aggregated.length > 0 ? aggregated[0].time : null;
+      currentRenderedDate = lastCandle ? getDateKeyIST(lastCandle.time) : null;
+      rebuildAndRenderOpeningRanges(aggregated);
+      refreshIndicators(aggregated);
+      if (totalCandlesValue) totalCandlesValue.textContent = String(aggregated.length);
+
+      if (olderCandles.length < 50) hasMoreHistory = false;
+
+      if (priceScaleAuto) applyAutoFitPriceScale();
+    } else {
+      hasMoreHistory = false;
+    }
+  } catch (error) {
+    console.error("Failed to load historical candles:", error);
+  } finally {
+    isLoadingHistory = false;
+    historyLoadBanner.style.display = "none";
+    triggerLoadHistoryBtn.disabled = false;
+    triggerLoadHistoryBtn.textContent = "Load";
+    LoadingOverlay.hideBuffering();
+  }
+}
+triggerLoadHistoryBtn.addEventListener("click", loadOlderHistoricalData);
+
+// ============================================================
+// SUBSCRIPTION STATUS + ON-DEMAND SUBSCRIBE
+// ============================================================
+async function checkSubscriptionStatus() {
+  if (!isMarketOpenNow()) {
+    subscribeBanner.classList.remove("visible");
+    return;
+  }
+  try {
+    const res = await fetch(SUBSCRIPTION_STATUS_URL(currentInstrumentKey));
+    if (!res.ok) return;
+    const data = await res.json();
+    if (!data.subscribed) {
+      subscribeBanner.classList.add("visible");
+      subscribeBannerText.textContent = "This instrument is not yet in the live feed. You can still see historical + intraday candles.";
+      subscribeBtn.disabled = false;
+    } else {
+      subscribeBanner.classList.remove("visible");
+    }
+  } catch (e) {
+    console.warn("subscription status check failed", e);
+  }
+}
+async function requestSubscription() {
+  if (!isMarketOpenNow()) {
+    subscribeBannerText.textContent = "Market is closed. Subscribe when the market reopens.";
+    return;
+  }
+  subscribeBtn.disabled = true;
+  subscribeBtn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Subscribing…`;
+  try {
+    const res = await fetch(SUBSCRIBE_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instrument_key: currentInstrumentKey }),
+    });
+    const data = await res.json();
+    if (data && data.subscribed) {
+      subscribeBanner.classList.remove("visible");
+      subscribeBanner.classList.add("ok");
+      subscribeBannerText.textContent = "Subscribed. Live feed starting…";
+      setTimeout(() => subscribeBanner.classList.remove("ok"), 3000);
+      connectWebSocket();
+    } else {
+      subscribeBannerText.textContent = "Subscribe request was rejected by the backend.";
+      subscribeBtn.disabled = false;
+    }
+  } catch (e) {
+    subscribeBannerText.textContent = "Subscribe failed: " + e.message;
+    subscribeBtn.disabled = false;
+  } finally {
+    subscribeBtn.innerHTML = `<i class="bi bi-plus-circle me-1"></i> Subscribe to live feed`;
+  }
+}
+subscribeBtn.addEventListener("click", requestSubscription);
+
+// ============================================================
+// WEBSOCKET MESSAGE
+// ============================================================
+function processWebSocketMessage(event) {
+  let payload;
+  try { payload = JSON.parse(event.data); } catch (error) { console.error("Unable to parse WebSocket payload:", error); return; }
+  if (!payload || typeof payload !== "object") return;
+  if (payload.type === "connected" || payload.type === "subscribed" || payload.type === "ping" || payload.event === "ping") return;
+  const payloadInstrumentKey = getPayloadInstrumentKey(payload);
+  if (!payloadInstrumentKey || payloadInstrumentKey !== currentInstrumentKey) return;
+  const candle = getPayloadCandle(payload);
+  if (candle) { upsertLiveCandle(candle); return; }
+  const ltp = getPayloadLtp(payload);
+  if (ltp === null) return;
+  const volume = getPayloadVolume(payload);
+  updateCandleFromLtp(ltp, getPayloadTimestamp(payload), volume);
+}
+
+function scheduleReconnect() {
+  if (pageClosing || reconnectTimer) return;
+  if (!isMarketOpenNow()) {
+    setConnectionStatus("closed", "Market Closed");
+    return;
+  }
+  reconnectAttempts += 1;
+  const reconnectDelay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), reconnectMaximumDelay);
+  setConnectionStatus("disconnected", "Retry " + Math.ceil(reconnectDelay / 1000) + "s");
+  reconnectTimer = window.setTimeout(() => { reconnectTimer = null; connectWebSocket(); }, reconnectDelay);
+}
+
+function connectWebSocket() {
+  if (!currentInstrumentKey || pageClosing) return;
+  if (!isMarketOpenNow()) {
+    setConnectionStatus("closed", "Market Closed");
+    return;
+  }
+  if (chartSocket && (chartSocket.readyState === WebSocket.OPEN || chartSocket.readyState === WebSocket.CONNECTING)) return;
+  setConnectionStatus("connecting", "Connecting");
+  try {
+    const wsUrl = getWebSocketUrl();
+    if (window.__DEBUG_WS__) console.log("[ws] connecting to", wsUrl);
+    chartSocket = new WebSocket(wsUrl);
+  } catch (error) {
+    console.error("Unable to create WebSocket:", error);
+    chartSocket = null;
+    scheduleReconnect();
+    return;
+  }
+  chartSocket.addEventListener("open", () => {
+    reconnectAttempts = 0;
+    setConnectionStatus("connected", "Live");
+    try {
+      chartSocket.send(JSON.stringify({
+        action: "subscribe",
+        instrument_key: currentInstrumentKey
+      }));
+    } catch (e) {
+      console.warn("Failed to send subscribe message", e);
+    }
+  });
+  chartSocket.addEventListener("message", processWebSocketMessage);
+  chartSocket.addEventListener("error", error => console.error("Chart WebSocket error:", error));
+  chartSocket.addEventListener("close", () => { chartSocket = null; if (!pageClosing) scheduleReconnect(); });
+}
+
+// ============================================================
+// GLOBAL SEARCH BAR
+// ============================================================
+let searchDebounce = null;
+let searchAbort = null;
+
+function pillClassFor(item) {
+  const t = String(item.instrument_type || "").toUpperCase();
+  if (t === "CE") return "ce";
+  if (t === "PE") return "pe";
+  if (t === "INDEX" || String(item.segment || "").includes("INDEX")) return "idx";
+  return "other";
+}
+
+function renderSearchResults(items) {
+  if (!items || !items.length) {
+    searchResults.innerHTML = `<div class="search-result-empty">No instruments found</div>`;
+    searchResults.classList.add("visible");
+    return;
+  }
+  searchResults.innerHTML = items.map(it => {
+    const key = it.instrument_key || "";
+    const sym = it.trading_symbol || it.name || key;
+    const pill = pillClassFor(it);
+    const type = String(it.instrument_type || "—").toUpperCase();
+    const metaBits = [];
+    if (it.strike_price != null) metaBits.push("₹" + Number(it.strike_price).toFixed(0));
+    if (it.expiry) metaBits.push(it.expiry);
+    return `<div class="search-result-item" data-key="${encodeURIComponent(key)}">
+      <span class="sym">${sym}</span>
+      <span class="meta">${metaBits.join(" · ")}</span>
+      <span class="pill ${pill}">${type}</span>
+    </div>`;
+  }).join("");
+  searchResults.classList.add("visible");
+}
+
+async function runGlobalSearch(q) {
+  if (!q || q.length < 2) { searchResults.classList.remove("visible"); return; }
+  if (searchAbort) searchAbort.abort();
+  searchAbort = new AbortController();
+  try {
+    const resp = await fetch(UPSTOX_SEARCH_URL(q), { signal: searchAbort.signal });
+    if (!resp.ok) {
+      searchResults.innerHTML = `<div class="search-result-empty">Search failed</div>`;
+      searchResults.classList.add("visible");
+      return;
+    }
+    const data = await resp.json();
+    renderSearchResults(data.data || []);
+  } catch (e) {
+    if (e.name !== "AbortError") console.warn("search error:", e);
+  }
+}
+
+globalSearchInput.addEventListener("input", function () {
+  const q = this.value.trim();
+  if (searchDebounce) clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => runGlobalSearch(q), 320);
+});
+globalSearchInput.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") { searchResults.classList.remove("visible"); this.blur(); }
+});
+document.addEventListener("click", function (e) {
+  if (!e.target.closest(".global-search")) searchResults.classList.remove("visible");
+});
+searchResults.addEventListener("click", function (e) {
+  const item = e.target.closest(".search-result-item");
+  if (!item) return;
+  const key = decodeURIComponent(item.dataset.key);
+  if (!key) return;
+  searchResults.classList.remove("visible");
+  globalSearchInput.value = "";
+  window.open("/chart/" + encodeURIComponent(key), "_self");
+});
+
+try { currentInstrumentKey = JSON.parse(document.getElementById("instrument-key-data").textContent); } catch (error) { console.error("Unable to parse instrument key:", error); }
+
+// ============================================================
+// SWAP OPTION (CE <-> PE) — FLOATING FAB
+// ============================================================
+let swapResolvedMeta = null;
+let swapCurrentTypeLabel = "";
+let swapInFlight = false;
+
+function normalizeTypeLabel(t) {
+  const s = String(t || "").toUpperCase().trim();
+  if (s === "CE" || s === "CALL" || s === "C") return "CE";
+  if (s === "PE" || s === "PUT"  || s === "P") return "PE";
+  return "";
+}
+
+function oppositeTypeLabel(t) {
+  if (t === "CE") return "PE";
+  if (t === "PE") return "CE";
+  return "";
+}
+
+function isOptionInstrument(meta, key) {
+  if (!meta) return false;
+  const k = String(key || "");
+  if (!k) return false;
+  if (k.startsWith("NSE_INDEX|") || k.startsWith("BSE_INDEX|")) return false;
+  const t = normalizeTypeLabel(meta.instrument_type || meta.option_type);
+  if (!t) return false;
+  const strike = Number(meta.strike_price);
+  if (!Number.isFinite(strike) || strike <= 0) return false;
+  return true;
+}
+
+async function fetchInstrumentMeta(instrumentKey) {
+  try {
+    const resp = await fetch(`/api/upstox/instrument?instrument_key=${encodeURIComponent(instrumentKey)}`);
+    if (!resp.ok) return null;
+    const body = await resp.json();
+    return (body && body.data) ? body.data : null;
   } catch (err) {
-    console.warn("addLineSeriesSafe failed:", err);
+    console.warn("[swap] meta fetch failed:", err);
     return null;
   }
 }
 
-// ============================================================
-// INDICATOR REFRESH ORCHESTRATOR
-// ============================================================
-function refreshIndicators(candles) {
-  if (!chart || !candleSeries) return;
+async function findOppositeInstrumentKey(meta, oppositeType) {
+  const underlying = String(meta.underlying_symbol || meta.underlying || "").trim();
+  const strike = Number(meta.strike_price);
+  const expiry = String(meta.expiry || "").trim();
+  if (!underlying || !Number.isFinite(strike) || strike <= 0 || !oppositeType) return null;
 
-  // EMAs (lines)
-  renderEMALines(candles);
-
-  // EMA crosses (markers)
-  if (indicatorState.emaCross.enabled) {
-    const crosses = getOrComputeEMACrosses(candles);
-    const markers = crosses.map(c => ({
-      time: c.time,
-      position: c.type === "bull" ? "belowBar" : "aboveBar",
-      color: c.type === "bull" ? "#089981" : "#f23645",
-      shape: c.type === "bull" ? "arrowUp" : "arrowDown",
-      text: c.type === "bull" ? "BUY" : "SELL",
-    }));
-    applyMarkersToCandleSeries(markers);
-  } else {
-    applyMarkersToCandleSeries([]);
-  }
-
-  // Supertrend labels
-  renderSupertrendLabels(candles);
-
-  // Prev-Day-AVG
-  renderDayAvg(candles);
-
-  // SR levels & labels
-  if (indicatorState.srLevels.enabled) {
-    performFullSRScan(candles);
-    renderSRLines();
-  }
-  if (indicatorState.srLabels.enabled) {
-    renderSRLabels(candles);
-  }
-
-  scheduleLevelLabelUpdate();
-  scheduleSRLabelUpdate();
-  scheduleSupertrendLabelUpdate();
-  scheduleDayAvgLabelUpdate();
-}
-
-// Placeholder — implemented elsewhere in the full template
-function scheduleLevelLabelUpdate() { /* pivot labels */ }
-
-// ============================================================
-// INITIALISATION
-// ============================================================
-(function init() {
-  try {
-    const keyEl = document.getElementById("instrument-key-data");
-    currentInstrumentKey = keyEl ? JSON.parse(keyEl.textContent) : "";
-  } catch (e) { console.error("Cannot read instrument key:", e); return; }
-
-  // Create the chart & candle series using v5 API
-  chart = LightweightCharts.createChart(chartContainer, {
-    layout: {
-      background: { type: "solid", color: "#131722" },
-      textColor: "#d1d4dc",
-    },
-    grid: {
-      vertLines: { color: "rgba(42,46,57,0.6)" },
-      horzLines: { color: "rgba(42,46,57,0.6)" },
-    },
-    rightPriceScale: { borderColor: "#2a2e39" },
-    timeScale: { borderColor: "#2a2e39", timeVisible: true, secondsVisible: false },
-    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+  const params = new URLSearchParams({
+    query: `${underlying} ${strike} ${oppositeType}`,
+    records: "30",
+    page_number: "1",
+    exchanges: "NSE,BSE",
+    segments: "FO",
+    instrument_types: oppositeType,
   });
 
-  candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+  try {
+    const resp = await fetch(`/api/upstox/search?${params.toString()}`);
+    if (!resp.ok) return null;
+    const body = await resp.json();
+    const items = (body && body.data) || [];
+
+    const candidates = items.filter(it => {
+      if (!it || typeof it !== "object") return false;
+      if (normalizeTypeLabel(it.instrument_type) !== oppositeType) return false;
+      const itStrike = Number(it.strike_price);
+      if (!Number.isFinite(itStrike) || itStrike !== strike) return false;
+      return !!it.instrument_key;
+    });
+    if (!candidates.length) return null;
+
+    if (expiry) {
+      const expiryMatch = candidates.find(it => String(it.expiry || "").trim() === expiry);
+      if (expiryMatch) return expiryMatch.instrument_key;
+    }
+    return candidates[0].instrument_key;
+  } catch (err) {
+    console.warn("[swap] search failed:", err);
+    return null;
+  }
+}
+
+async function initSwapOptionButton() {
+  if (!swapOptionBtn) return;
+  try {
+    const meta = await fetchInstrumentMeta(currentInstrumentKey);
+    swapResolvedMeta = meta || {};
+    if (!isOptionInstrument(swapResolvedMeta, currentInstrumentKey)) {
+      swapOptionBtn.hidden = true;
+      return;
+    }
+    swapCurrentTypeLabel = normalizeTypeLabel(swapResolvedMeta.instrument_type || swapResolvedMeta.option_type);
+    const opp = oppositeTypeLabel(swapCurrentTypeLabel);
+    if (!opp) {
+      swapOptionBtn.hidden = true;
+      return;
+    }
+    if (swapOptionLabel) swapOptionLabel.textContent = `Swap to ${opp}`;
+    swapOptionBtn.title = `Open opposite ${opp} for the same strike` +
+      (swapResolvedMeta.underlying_symbol ? ` (${swapResolvedMeta.underlying_symbol} ${swapResolvedMeta.strike_price})` : "");
+    swapOptionBtn.hidden = false;
+  } catch (err) {
+    console.warn("[swap] init failed:", err);
+    if (swapOptionBtn) swapOptionBtn.hidden = true;
+  }
+}
+
+async function doSwapOption() {
+  if (swapInFlight) return;
+  if (!swapResolvedMeta || !swapCurrentTypeLabel) return;
+  const opp = oppositeTypeLabel(swapCurrentTypeLabel);
+  if (!opp) return;
+
+  swapInFlight = true;
+  swapOptionBtn.classList.add("loading");
+  swapOptionBtn.disabled = true;
+  const origLabel = swapOptionLabel ? swapOptionLabel.textContent : "";
+  if (swapOptionLabel) swapOptionLabel.textContent = "Searching…";
+
+  try {
+    const oppKey = await findOppositeInstrumentKey(swapResolvedMeta, opp);
+    if (oppKey && oppKey !== currentInstrumentKey) {
+      window.open("/chart/" + encodeURIComponent(oppKey), "_self");
+      return;
+    }
+    if (swapOptionLabel) swapOptionLabel.textContent = "Not found";
+    setTimeout(() => {
+      if (swapOptionLabel) swapOptionLabel.textContent = origLabel;
+      swapOptionBtn.classList.remove("loading");
+      swapOptionBtn.disabled = false;
+      swapInFlight = false;
+    }, 1800);
+  } catch (err) {
+    console.error("[swap] error:", err);
+    if (swapOptionLabel) swapOptionLabel.textContent = "Error";
+    setTimeout(() => {
+      if (swapOptionLabel) swapOptionLabel.textContent = origLabel;
+      swapOptionBtn.classList.remove("loading");
+      swapOptionBtn.disabled = false;
+      swapInFlight = false;
+    }, 1800);
+  }
+}
+
+if (swapOptionBtn) {
+  swapOptionBtn.addEventListener("click", doSwapOption);
+  document.addEventListener("keydown", (e) => {
+    if (!swapOptionBtn || swapOptionBtn.hidden) return;
+    if (e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      doSwapOption();
+    } else if (e.ctrlKey && e.shiftKey && !e.altKey && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      doSwapOption();
+    }
+  });
+}
+
+startMarketStatusWatcher();
+initSwapOptionButton().catch((err) => console.warn("[swap] init promise rejected:", err));
+
+/* ============================================================
+   OPENING RANGE / LEVEL CALCULATIONS
+   ============================================================ */
+function getDateKeyIST(unixSeconds) {
+  if (!Number.isFinite(unixSeconds)) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(unixSeconds * 1000));
+  const map = {};
+  parts.forEach(p => { if (p.type !== "literal") map[p.type] = p.value; });
+  return `${map.year}-${map.month}-${map.day}`;
+}
+function calculateOpeningRangeForDay(dayCandles) {
+  if (!Array.isArray(dayCandles) || dayCandles.length === 0) return null;
+  const sorted = dayCandles.slice().sort((a, b) => a.time - b.time);
+  const first = sorted[0];
+  if (!first) return null;
+  const open  = Number(first.open);
+  const high  = Number(first.high);
+  const low   = Number(first.low);
+  const close = Number(first.close);
+  if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return null;
+  const r1 = high;
+  const s1 = low;
+  const average = (r1 + s1) / 2;
+  const r1Diff = r1 - average;
+  const s1Diff = average - s1;
+  const r2 = r1 + r1Diff;
+  const r3 = r2 + r1Diff;
+  const s2 = s1 - s1Diff;
+  const s3 = s2 - s1Diff;
+  return { open, high, low, close, average, levels: { r1, r2, r3, s1, s2, s3 } };
+}
+function buildOpeningRangesFromCandles(candles) {
+  const grouped = {};
+  (candles || []).forEach(c => {
+    const key = getDateKeyIST(c.time);
+    if (!key) return;
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(c);
+  });
+  const result = {};
+  Object.keys(grouped).forEach(date => {
+    const r = calculateOpeningRangeForDay(grouped[date]);
+    if (r) result[date] = r;
+  });
+  return result;
+}
+
+function addLineSeriesSafe(options) {
+  if (!chart) return null;
+  try {
+    if (typeof chart.addSeries === "function" && LightweightCharts.LineSeries) return chart.addSeries(LightweightCharts.LineSeries, options);
+    if (typeof chart.addLineSeries === "function") return chart.addLineSeries(options);
+  } catch (err) { console.warn("addLineSeriesSafe failed:", err); }
+  return null;
+}
+function getLevelColor(levelName) { return levelName.startsWith("r") ? "#f23645" : "#089981"; }
+function getRangeLevelColor(rangeKey) {
+  if (rangeKey === "high") return "#fd7e14";
+  if (rangeKey === "low")  return "#20c997";
+  return "#2962ff";
+}
+
+function ensureLevelLabelLayer() {
+  if (levelLabelLayer) return levelLabelLayer;
+  if (!chartContainer) return null;
+  if (getComputedStyle(chartContainer).position === "static") chartContainer.style.position = "relative";
+  levelLabelLayer = document.createElement("div");
+  levelLabelLayer.className = "level-label-layer";
+  chartContainer.appendChild(levelLabelLayer);
+  return levelLabelLayer;
+}
+function createLevelLabel(levelName, startTime, value, color) {
+  const layer = ensureLevelLabelLayer();
+  if (!layer) return;
+  const element = document.createElement("div");
+  element.className = "level-line-label";
+  element.textContent = String(levelName).toUpperCase() + " (" + Number(value).toFixed(2) + ")";
+  element.style.backgroundColor = color;
+  layer.appendChild(element);
+  levelLabels.push({ element, startTime, value, color, levelName });
+}
+function scheduleLevelLabelUpdate() {
+  if (levelLabelUpdateScheduled) return;
+  levelLabelUpdateScheduled = true;
+  requestAnimationFrame(() => {
+    levelLabelUpdateScheduled = false;
+    updateLevelLabelPositions();
+    updateDayAvgLabelPositions();
+    try { updateSupertrendLabelPositions(); } catch (e) {}   // NEW
+  });
+}
+function updateLevelLabelPositions() {
+  if (!chart || !candleSeries || !levelLabels.length) return;
+  const timeScale = chart.timeScale();
+  const containerWidth = chartContainer.clientWidth;
+  const paneHeight = getPaneHeight();
+  levelLabels.forEach(label => {
+    if (!isLabelGroupVisible(label.levelName)) { label.element.style.display = "none"; return; }
+    const x = timeScale.timeToCoordinate(label.startTime);
+    const y = candleSeries.priceToCoordinate(label.value);
+    if (x === null || y === null || !Number.isFinite(x) || !Number.isFinite(y)) { label.element.style.display = "none"; return; }
+    if (y < -8 || y > paneHeight + 8) { label.element.style.display = "none"; return; }
+    if (x < -120 || x > containerWidth + 120) { label.element.style.display = "none"; return; }
+    label.element.style.display = "block";
+    label.element.style.left = Math.round(x + 4) + "px";
+    label.element.style.top  = Math.round(y) + "px";
+  });
+}
+
+function drawDayLevelLine(levelName, rawValue, startTime, endTime, color, lineStyle) {
+  if (rawValue === null || rawValue === undefined || rawValue === "") return;
+  const value = Number(rawValue);
+  if (!Number.isFinite(value)) return;
+  const lineSeries = addLineSeriesSafe({ color, lineWidth: 1, lineStyle, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, autoscaleInfoProvider: () => null });
+  if (!lineSeries) return;
+  const data = [{ time: startTime, value }];
+  if (endTime !== startTime) data.push({ time: endTime, value });
+  try { lineSeries.setData(data); } catch (err) { console.warn("setData failed for line:", err); return; }
+  levelLines.push(lineSeries);
+  createLevelLabel(levelName, startTime, value, color);
+}
+function removeOpeningRangeLevels() {
+  if (chart) levelLines.forEach(line => { try { chart.removeSeries(line); } catch (err) { console.warn("removeSeries failed:", err); } });
+  levelLines = [];
+  levelLabels.forEach(label => {
+    try { if (label.element && label.element.parentNode) label.element.parentNode.removeChild(label.element); }
+    catch (err) { console.warn("remove label failed:", err); }
+  });
+  levelLabels = [];
+}
+function renderOpeningRangeLines() {
+  removeOpeningRangeLevels();
+  if (!chart || !candleSeries) return;
+  const dates = Object.keys(calculatedOpeningRanges).sort();
+  if (dates.length === 0) return;
+  const allData = candleSeries.data();
+  dates.forEach(date => {
+    const openingRange = calculatedOpeningRanges[date];
+    if (!openingRange) return;
+    const dayCandles = allData.filter(c => getDateKeyIST(c.time) === date);
+    if (dayCandles.length === 0) return;
+    const startTime = dayCandles[0].time;
+    const endTime   = dayCandles[dayCandles.length - 1].time;
+    const levels = openingRange.levels || {};
+    ["r2", "r3"].forEach(name => drawDayLevelLine(name, levels[name], startTime, endTime, getLevelColor(name), LightweightCharts.LineStyle.Dashed));
+    drawDayLevelLine("high", openingRange.high,     startTime, endTime, getRangeLevelColor("high"), LightweightCharts.LineStyle.Solid);
+    drawDayLevelLine("avg",  openingRange.average,  startTime, endTime, getRangeLevelColor("avg"),  LightweightCharts.LineStyle.Solid);
+    drawDayLevelLine("low",  openingRange.low,      startTime, endTime, getRangeLevelColor("low"),  LightweightCharts.LineStyle.Solid);
+    ["s2", "s3"].forEach(name => drawDayLevelLine(name, levels[name], startTime, endTime, getLevelColor(name), LightweightCharts.LineStyle.Dashed));
+  });
+  scheduleLevelLabelUpdate();
+  updateLevelBadgesForLatestDate();
+}
+function rebuildAndRenderOpeningRanges(allCandles) {
+  calculatedOpeningRanges = buildOpeningRangesFromCandles(allCandles);
+  renderOpeningRangeLines();
+}
+
+function updateLevelBadgesForLatestDate() {
+  if (!levelStatusBar) return;
+  const dates = Object.keys(calculatedOpeningRanges).sort();
+  if (dates.length === 0) { resetLevelBadges(); return; }
+  const latest = dates[dates.length - 1];
+  const calc = calculatedOpeningRanges[latest];
+  const levels = (calc && calc.levels) || {};
+  levelStatusBar.querySelectorAll(".badge").forEach(badge => {
+    const name = badge.dataset.level;
+    const value = Number(levels[name]);
+    if (Number.isFinite(value)) badge.textContent = name.toUpperCase() + " " + value.toFixed(2);
+    else badge.textContent = name.toUpperCase();
+  });
+}
+function resetLevelBadges() {
+  if (!levelStatusBar) return;
+  levelStatusBar.querySelectorAll(".badge").forEach(badge => {
+    const name = badge.dataset.level;
+    if (name) badge.textContent = name.toUpperCase();
+  });
+}
+
+function createChartTooltip() {
+  if (chartTooltip) return;
+  chartTooltip = document.createElement("div");
+  chartTooltip.className = "chart-tooltip";
+  chartContainer.appendChild(chartTooltip);
+}
+function hideTooltip() { if (chartTooltip) chartTooltip.style.display = "none"; }
+function formatTooltipTime(time) {
+  if (typeof time !== "number") return "";
+  const date = new Date(time * 1000);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).format(date);
+}
+function formatPrice(v) { const n = Number(v); return Number.isFinite(n) ? n.toFixed(2) : "—"; }
+function handleCrosshairMove(param) {
+  if (!chartTooltip || !candleSeries) return;
+  if (!param || !param.time || !param.point) { hideTooltip(); return; }
+  const seriesData = param.seriesData ? param.seriesData.get(candleSeries) : null;
+  if (!seriesData) { hideTooltip(); return; }
+  const open  = Number(seriesData.open);
+  const high  = Number(seriesData.high);
+  const low   = Number(seriesData.low);
+  const close = Number(seriesData.close);
+  if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) { hideTooltip(); return; }
+  const timeStr = formatTooltipTime(param.time);
+  chartTooltip.innerHTML = `
+    <div style="font-weight:600;margin-bottom:4px;">${timeStr}</div>
+    <div>O: <strong>${formatPrice(open)}</strong></div>
+    <div>H: <strong>${formatPrice(high)}</strong></div>
+    <div>L: <strong>${formatPrice(low)}</strong></div>
+    <div>C: <strong>${formatPrice(close)}</strong></div>
+  `;
+  chartTooltip.style.display = "block";
+  const tw = chartTooltip.offsetWidth;
+  const th = chartTooltip.offsetHeight;
+  let left = param.point.x + 15;
+  let top  = param.point.y + 15;
+  if (left + tw > chartContainer.clientWidth) left = param.point.x - tw - 15;
+  if (top + th > chartContainer.clientHeight) top  = param.point.y - th - 15;
+  chartTooltip.style.left = Math.max(5, left) + "px";
+  chartTooltip.style.top  = Math.max(5, top) + "px";
+}
+
+function createChart(displayCandles) {
+  chart = LightweightCharts.createChart(
+    chartContainer,
+    {
+      width: chartContainer.clientWidth,
+      height: chartContainer.clientHeight,
+      layout: { background: { color: "#131722" }, textColor: "#d1d4dc" },
+      grid: { vertLines: { color: "#2a2e39" }, horzLines: { color: "#2a2e39" } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal, vertLine: { labelBackgroundColor: "#2962ff", labelBorderColor: "#2962ff" } },
+      rightPriceScale: {
+        borderColor: "#2a2e39",
+        scaleMargins: { top: PRICE_HEADROOM_PCT, bottom: PRICE_HEADROOM_PCT },
+        autoScale: true,
+      },
+      timeScale: {
+        borderColor: "#2a2e39",
+        timeVisible: true, secondsVisible: false,
+        rightOffset: 8, barSpacing: 8, minBarSpacing: 3,
+        fixLeftEdge: false, fixRightEdge: false, lockVisibleTimeRangeOnResize: false,
+        tickMarkFormatter: (time, tickMarkType) => formatTimeLabel(time, tickMarkType)
+      },
+      localization: { locale: "en-IN", timeFormatter: (time) => formatFullDate(time) }
+    }
+  );
+
+  const initialTickSize = dynamicPriceScale.tickSize;
+  const initialPrecision = (Number.isFinite(initialTickSize) && initialTickSize > 0) ? getPricePrecision(initialTickSize) : 2;
+  const initialMinMove = (Number.isFinite(initialTickSize) && initialTickSize > 0) ? initialTickSize : 0.01;
+
+  const candleOptions = {
     upColor: "#089981", downColor: "#f23645",
     borderUpColor: "#089981", borderDownColor: "#f23645",
     wickUpColor: "#089981", wickDownColor: "#f23645",
+    priceFormat: { type: "price", precision: initialPrecision, minMove: initialMinMove },
+    autoscaleInfoProvider: (original) => {
+      try {
+        const res = original();
+        if (!res || !res.priceRange) return res;
+        const { minValue, maxValue } = res.priceRange;
+        if (!Number.isFinite(minValue) || !Number.isFinite(maxValue)) return res;
+        const range = maxValue - minValue;
+        if (range <= 0) return res;
+        const pad = Math.max(range * PRICE_HEADROOM_PCT, Math.abs(maxValue) * 0.002);
+        return {
+          priceRange: {
+            minValue: Math.max(PRICE_FLOOR, minValue - pad),
+            maxValue: maxValue + pad,
+          },
+        };
+      } catch (e) {
+        return original();
+      }
+    },
+  };
+
+  if (typeof chart.addSeries === "function" && LightweightCharts.CandlestickSeries) candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, candleOptions);
+  else if (typeof chart.addCandlestickSeries === "function") candleSeries = chart.addCandlestickSeries(candleOptions);
+  if (!candleSeries) throw new Error("Unable to create the candlestick series.");
+
+  if (displayCandles.length > 0) {
+    candleSeries.setData(displayCandles);
+    lastCandle = displayCandles[displayCandles.length - 1];
+    oldestCandleTime = displayCandles[0].time;
+    updateLivePrice(lastCandle.close);
+    chart.timeScale().fitContent();
+    currentRenderedDate = getDateKeyIST(lastCandle.time);
+    if (totalCandlesValue) totalCandlesValue.textContent = String(displayCandles.length);
+  }
+
+  ensureLevelLabelLayer();
+  ensureSRLabelLayer();
+  ensureSupertrendLabelLayer();   // NEW
+  createChartTooltip();
+  chart.subscribeCrosshairMove(handleCrosshairMove);
+
+  chart.timeScale().subscribeVisibleTimeRangeChange(() => {
+    scheduleLevelLabelUpdate();
+    scheduleSRLabelUpdate();
+    scheduleDayAvgLabelUpdate();
+    scheduleSupertrendLabelUpdate();   // NEW
+  });
+  chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+    scheduleLevelLabelUpdate();
+    scheduleSRLabelUpdate();
+    scheduleDayAvgLabelUpdate();
+    scheduleSupertrendLabelUpdate();   // NEW
+    updateDynamicPriceScale();
+    if (!range || isLoadingHistory || !hasMoreHistory) return;
+    historyLoadBanner.style.display = range.from < 5 ? "flex" : "none";
   });
 
-  // Initialise UI
-  initTimeframeUI();
-  startMarketStatusWatcher();
-  startPriceScaleWatcher();
-  applyAutoFitPriceScale();
+  const resizeChart = () => {
+    if (!chart) return;
+    chart.applyOptions({ width: chartContainer.clientWidth, height: chartContainer.clientHeight });
+    scheduleLevelLabelUpdate();
+    scheduleSRLabelUpdate();
+    scheduleDayAvgLabelUpdate();
+    scheduleSupertrendLabelUpdate();   // NEW
+    updateDynamicPriceScale();
+  };
+  window.addEventListener("resize", resizeChart);
+  window.addEventListener("orientationchange", () => setTimeout(resizeChart, 200));
+  if (typeof ResizeObserver !== "undefined") {
+    const resizeObserver = new ResizeObserver(resizeChart);
+    resizeObserver.observe(chartCard);
+  }
 
-  // Sync indicator toggle buttons with the initial state
-  document.querySelectorAll("[data-indicator]").forEach(btn => {
-    const key = btn.dataset.indicator;
-    if (indicatorState[key] && "enabled" in indicatorState[key]) {
-      btn.classList.toggle("active", !!indicatorState[key].enabled);
+  calculatedOpeningRanges = buildOpeningRangesFromCandles(displayCandles);
+  renderOpeningRangeLines();
+  refreshIndicators(displayCandles);
+
+  updateDynamicPriceScale();
+  startPriceScaleWatcher();
+
+  applyAutoFitPriceScale();
+}
+
+if (resetPriceScaleBtn) {
+  resetPriceScaleBtn.addEventListener("click", function () {
+    applyAutoFitPriceScale();
+  });
+}
+if (freezePriceScaleBtn) {
+  freezePriceScaleBtn.addEventListener("click", function () {
+    if (priceScaleAuto) applyFreePriceScale();
+    else applyAutoFitPriceScale();
+  });
+}
+
+// ============================================================
+// BOOTSTRAP THE CHART
+// ============================================================
+async function bootstrapChart() {
+  try {
+    initTimeframeUI();
+
+    LoadingOverlay.reset();
+    LoadingOverlay.setProgress(6);
+    LoadingOverlay.setStatus("Fetching candles from Upstox…", "Loading Chart");
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    LoadingOverlay.setProgress(24);
+    LoadingOverlay.setStatus("Fetching intraday + historical candles…");
+    const fetched = await fetchCandlesFromUpstox(currentInstrumentKey);
+
+    if (!fetched || fetched.length === 0) {
+      LoadingOverlay.setStatus("No candle data available for this instrument.", "Empty");
+      LoadingOverlay.hide(1200);
+      await checkSubscriptionStatus();
+      return;
+    }
+
+    rawCandles = fetched.slice();
+
+    LoadingOverlay.setProgress(64);
+    LoadingOverlay.setStatus(`Loaded ${fetched.length} candles — building chart…`);
+    await new Promise(r => requestAnimationFrame(r));
+
+    const displayCandles = aggregateCandles(rawCandles, currentIntervalMin);
+
+    try {
+      createChart(displayCandles);
+    } catch (err) {
+      console.error("Chart init failed:", err);
+      LoadingOverlay.setStatus("Chart failed to render", "Error");
+      LoadingOverlay.hide(600);
+      return;
+    }
+
+    LoadingOverlay.setProgress(86);
+    LoadingOverlay.setStatus("Rendering indicators & levels…");
+    await new Promise(r => requestAnimationFrame(r));
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+    LoadingOverlay.setProgress(100);
+    LoadingOverlay.setStatus("Ready");
+    LoadingOverlay.hide(260);
+
+    await checkSubscriptionStatus();
+
+    if (isMarketOpenNow()) {
+      try { connectWebSocket(); } catch (err) { console.error("WebSocket init failed:", err); }
+    } else {
+      setConnectionStatus("closed", "Market Closed");
+    }
+  } catch (err) {
+    console.error("Chart bootstrap failed:", err);
+    LoadingOverlay.setStatus("Unexpected error while loading chart", "Error");
+    LoadingOverlay.hide(800);
+  }
+}
+
+if (document.readyState === "complete" || document.readyState === "interactive") {
+  requestAnimationFrame(() => bootstrapChart());
+} else {
+  window.addEventListener("DOMContentLoaded", () => {
+    requestAnimationFrame(() => bootstrapChart());
+  });
+}
+
+window.addEventListener("beforeunload", () => {
+  pageClosing = true;
+  stopPriceScaleWatcher();
+  stopMarketStatusWatcher();
+  if (reconnectTimer) window.clearTimeout(reconnectTimer);
+  if (chartSocket) chartSocket.close(1000, "Chart page closed");
+});
+
+// ============================================================
+// COMPLETE CHART DATA JSON EXPORT
+// ============================================================
+(function initChartJSONExport() {
+  const card = document.getElementById("jsonExportCard");
+  const startInput = document.getElementById("jsonExportStartDate");
+  const endInput = document.getElementById("jsonExportEndDate");
+  const fastInput = document.getElementById("jsonExportEmaFast");
+  const slowInput = document.getElementById("jsonExportEmaSlow");
+  const stPeriodInput = document.getElementById("jsonExportStPeriod");       // NEW
+  const stMultiplierInput = document.getElementById("jsonExportStMultiplier"); // NEW
+  const leftInput = document.getElementById("jsonExportSrLeft");
+  const rightInput = document.getElementById("jsonExportSrRight");
+  const srModeRadios = document.querySelectorAll('input[name="jsonExportSrMode"]');
+  const presetCheckboxes = document.querySelectorAll('.json-export-sr-preset');
+  const downloadButton = document.getElementById("downloadChartJsonBtn");
+  const status = document.getElementById("jsonExportStatus");
+
+  if (!card || !startInput || !endInput || !fastInput || !slowInput ||
+      !leftInput || !rightInput || !downloadButton || !status) {
+    console.error("[json-export] Required export elements are missing.");
+    return;
+  }
+
+  // Initialize Supertrend export inputs from current chart settings
+  if (stPeriodInput) stPeriodInput.value = String(indicatorState.supertrend.period);
+  if (stMultiplierInput) stMultiplierInput.value = String(indicatorState.supertrend.multiplier);
+
+  let defaultRangeInitialized = false;
+  let rangeInitializedFromFallback = false;
+  let userChangedExportDates = false;
+
+  function setStatus(message, isError) {
+    status.textContent = message;
+    status.classList.toggle("error", Boolean(isError));
+  }
+
+  function getSelectedSRMode() {
+    for (const r of srModeRadios) {
+      if (r.checked) return r.value;
+    }
+    return "manual";
+  }
+
+  function getSelectedSRPresets() {
+    const result = [];
+    for (const cb of presetCheckboxes) {
+      if (!cb.checked) continue;
+      const parts = String(cb.value || "").split("/").map(Number);
+      if (parts.length !== 2) continue;
+      const [l, r] = parts;
+      if (!Number.isInteger(l) || !Number.isInteger(r)) continue;
+      if (l < 1 || l > 200 || r < 1 || r > 200) continue;
+      result.push({ key: cb.value, left_bars: l, right_bars: r });
+    }
+    return result;
+  }
+
+  function updateSRModeUI() {
+    const mode = getSelectedSRMode();
+    document.querySelectorAll("[data-sr-mode]").forEach(el => {
+      el.style.display = (el.dataset.srMode === mode) ? "" : "none";
+    });
+    if (mode === "presets") {
+      const count = getSelectedSRPresets().length;
+      if (count === 0) {
+        setStatus("Preset mode: select at least one preset before downloading.", true);
+      } else {
+        setStatus(`Preset mode: ${count} preset${count > 1 ? "s" : ""} ready for export.`, false);
+      }
+    } else {
+      setStatus("Manual mode: enter left/right bars for a single SR level-set.", false);
+    }
+  }
+
+  function handlePresetChange() {
+    if (getSelectedSRMode() === "presets") {
+      const count = getSelectedSRPresets().length;
+      if (count === 0) {
+        setStatus("Preset mode: select at least one preset before downloading.", true);
+      } else {
+        setStatus(`Preset mode: ${count} preset${count > 1 ? "s" : ""} ready for export.`, false);
+      }
+    }
+  }
+
+  srModeRadios.forEach(r => r.addEventListener("change", updateSRModeUI));
+  presetCheckboxes.forEach(cb => cb.addEventListener("change", handlePresetChange));
+  updateSRModeUI();
+
+  function getChartCandles() {
+    if (!candleSeries || typeof candleSeries.data !== "function") return [];
+    const rows = candleSeries.data();
+    return Array.isArray(rows) ? rows.slice() : [];
+  }
+
+  function getDateKeyForExport(unixSeconds) {
+    if (typeof getDateKeyIST === "function") return getDateKeyIST(Number(unixSeconds));
+    const d = new Date(Number(unixSeconds) * 1000);
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit"
+    }).format(d);
+  }
+
+  function getLatestElevenTradingDates(candles) {
+    const todayKey = getDateKeyForExport(Math.floor(Date.now() / 1000));
+    const dates = [...new Set(candles
+      .filter(c => isValidExportCandle(c))
+      .map(c => getDateKeyForExport(c.time))
+      .filter(Boolean)
+      .filter(date => date <= todayKey))]
+      .sort();
+    return dates.slice(-11);
+  }
+
+  function initializeDefaultRange(force) {
+    if (defaultRangeInitialized && !force) return;
+    const candles = getChartCandles();
+    const dates = getLatestElevenTradingDates(candles);
+    const todayKey = getDateKeyForExport(Math.floor(Date.now() / 1000));
+
+    if (dates.length) {
+      startInput.value = dates[0];
+      rangeInitializedFromFallback = false;
+      endInput.value = todayKey;
+      if (dates.length < 11) {
+        setStatus(`Found ${dates.length} available trading date(s); exporting through today. EMA 9/21 · Supertrend ATR 10×3 · Opening-range analysis per day.`, false);
+      } else {
+        setStatus("Default range: latest 11 available trading dates · EMA 9/21 · Supertrend ATR 10×3 · Opening-range analysis per day.", false);
+      }
+    } else {
+      rangeInitializedFromFallback = true;
+      const now = new Date();
+      const ist = new Date(now.getTime() + 330 * 60000);
+      const start = new Date(Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() - 10));
+      startInput.value = start.toISOString().slice(0, 10);
+      endInput.value = todayKey;
+      setStatus("Waiting for candle history; default date range is the latest 11 calendar dates.", false);
+    }
+    defaultRangeInitialized = true;
+  }
+
+  [startInput, endInput].forEach(input => {
+    input.addEventListener("change", () => { userChangedExportDates = true; });
+  });
+
+  card.addEventListener("toggle", () => {
+    if (card.open && (!defaultRangeInitialized || (rangeInitializedFromFallback && !userChangedExportDates))) {
+      initializeDefaultRange(true);
     }
   });
 
-  // Toggle listeners for indicators
-  document.querySelectorAll("[data-indicator]").forEach(btn => {
-    btn.addEventListener("click", function () {
-      const key = this.dataset.indicator;
-      if (!indicatorState[key] || !("enabled" in indicatorState[key])) return;
-      indicatorState[key].enabled = !indicatorState[key].enabled;
-      this.classList.toggle("active", indicatorState[key].enabled);
-      if (candleSeries) refreshIndicators(candleSeries.data());
+  function parseInteger(input, label, min, max) {
+    const value = Number(input.value);
+    if (!Number.isInteger(value) || value < min || value > max) {
+      throw new Error(`${label} must be a whole number between ${min} and ${max}.`);
+    }
+    return value;
+  }
+
+  function parseFloatNumber(input, label, min, max) {
+    const value = Number(input.value);
+    if (!Number.isFinite(value) || value < min || value > max) {
+      throw new Error(`${label} must be a number between ${min} and ${max}.`);
+    }
+    return value;
+  }
+
+  function isValidExportCandle(c) {
+    if (!c || !Number.isFinite(Number(c.time))) return false;
+    const fields = ["open", "high", "low", "close"];
+    return fields.every(key => Number.isFinite(Number(c[key])) && Number(c[key]) > 0);
+  }
+
+  function toISTTimestamp(unixSeconds) {
+    const d = new Date(Number(unixSeconds) * 1000);
+    if (!Number.isFinite(d.getTime())) throw new Error("A candle contains an invalid timestamp.");
+    const shifted = new Date(d.getTime() + 330 * 60000);
+    return shifted.toISOString().replace("Z", "+05:30");
+  }
+
+  function calculateEMAForExport(candles, period) {
+    const multiplier = 2 / (period + 1);
+    let previous = null;
+    return candles.map(c => {
+      const close = Number(c.close);
+      previous = previous === null ? close : (close * multiplier) + (previous * (1 - multiplier));
+      return previous;
     });
+  }
+
+  function buildCrosses(candles, startDate, endDate, fastPeriod, slowPeriod) {
+    const fast = calculateEMAForExport(candles, fastPeriod);
+    const slow = calculateEMAForExport(candles, slowPeriod);
+    const result = [];
+
+    for (let i = 1; i < candles.length; i++) {
+      const previousDiff = fast[i - 1] - slow[i - 1];
+      const currentDiff = fast[i] - slow[i];
+      let type = null;
+      if (previousDiff <= 0 && currentDiff > 0) type = "bullish";
+      else if (previousDiff >= 0 && currentDiff < 0) type = "bearish";
+      if (!type) continue;
+
+      const candle = candles[i];
+      const dateKey = getDateKeyForExport(candle.time);
+      if ((startDate && dateKey < startDate) || (endDate && dateKey > endDate)) continue;
+      const previousCandle = candles[i - 1];
+      const volume = Number(candle.volume || 0);
+      const previousVolume = Number(previousCandle.volume || 0);
+
+      result.push({
+        timestamp: toISTTimestamp(candle.time),
+        type,
+        fast_ema: Number(fast[i].toFixed(6)),
+        slow_ema: Number(slow[i].toFixed(6)),
+        volume,
+        volume_diff: Number((volume - previousVolume).toFixed(6)),
+        ema_diff: Number((fast[i] - slow[i]).toFixed(6))
+      });
+    }
+    return result;
+  }
+
+  // ── NEW: Build Supertrend signal list for JSON export ──────
+  function buildSupertrendExport(allCandles, startDate, endDate, period, multiplier, useATR) {
+    const computed = calculateSupertrend(allCandles, period, multiplier, useATR);
+    const signals = [];
+    let buyCount = 0, sellCount = 0;
+    for (const d of computed) {
+      if (!d.buySignal && !d.sellSignal) continue;
+      const dateKey = getDateKeyForExport(d.time);
+      if ((startDate && dateKey < startDate) || (endDate && dateKey > endDate)) continue;
+      const type = d.buySignal ? "buy" : "sell";
+      if (type === "buy") buyCount++; else sellCount++;
+      signals.push({
+        timestamp: toISTTimestamp(d.time),
+        type,
+        close_price: Number(d.close.toFixed(4)),
+        anchor_price: Number((type === "buy" ? d.up : d.dn).toFixed(4)),
+        up: Number(d.up.toFixed(4)),
+        dn: Number(d.dn.toFixed(4)),
+        atr: Number(d.atr.toFixed(4)),
+        trend: d.trend === 1 ? "up" : "down",
+      });
+    }
+    return {
+      signals,
+      summary: {
+        total_signals: signals.length,
+        buy_count: buyCount,
+        sell_count: sellCount,
+      },
+    };
+  }
+
+  function buildSupportResistance(allCandles, selectedCandles, startDate, endDate, leftBars, rightBars) {
+    const selectedIndex = new Map(selectedCandles.map((c, index) => [Number(c.time), index]));
+    const levels = [];
+    if (allCandles.length < leftBars + rightBars + 1) return levels;
+
+    for (let i = leftBars; i < allCandles.length - rightBars; i++) {
+      const pivot = allCandles[i];
+      const pivotDate = getDateKeyForExport(pivot.time);
+      if ((startDate && pivotDate < startDate) || (endDate && pivotDate > endDate)) continue;
+
+      const pivotHigh = Number(pivot.high);
+      const pivotLow = Number(pivot.low);
+      let isResistance = true;
+      let isSupport = true;
+
+      for (let j = i - leftBars; j < i; j++) {
+        if (pivotHigh <= Number(allCandles[j].high)) isResistance = false;
+        if (pivotLow >= Number(allCandles[j].low)) isSupport = false;
+        if (!isResistance && !isSupport) break;
+      }
+      for (let j = i + 1; j <= i + rightBars && (isResistance || isSupport); j++) {
+        if (pivotHigh <= Number(allCandles[j].high)) isResistance = false;
+        if (pivotLow >= Number(allCandles[j].low)) isSupport = false;
+      }
+
+      const confirmation = allCandles[i + rightBars];
+      const pivotExportIndex = selectedIndex.get(Number(pivot.time));
+      const confirmedExportIndex = selectedIndex.get(Number(confirmation.time));
+
+      if (pivotExportIndex === undefined || confirmedExportIndex === undefined) continue;
+
+      if (isResistance) {
+        levels.push({
+          level: "resistance",
+          price: pivotHigh,
+          pivot_bar_index: pivotExportIndex,
+          pivot_time: toISTTimestamp(pivot.time),
+          confirmed_bar_index: confirmedExportIndex,
+          confirmed_time: toISTTimestamp(confirmation.time),
+          left_bars: leftBars,
+          right_bars: rightBars
+        });
+      }
+      if (isSupport) {
+        levels.push({
+          level: "support",
+          price: pivotLow,
+          pivot_bar_index: pivotExportIndex,
+          pivot_time: toISTTimestamp(pivot.time),
+          confirmed_bar_index: confirmedExportIndex,
+          confirmed_time: toISTTimestamp(confirmation.time),
+          left_bars: leftBars,
+          right_bars: rightBars
+        });
+      }
+    }
+    return levels.sort((a, b) => a.pivot_bar_index - b.pivot_bar_index);
+  }
+
+  function buildOpeningRangeAnalysis(selectedCandles, startDate, endDate) {
+    const result = {};
+    if (!Array.isArray(selectedCandles) || selectedCandles.length === 0) return result;
+
+    const globalIndexMap = new Map();
+    selectedCandles.forEach((c, i) => globalIndexMap.set(Number(c.time), i));
+
+    const grouped = {};
+    selectedCandles.forEach(c => {
+      const key = getDateKeyForExport(c.time);
+      if (!key) return;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(c);
+    });
+
+    Object.keys(grouped).sort().forEach(date => {
+      if (startDate && date < startDate) return;
+      if (endDate && date > endDate) return;
+
+      const dayCandles = grouped[date].slice().sort((a, b) => Number(a.time) - Number(b.time));
+      if (dayCandles.length === 0) return;
+
+      const first = dayCandles[0];
+      const open  = Number(first.open);
+      const high  = Number(first.high);
+      const low   = Number(first.low);
+      const close = Number(first.close);
+      if (!Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) return;
+
+      const average = (high + low) / 2;
+      const r1Diff = high - average;
+      const s1Diff = average - low;
+      const r1 = high;
+      const s1 = low;
+      const r2 = high + r1Diff;
+      const r3 = r2 + r1Diff;
+      const s2 = low - s1Diff;
+      const s3 = s2 - s1Diff;
+
+      let r3Touch = null;
+      let s3Touch = null;
+
+      for (let i = 1; i < dayCandles.length; i++) {
+        const c = dayCandles[i];
+        const cHigh = Number(c.high);
+        const cLow  = Number(c.low);
+        const globalIdx = globalIndexMap.has(Number(c.time)) ? globalIndexMap.get(Number(c.time)) : null;
+
+        if (!r3Touch && Number.isFinite(cHigh) && cHigh >= r3) {
+          r3Touch = {
+            time: toISTTimestamp(c.time),
+            timestamp: Number(c.time),
+            level_price: Number(r3.toFixed(4)),
+            candle_high: Number(cHigh.toFixed(4)),
+            bar_index: globalIdx,
+            bar_index_in_day: i
+          };
+        }
+        if (!s3Touch && Number.isFinite(cLow) && cLow <= s3) {
+          s3Touch = {
+            time: toISTTimestamp(c.time),
+            timestamp: Number(c.time),
+            level_price: Number(s3.toFixed(4)),
+            candle_low: Number(cLow.toFixed(4)),
+            bar_index: globalIdx,
+            bar_index_in_day: i
+          };
+        }
+        if (r3Touch && s3Touch) break;
+      }
+
+      let firstTouched = null;
+      if (r3Touch && s3Touch) {
+        if (r3Touch.bar_index_in_day < s3Touch.bar_index_in_day) firstTouched = "r3";
+        else if (s3Touch.bar_index_in_day < r3Touch.bar_index_in_day) firstTouched = "s3";
+        else firstTouched = "same_bar";
+      } else if (r3Touch) {
+        firstTouched = "r3";
+      } else if (s3Touch) {
+        firstTouched = "s3";
+      }
+
+      result[date] = {
+        date,
+        opening_range: {
+          open: Number(open.toFixed(4)),
+          high: Number(high.toFixed(4)),
+          low: Number(low.toFixed(4)),
+          close: Number(close.toFixed(4)),
+          average: Number(average.toFixed(4)),
+          levels: {
+            r1: Number(r1.toFixed(4)),
+            r2: Number(r2.toFixed(4)),
+            r3: Number(r3.toFixed(4)),
+            s1: Number(s1.toFixed(4)),
+            s2: Number(s2.toFixed(4)),
+            s3: Number(s3.toFixed(4))
+          }
+        },
+        candle_count: dayCandles.length,
+        r3_touched: r3Touch,
+        s3_touched: s3Touch,
+        first_touched: firstTouched,
+        both_touched: Boolean(r3Touch && s3Touch)
+      };
+    });
+
+    return result;
+  }
+
+  function summarizeOpeningRangeAnalysis(analysis) {
+    const summary = {
+      date_count: 0,
+      days_with_r3_touch: 0,
+      days_with_s3_touch: 0,
+      days_with_both_touches: 0,
+      days_with_no_touch: 0,
+      days_with_first_r3: 0,
+      days_with_first_s3: 0,
+      days_with_same_bar_both: 0
+    };
+    Object.values(analysis || {}).forEach(day => {
+      summary.date_count++;
+      const hasR3 = Boolean(day.r3_touched);
+      const hasS3 = Boolean(day.s3_touched);
+      if (hasR3) summary.days_with_r3_touch++;
+      if (hasS3) summary.days_with_s3_touch++;
+      if (hasR3 && hasS3) summary.days_with_both_touches++;
+      if (!hasR3 && !hasS3) summary.days_with_no_touch++;
+      if (day.first_touched === "r3") summary.days_with_first_r3++;
+      else if (day.first_touched === "s3") summary.days_with_first_s3++;
+      else if (day.first_touched === "same_bar") summary.days_with_same_bar_both++;
+    });
+    return summary;
+  }
+
+  function getInstrumentMetadata() {
+    const node = document.getElementById("instrument-metadata-data");
+    let raw = {};
+    try { raw = node ? JSON.parse(node.textContent || "{}") : {}; }
+    catch (error) { console.warn("[json-export] Metadata JSON parse failed:", error); }
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) raw = {};
+
+    const symbolNode = document.getElementById("topSymbolName");
+    const keyNode = document.getElementById("instrument-key-data");
+    let keyFromTemplate = "";
+    try { keyFromTemplate = keyNode ? JSON.parse(keyNode.textContent || '""') : ""; } catch (_) {}
+    return {
+      ...raw,
+      instrument_key: currentInstrumentKey || keyFromTemplate || "",
+      trading_symbol: raw.trading_symbol || raw.tradingsymbol || raw.name ||
+        (symbolNode ? symbolNode.textContent.trim() : "") || currentInstrumentKey || ""
+    };
+  }
+
+  function downloadJsonFile(payload, fileName) {
+    const json = JSON.stringify(payload, null, 2);
+    const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = fileName;
+    link.style.display = "none";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+  }
+
+  downloadButton.addEventListener("click", () => {
+    downloadButton.disabled = true;
+    const oldLabel = downloadButton.innerHTML;
+    downloadButton.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Preparing JSON…';
+
+    try {
+      if (!defaultRangeInitialized || (rangeInitializedFromFallback && !userChangedExportDates)) initializeDefaultRange(true);
+      const fastPeriod = parseInteger(fastInput, "EMA fast", 1, 500);
+      const slowPeriod = parseInteger(slowInput, "EMA slow", 2, 1000);
+      if (fastPeriod >= slowPeriod) throw new Error("EMA fast must be smaller than EMA slow.");
+
+      // NEW: Supertrend export parameters
+      const stPeriod = stPeriodInput ? parseInteger(stPeriodInput, "Supertrend ATR period", 1, 200) : indicatorState.supertrend.period;
+      const stMultiplier = stMultiplierInput ? parseFloatNumber(stMultiplierInput, "Supertrend multiplier", 0.1, 20) : indicatorState.supertrend.multiplier;
+
+      const startDate = startInput.value || null;
+      const endDate = endInput.value || null;
+      if (startDate && endDate && startDate > endDate) {
+        throw new Error("Start date must be on or before end date.");
+      }
+
+      const srMode = getSelectedSRMode();
+      let srConfigs = [];
+      if (srMode === "manual") {
+        const leftBars = parseInteger(leftInput, "SR left bars", 1, 200);
+        const rightBars = parseInteger(rightInput, "SR right bars", 1, 200);
+        srConfigs = [{ key: `${leftBars}/${rightBars}`, left_bars: leftBars, right_bars: rightBars }];
+      } else {
+        srConfigs = getSelectedSRPresets();
+        if (srConfigs.length === 0) {
+          throw new Error("Select at least one SR preset checkbox before downloading.");
+        }
+      }
+
+      const allCandles = getChartCandles()
+        .filter(isValidExportCandle)
+        .sort((a, b) => Number(a.time) - Number(b.time));
+
+      if (!allCandles.length) {
+        throw new Error("No candle data is loaded in the chart yet. Wait for the chart to finish loading, then try again.");
+      }
+
+      const selectedCandles = allCandles.filter(c => {
+        const dateKey = getDateKeyForExport(c.time);
+        return (!startDate || dateKey >= startDate) && (!endDate || dateKey <= endDate);
+      });
+      if (!selectedCandles.length) {
+        throw new Error(`No valid candles found between ${startDate || "beginning"} and ${endDate || "latest"}.`);
+      }
+
+      const crosses = buildCrosses(allCandles, startDate, endDate, fastPeriod, slowPeriod);
+
+      const levelsByPreset = {};
+      const levelCountsByPreset = {};
+      srConfigs.forEach(cfg => {
+        const levels = buildSupportResistance(
+          allCandles, selectedCandles, startDate, endDate, cfg.left_bars, cfg.right_bars
+        );
+        levelsByPreset[cfg.key] = levels;
+        levelCountsByPreset[cfg.key] = levels.length;
+      });
+
+      const openingRangeAnalysis = buildOpeningRangeAnalysis(selectedCandles, startDate, endDate);
+      const openingRangeSummary = summarizeOpeningRangeAnalysis(openingRangeAnalysis);
+
+      // NEW: build Supertrend signals
+      const supertrendExport = buildSupertrendExport(
+        allCandles, startDate, endDate, stPeriod, stMultiplier, indicatorState.supertrend.useATR
+      );
+
+      const instrument = getInstrumentMetadata();
+      const exportTime = new Date().toISOString();
+      const totalLevelCount = Object.values(levelCountsByPreset).reduce((a, b) => a + b, 0);
+
+      const config = {
+        ema: { fast_period: fastPeriod, slow_period: slowPeriod },
+        supertrend: {
+          atr_period: stPeriod,
+          multiplier: stMultiplier,
+          use_atr: indicatorState.supertrend.useATR,
+          source: "hl2",
+          display_mode: "labels_only",
+        },
+        sr_mode: srMode,
+        timeframe_minutes: currentIntervalMin,
+        timeframe_label: intervalLabel(currentIntervalMin)
+      };
+      if (srMode === "manual") {
+        const only = srConfigs[0];
+        config.sr = { left_bars: only.left_bars, right_bars: only.right_bars };
+      } else {
+        config.sr_presets = srConfigs.map(c => ({
+          key: c.key,
+          left_bars: c.left_bars,
+          right_bars: c.right_bars
+        }));
+      }
+
+      const payload = {
+        metadata: {
+          instrument_key: instrument.instrument_key,
+          trading_symbol: instrument.trading_symbol,
+          instrument,
+          date_range: {
+            start_date: startDate,
+            end_date: endDate,
+            timezone: "Asia/Kolkata"
+          },
+          timeframe: {
+            interval_minutes: currentIntervalMin,
+            interval_label: intervalLabel(currentIntervalMin)
+          },
+          exported_at: exportTime,
+          candle_count: selectedCandles.length,
+          ema_cross_count: crosses.length,
+          supertrend_signal_count: supertrendExport.summary.total_signals,
+          supertrend_summary: supertrendExport.summary,
+          sr_mode: srMode,
+          ...(srMode === "manual"
+            ? { sr_level_count: totalLevelCount }
+            : {
+                sr_preset_count: srConfigs.length,
+                sr_level_count_by_preset: levelCountsByPreset
+              }),
+          opening_range_date_count: openingRangeSummary.date_count,
+          opening_range_summary: openingRangeSummary
+        },
+        config,
+        candles: selectedCandles.map(c => ({
+          timestamp: toISTTimestamp(c.time),
+          open: Number(c.open),
+          high: Number(c.high),
+          low: Number(c.low),
+          close: Number(c.close),
+          volume: Number(c.volume || 0),
+          oi: Number(c.oi || 0)
+        })),
+        crosses,
+        supertrend_signals: supertrendExport.signals,   // NEW
+        supertrend_summary: supertrendExport.summary,   // NEW
+        ...(srMode === "manual"
+          ? { levels: levelsByPreset[srConfigs[0].key] }
+          : { levels_by_preset: levelsByPreset }),
+        opening_range_analysis: openingRangeAnalysis
+      };
+
+      const safeSymbol = String(instrument.trading_symbol || "instrument")
+        .replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || "instrument";
+      downloadJsonFile(payload, `${safeSymbol}_${intervalLabel(currentIntervalMin)}_${startDate || "all"}_${endDate || "all"}_chart_data.json`);
+
+      const orSummaryTail = openingRangeSummary.date_count
+        ? ` · ${openingRangeSummary.date_count} opening-range day(s) analyzed ` +
+          `(R3 touched ${openingRangeSummary.days_with_r3_touch} · S3 touched ${openingRangeSummary.days_with_s3_touch} · both ${openingRangeSummary.days_with_both_touches})`
+        : " · opening-range analysis unavailable (no candles in range)";
+
+      const stSummaryTail = ` · Supertrend ${stPeriod}×${stMultiplier} signals: ${supertrendExport.summary.buy_count} BUY / ${supertrendExport.summary.sell_count} SELL`;
+
+      if (srMode === "manual") {
+        const only = srConfigs[0];
+        setStatus(
+          `Downloaded ${selectedCandles.length} ${intervalLabel(currentIntervalMin)} candles · ${crosses.length} EMA crosses · ${totalLevelCount} SR levels (${only.left_bars}/${only.right_bars})${stSummaryTail}${orSummaryTail}.`,
+          false
+        );
+      } else {
+        setStatus(
+          `Downloaded ${selectedCandles.length} ${intervalLabel(currentIntervalMin)} candles · ${crosses.length} EMA crosses · ${totalLevelCount} total SR levels across ${srConfigs.length} preset(s)${stSummaryTail}${orSummaryTail}.`,
+          false
+        );
+      }
+    } catch (error) {
+      console.error("[json-export] Download failed:", error);
+      setStatus(error && error.message ? error.message : "Unable to generate JSON file.", true);
+    } finally {
+      downloadButton.disabled = false;
+      downloadButton.innerHTML = oldLabel;
+    }
   });
 
-  // Fetch candles (placeholder — the real fetch logic is elsewhere in the template)
-  // For completeness, you may keep your existing fetchCandles() call here.
-  // fetchCandles();
-
-  console.log("[init] Chart ready — Supertrend & Prev-Day-AVG enabled by default, EMA indicators disabled.");
+  initializeDefaultRange(false);
 })();
+
 </script>
 {% endblock %}
