@@ -5,7 +5,7 @@ Only local simulation records are created. This module has no broker client.
 from __future__ import annotations
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 from ..config import Settings
@@ -20,6 +20,8 @@ from .telegram_message_formatter import (
 logger = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 MAX_SUPERTREND_ORDERS_PER_ISOLATION = 2
+SUPERTREND_ENTRY_START = time(9, 15)
+SUPERTREND_ENTRY_CUTOFF = time(9, 40)
 
 def _now() -> datetime:
     return datetime.now(IST)
