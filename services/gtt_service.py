@@ -20,12 +20,13 @@ LTP_URL = "https://api.upstox.com/v2/market-quote/ltp"
 # Current lot-size fallbacks for commonly used index option families.
 # Instrument Search metadata takes precedence whenever the frontend provides it.
 LOT_SIZE_MAP = {
-    "NIFTY": 65,
+    # Longer overlapping names must be checked before NIFTY.
+    "MIDCPNIFTY": 120,
     "BANKNIFTY": 30,
     "FINNIFTY": 60,
-    "MIDCPNIFTY": 120,
-    "SENSEX": 20,
     "BANKEX": 15,
+    "SENSEX": 20,
+    "NIFTY": 65,
 }
 
 
