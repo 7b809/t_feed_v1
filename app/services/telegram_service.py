@@ -178,12 +178,22 @@ class TelegramService:
     async def finish_startup_batch(self, digest: str) -> bool:
         """Stop buffering and deliver exactly one consolidated startup message."""
         with self._startup_batch_lock:
-            buffered_count = len(self._startup_batch_messages)
+            buffered_messages = list(self._startup_batch_messages)
             self._startup_batch_messages = []
             self._startup_batch_active = False
         message = str(digest)
-        if buffered_count:
-            message += f"\\n\\n🧾 Startup events consolidated: {buffered_count}"
+        if buffered_messages:
+            message += "\\n\\n🧾 STARTUP EVENTS"
+            remaining = 1100
+            for event in buffered_messages:
+                compact = str(event).strip()
+                if not compact:
+                    continue
+                compact = compact[:min(260, remaining)]
+                if remaining <= 0:
+                    break
+                message += "\\n• " + compact.replace("\\n", " | ")
+                remaining -= len(compact) + 3
         if not self._enabled:
             return False
         try:
