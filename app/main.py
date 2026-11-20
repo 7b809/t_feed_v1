@@ -31,6 +31,7 @@ from .services.dummy_order_mongo_store import DummyOrderMongoStore
 from .services.dummy_order_engine import DummyOrderEngine
 from .services.daily_data_backup_service import DailyDataBackupService
 from .services.market_session import market_session_status
+from .services.telegram_message_formatter import format_startup_backfill_notification
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,14 @@ async def lifespan(app: FastAPI):
         config, isolation_store, sr_state_store, supertrend_state_store,
         live_feed_state_store, dummy_order_engine, live_feed_candle_store,
     )
+
+    # Decide the startup notification mode before restoring anything. During an
+    # in-session restart, all recovery/connection notifications are buffered and
+    # represented by one detailed state snapshot after restoration completes.
+    session_status = market_session_status(config)
+    startup_backfill_digest = bool(session_status.get("is_open"))
+    if startup_backfill_digest:
+        telegram.begin_startup_batch()
 
     # -------- startup: today-only re-subscription
     today_ist = today_ist_date()
@@ -145,14 +154,17 @@ async def lifespan(app: FastAPI):
     scheduler = SchedulerService(config, subscriber, isolation_store, daily_backup_service, telegram)
     scheduler.start()
 
+    states_today = []
+    restored_orders = {}
+    open_count = 0
+    completed_count = 0
+    startup_batch_finished = False
     try:
-        session_status = market_session_status(config)
         states_today = await dummy_order_engine.get_orders()
         states_today = [
             state for state in (states_today or [])
             if str(state.get("trade_date_ist") or state.get("isolation_id", "").split("__", 1)[0])[:10] == today_ist
         ]
-        restored_orders = {}
         for state in states_today:
             for order in list(state.get("order_history") or []) + list((state.get("orders") or {}).values()):
                 if not isinstance(order, dict):
@@ -174,18 +186,37 @@ async def lifespan(app: FastAPI):
             "Dummy-order startup state restored local_or_mongo=%d open=%d completed=%d",
             len(restored_orders), open_count, completed_count,
         )
-        await telegram.notify_startup(
-            config.app_name,
-            session=session_status,
-            today_summary={
-                "active_isolations": len(active_today),
-                "orders": len(restored_orders),
-                "open_orders": open_count,
-                "completed_orders": completed_count,
-            },
-        )
+        today_summary = {
+            "active_isolations": len(active_today),
+            "orders": len(restored_orders),
+            "open_orders": open_count,
+            "completed_orders": completed_count,
+        }
+        if startup_backfill_digest:
+            digest = format_startup_backfill_notification(
+                config.app_name, session_status, active_today, states_today,
+                today_summary=today_summary,
+            )
+            await telegram.finish_startup_batch(digest)
+            startup_batch_finished = True
+        else:
+            await telegram.notify_startup(
+                config.app_name, session=session_status, today_summary=today_summary,
+            )
     except Exception:
         logger.exception("telegram startup recovery notify failed")
+        if startup_backfill_digest and not startup_batch_finished:
+            fallback = format_startup_backfill_notification(
+                config.app_name, session_status, active_today, states_today,
+                today_summary={
+                    "active_isolations": len(active_today),
+                    "orders": len(restored_orders),
+                    "open_orders": open_count,
+                    "completed_orders": completed_count,
+                },
+            )
+            await telegram.finish_startup_batch(fallback)
+            startup_batch_finished = True
 
     app.state.config = config
     app.state.mongo = mongo
