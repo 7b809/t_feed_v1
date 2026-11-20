@@ -52,6 +52,9 @@ class PivotLevelsService:
             item for item in (today_candles or [])
             if isinstance(item, dict) and _stamp(item)
             and all(_valid_number(item.get(field)) is not None for field in ("open", "high", "low", "close"))
+            and _valid_number(item.get("high")) >= _valid_number(item.get("low"))
+            and _valid_number(item.get("open")) > 0
+            and _valid_number(item.get("close")) > 0
         ]
         if not valid_today:
             return None
@@ -112,7 +115,7 @@ class PivotLevelsService:
             "previous_session": yesterday,
             "yesterday_avg": yesterday["avg"] if yesterday else None,
             "yesterday_avg_points": yesterday["average_points"] if yesterday else None,
-            "source": "local_live_feed_one_minute_candles",
+            "source": "local_or_upstox_history_one_minute_candles",
             "pivot_formula": "R1=opening_high; S1=opening_low; AVG=(R1+S1)/2; R2/R3 and S2/S3 extend by half_range",
         }
 
@@ -163,5 +166,11 @@ class PivotLevelsService:
                 payload = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 return None
-            day = (payload.get("trade_dates") or {}).get(trade_date) or {}
-            return ((day.get("instruments") or {}).get(instrument_key))
+            trade_dates = payload.get("trade_dates")
+            if not isinstance(trade_dates, dict):
+                return None
+            day = trade_dates.get(trade_date) or {}
+            if not isinstance(day, dict):
+                return None
+            instruments = day.get("instruments") or {}
+            return instruments.get(instrument_key) if isinstance(instruments, dict) else None
