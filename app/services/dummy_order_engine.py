@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from ..config import Settings
 from .dummy_order_store import DummyOrderStore
-from .gtt_order_client import GTTOrderSubmissionError, submit_gtt_order
+from .gtt_order_client import GTTOrderSubmissionError, cleanup_gtt_orders, submit_gtt_order
 from .live_feed_state_store import LiveFeedStateStore
 from .pivot_levels_service import PivotLevelsService
 from .telegram_message_formatter import (
@@ -708,6 +708,86 @@ class DummyOrderEngine:
         except Exception:
             logger.exception("Dummy Supertrend entry failed for %s", isolation_id)
 
+
+    async def _cleanup_prior_gtt_exposure(
+        self, state: dict, isolation_id: str, *, source_order_id: str | None = None
+    ) -> None:
+        """Require confirmed cleanup of every earlier Orderflow GTT before replacement."""
+        if not getattr(self._config, "gtt_orders_enabled", False):
+            return
+        records = list(state.get("order_history") or [])
+        current = (state.get("orders") or {}).get("supertrend")
+        if isinstance(current, dict):
+            records.append(current)
+        unique: dict[str, dict] = {}
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            identity = str(item.get("order_id") or item.get("started_at_ist") or id(item))
+            unique[identity] = item
+        pending_records: list[dict] = []
+        gtt_ids: list[str] = []
+        for item in unique.values():
+            submission = item.get("gtt_submission") or {}
+            status = str(submission.get("status") or "").upper()
+            cleanup_status = str((item.get("gtt_cleanup") or {}).get("status") or "").upper()
+            if status in {"UNKNOWN", "SUBMITTING"}:
+                raise GTTOrderSubmissionError(
+                    f"Previous GTT state is {status}; reconcile it manually before a replacement."
+                )
+            if status != "SUBMITTED" or cleanup_status in {"CLEANUP_CONFIRMED", "CLEANED"}:
+                continue
+            ids = [str(value) for value in (submission.get("gtt_order_ids") or []) if value]
+            if not ids:
+                raise GTTOrderSubmissionError(
+                    "Previous GTT was accepted but no GTT ID was persisted; replacement is blocked."
+                )
+            pending_records.append(item)
+            gtt_ids.extend(ids)
+        gtt_ids = list(dict.fromkeys(gtt_ids))
+        if not gtt_ids:
+            return
+        requested_at = _now().isoformat()
+        for item in pending_records:
+            item["gtt_cleanup"] = {"status": "CLEANUP_SUBMITTING", "requested_at": requested_at,
+                                   "gtt_order_ids": gtt_ids}
+        state["updated_at"] = requested_at
+        await asyncio.to_thread(self._store.save, isolation_id, state)
+        for item in pending_records:
+            await self._persist_mongo_order_update(
+                self._date_key(state, isolation_id), isolation_id, "supertrend",
+                item, state.get("isolated_instrument") or {}, completed=False)
+        try:
+            result = await asyncio.to_thread(
+                cleanup_gtt_orders, self._config, gtt_ids,
+                isolation_id=isolation_id, source_order_id=source_order_id)
+        except Exception as exc:
+            cleanup_status = "UNKNOWN" if getattr(exc, "outcome_unknown", False) else "FAILED"
+            updated_at = _now().isoformat()
+            for item in pending_records:
+                item["gtt_cleanup"] = {"status": cleanup_status, "requested_at": requested_at,
+                                       "updated_at": updated_at, "gtt_order_ids": gtt_ids,
+                                       "error": str(exc)}
+            state["updated_at"] = updated_at
+            await asyncio.to_thread(self._store.save, isolation_id, state)
+            for item in pending_records:
+                await self._persist_mongo_order_update(
+                    self._date_key(state, isolation_id), isolation_id, "supertrend",
+                    item, state.get("isolated_instrument") or {}, completed=False)
+            raise GTTOrderSubmissionError(
+                f"Previous Orderflow exposure cleanup failed; replacement GTT blocked: {exc}",
+                outcome_unknown=cleanup_status == "UNKNOWN",
+                http_status=getattr(exc, "http_status", None)) from None
+        updated_at = _now().isoformat()
+        for item in pending_records:
+            item["gtt_cleanup"] = {**result, "status": "CLEANUP_CONFIRMED", "updated_at": updated_at}
+        state["updated_at"] = updated_at
+        await asyncio.to_thread(self._store.save, isolation_id, state)
+        for item in pending_records:
+            await self._persist_mongo_order_update(
+                self._date_key(state, isolation_id), isolation_id, "supertrend",
+                item, state.get("isolated_instrument") or {}, completed=False)
+
     async def _process(
         self, payload: dict, source_key: str, source_role: str, isolation_id: str,
         *, event_origin: str | None = None,
@@ -842,6 +922,10 @@ class DummyOrderEngine:
                     close_reason = "STOP_LOSS"
                 else:
                     close_reason = "SIGNAL_REVERSAL"
+                # Do not mark the local reversal complete until broker cleanup is confirmed.
+                await self._cleanup_prior_gtt_exposure(
+                    state, isolation_id, source_order_id=existing_order.get("order_id")
+                )
                 close_time = _now()
                 started = _dt(existing_order.get("started_at_ist") or existing_order.get("entry_time_ist"))
                 existing_order.update({
@@ -880,6 +964,11 @@ class DummyOrderEngine:
             if isinstance(existing_order, dict) and str(existing_order.get("status") or "").startswith("COMPLETED"):
                 self._archive_supertrend_order(state, existing_order)
 
+            # Also reconcile older completed entries before creating a replacement.
+            await self._cleanup_prior_gtt_exposure(
+                state, isolation_id, source_order_id=existing_order.get("order_id") if isinstance(existing_order, dict) else None
+            )
+
             order_count = self._supertrend_order_count(state)
             if order_count >= order_limit:
                 state["supertrend_order_count"] = order_count
@@ -901,6 +990,7 @@ class DummyOrderEngine:
             target_points = eligibility["target_points"]
             order = {
                 "order_id": f"DUMMY-{indicator.upper()}-{isolation_id}-{signal['dt'].strftime('%H%M%S')}",
+                "isolation_id": isolation_id,
                 "mode": "DUMMY_ONLY", "indicator": indicator.upper(), "side": "BUY",
                 "signal_direction": direction, "source_instrument_key": source_key,
                 "source_leg_role": source_role, "source_trading_symbol": (
