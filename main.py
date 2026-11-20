@@ -13,7 +13,7 @@ from api.routes.external_orders import router as external_orders_router
 from api.routes.orders import router as orders_router
 from core.config import (
     API_HOST, API_PORT, MONGO_DB_NAME, ORDERS_COLLECTION, PROJECT_ROOT,
-    TRADING_ENABLED, UPSTOX_SANDBOX,
+    ORDERFLOW_CLEANUP_ENABLED, TRADING_ENABLED, UPSTOX_SANDBOX,
 )
 from core.logger import get_logger
 from core.mongo_client import close_mongo_connection, get_mongo_db
@@ -101,6 +101,7 @@ def health():
         "port": API_PORT,
         "upstox_sandbox": UPSTOX_SANDBOX,
         "trading_enabled": TRADING_ENABLED,
+        "orderflow_cleanup_enabled": ORDERFLOW_CLEANUP_ENABLED,
         "database": MONGO_DB_NAME,
         "database_ok": db_ok,
         "orders_collection": ORDERS_COLLECTION,
