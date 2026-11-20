@@ -167,6 +167,10 @@ async def lifespan(app: FastAPI):
             1 for order in restored_orders.values()
             if str(order.get("status", "")).startswith("COMPLETED")
         )
+        logger.info(
+            "Dummy-order startup state restored local_or_mongo=%d open=%d completed=%d",
+            len(restored_orders), open_count, completed_count,
+        )
         await telegram.notify_startup(
             config.app_name,
             session=session_status,

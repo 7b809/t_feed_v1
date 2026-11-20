@@ -9,6 +9,11 @@ class FakeCollection:
     def __init__(self):
         self.doc = None
 
+    def find_one(self, query):
+        if self.doc is None or self.doc.get("_id") != query.get("_id"):
+            return None
+        return self.doc
+
     def update_one(self, query, update, upsert=False):
         if self.doc is None:
             assert upsert
@@ -86,3 +91,31 @@ def test_order_updates_write_completion_metrics_to_daily_document():
     assert doc["orders_data"]["sr_order"]["low_price"] == 105.0
     assert doc["orders_data"]["sr_order"]["duration_seconds"] == 300.0
     assert doc["orders_data"]["orders_history"][-1]["event"] == "COMPLETED"
+
+
+def test_load_isolation_restores_current_open_order_and_prior_completed_order():
+    collection = FakeCollection()
+    store = DummyOrderMongoStore(collection)
+    instrument = {"instrument_key": "CE", "trading_symbol": "NIFTY CE"}
+    first = {
+        "order_id": "order-1", "indicator": "SUPERTREND",
+        "status": "COMPLETED_STOP_LOSS",
+        "started_at_ist": "2026-11-13T09:20:00+05:30",
+        "completed_at_ist": "2026-11-13T09:25:00+05:30",
+    }
+    current = {
+        "order_id": "order-2", "indicator": "SUPERTREND",
+        "status": "DUMMY_PLACED",
+        "started_at_ist": "2026-11-13T09:30:00+05:30",
+        "entry_price": 123.0,
+    }
+    store.save_isolation("2026-11-13", "iso", instrument)
+    store.save_order("2026-11-13", "iso", "supertrend", first, instrument)
+    store.update_order("2026-11-13", "iso", "supertrend", first, instrument, completed=True)
+    store.save_order("2026-11-13", "iso", "supertrend", current, instrument)
+
+    restored = store.load_isolation("2026-11-13", "iso")
+    assert restored["current_order"]["order_id"] == "order-2"
+    assert restored["current_order"]["status"] == "DUMMY_PLACED"
+    assert [item["order_id"] for item in restored["order_history"]] == ["order-1"]
+    assert restored["order_count"] == 2

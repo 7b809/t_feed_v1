@@ -497,3 +497,117 @@ def test_live_execution_gate_rejects_missing_websocket_provenance(tmp_path):
         {"trade_date_ist": fixed_now.date().isoformat()}, None, fixed_now.isoformat()
     )
     assert result["reason"] == "MISSING_LIVE_WEBSOCKET_PROVENANCE"
+
+
+def test_restart_restores_mongo_open_order_and_replays_missed_candles(tmp_path):
+    async def run():
+        class MongoState:
+            def load_isolation(self, date_key, isolation_id):
+                return {
+                    "isolation_id": isolation_id,
+                    "isolated_instrument": {"instrument_key": "CE"},
+                    "current_order": {
+                        "order_id": "RECOVERY-SUPERTREND-2026-11-12__CE-091800",
+                        "indicator": "SUPERTREND",
+                        "status": "DUMMY_PLACED",
+                        "target_instrument_key": "CE",
+                        "target_leg_role": "isolated",
+                        "instrument_key": "CE",
+                        "entry_price": 100.0,
+                        "stop_loss_price": 70.0,
+                        "target_price": 150.0,
+                        "quantity_units": 1,
+                        "started_at_ist": "2026-11-12T09:20:00+05:30",
+                        "entry_time_ist": "2026-11-12T09:20:00+05:30",
+                        "price_source": "persisted_one_minute_ohlc",
+                        "high_price": 100.0,
+                        "low_price": 100.0,
+                        "trigger": {"confirmed_time": "2026-11-12T09:18:00+05:30"},
+                        "real_order_submitted": False,
+                    },
+                    "order_history": [],
+                    "order_count": 1,
+                }
+
+        class CandleHistory:
+            def read_day(self, key, day):
+                if key == "CE":
+                    return [
+                        {"ts": "2026-11-12T09:20:00+05:30", "open": 100, "high": 105, "low": 95, "close": 102},
+                        {"ts": "2026-11-12T09:21:00+05:30", "open": 102, "high": 110, "low": 69, "close": 75},
+                    ]
+                return []
+
+        config = SimpleNamespace(
+            dummy_orders_enabled=True, dummy_supertrend_orders_enabled=True,
+            dummy_order_quantity=1, dummy_order_state_dir=str(tmp_path / "fresh"),
+            dummy_order_stop_loss_percent=30, dummy_target_upper_threshold=200,
+            dummy_target_lower_threshold=100, dummy_target_points_above_upper=60,
+            dummy_target_points_middle=50, dummy_target_points_below_lower=40,
+        )
+        store = DummyOrderStore(config)
+        engine = DummyOrderEngine(config, store, FakeFeed(), mongo_store=MongoState(),
+                                  candle_store=CandleHistory())
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(isolation_id, isolation_payload(),
+                                        {"isolated": "CE", "opposite": "PE"})
+        restored = store.load(isolation_id)
+        assert restored["orders"]["supertrend"]["order_id"].endswith("091800")
+        assert restored["orders"]["supertrend"]["status"] == "DUMMY_PLACED"
+
+        # A prior COMPLETED recovery marker must not block replay while an
+        # existing DUMMY_PLACED order remains open.
+        restored["supertrend_startup_recovery"] = {"status": "COMPLETED"}
+        await asyncio.to_thread(store.save, isolation_id, restored)
+        await engine.prepare_supertrend_recovery(
+            isolation_id,
+            datetime(2026, 11, 12, 9, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+            datetime(2026, 11, 12, 9, 5, tzinfo=ZoneInfo("Asia/Kolkata")),
+        )
+        await engine._recover_supertrend_history(
+            isolation_id, {"event": "snapshot", "signals": []},
+            recovery_as_of=datetime(2026, 11, 12, 10, 30, tzinfo=ZoneInfo("Asia/Kolkata")),
+            recovery_source="test_restart_replay",
+        )
+        final = store.load(isolation_id)
+        closed = final["orders"]["supertrend"]
+        assert closed["order_id"].endswith("091800")
+        assert closed["status"] == "COMPLETED_STOP_LOSS"
+        assert closed["exit_reason"] == "STOP_LOSS"
+        assert closed["exit_price"] == 70.0
+        assert final["supertrend_startup_recovery"]["status"] == "COMPLETED"
+
+    asyncio.run(run())
+
+
+def test_open_order_recovery_is_caught_up_not_marked_completed(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(isolation_id, isolation_payload(),
+                                        {"isolated": "CE", "opposite": "PE"})
+        state = store.load(isolation_id)
+        state["orders"]["supertrend"] = {
+            "order_id": "existing-open", "indicator": "SUPERTREND",
+            "status": "DUMMY_PLACED", "target_instrument_key": "CE",
+            "target_leg_role": "isolated", "entry_price": 100.0,
+            "stop_loss_price": 70.0, "target_price": 150.0,
+            "quantity_units": 1, "started_at_ist": "2026-11-12T09:20:00+05:30",
+            "price_source": "persisted_one_minute_ohlc",
+            "high_price": 100.0, "low_price": 100.0,
+        }
+        store.save(isolation_id, state)
+        engine._candle_store = type("History", (), {
+            "read_day": lambda self, key, day: [
+                {"ts": "2026-11-12T09:20:00+05:30", "open": 100, "high": 105, "low": 95, "close": 102}
+            ]
+        })()
+        await engine._recover_supertrend_history(
+            isolation_id, {"event": "snapshot", "signals": []},
+            recovery_as_of=datetime(2026, 11, 12, 10, 30, tzinfo=ZoneInfo("Asia/Kolkata")),
+        )
+        final = store.load(isolation_id)
+        assert final["orders"]["supertrend"]["status"] == "DUMMY_PLACED"
+        assert final["supertrend_startup_recovery"]["status"] == "CAUGHT_UP"
+
+    asyncio.run(run())

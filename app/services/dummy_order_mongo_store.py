@@ -106,6 +106,107 @@ class DummyOrderMongoStore:
             }], "$slice": -5000}}
         self._collection.update_one({"_id": date_key}, update, upsert=True)
 
+    def load_isolation(self, date_key: str, isolation_id: str) -> dict[str, Any] | None:
+        """Load the latest durable Supertrend state for one isolation.
+
+        The daily archive remains backward compatible: the per-isolation
+        snapshot is preferred, while orders_history supplies older orders and
+        completion events. Duplicate snapshots are collapsed by stable order ID.
+        """
+        document = self._collection.find_one({"_id": date_key})
+        if not isinstance(document, dict):
+            return None
+        orders_data = document.get("orders_data") or {}
+        if not isinstance(orders_data, dict):
+            return None
+
+        key = self._isolation_key(isolation_id)
+        by_isolation = orders_data.get("by_isolation") or {}
+        entry = by_isolation.get(key) if isinstance(by_isolation, dict) else None
+        if not isinstance(entry, dict) or entry.get("isolation_id") != isolation_id:
+            # Older archives may have only the root-level snapshot. Do not
+            # attribute a root snapshot to another isolation when per-isolation
+            # records exist.
+            has_scoped_records = isinstance(by_isolation, dict) and bool(by_isolation)
+            if has_scoped_records:
+                return None
+            entry = {
+                "isolation_id": isolation_id,
+                "isolated_instrument": document.get("isolated_instrument"),
+                "supertrend_order": orders_data.get("supertrend_order"),
+            }
+
+        candidates: dict[str, tuple[tuple[int, str, str], dict[str, Any]]] = {}
+
+        def add(order_value: Any, recorded_at: Any = None, *, snapshot: bool = False) -> None:
+            if not isinstance(order_value, dict):
+                return
+            indicator = str(order_value.get("indicator") or order_value.get("strategy") or "SUPERTREND").upper()
+            if "SUPERTREND" not in indicator:
+                return
+            identity = str(
+                order_value.get("order_id")
+                or order_value.get("started_at_ist")
+                or order_value.get("entry_time_ist")
+                or ""
+            )
+            if not identity:
+                return
+            order = dict(order_value)
+            status = str(order.get("status") or "").upper()
+            marker = str(
+                order.get("completed_at_ist") or order.get("updated_at")
+                or order.get("high_time_ist") or order.get("low_time_ist")
+                or recorded_at or order.get("started_at_ist") or ""
+            )
+            # A completion event must beat an older open-entry event. A
+            # per-isolation snapshot wins ties because it is the latest slot.
+            rank = (1 if status.startswith("COMPLETED") else 0,
+                    marker, "1" if snapshot else "0")
+            previous = candidates.get(identity)
+            if previous is None or rank >= previous[0]:
+                candidates[identity] = (rank, order)
+
+        for event in orders_data.get("orders_history") or []:
+            if not isinstance(event, dict) or str(event.get("isolation_id") or "") != isolation_id:
+                continue
+            if str(event.get("indicator") or "").upper() not in {"SUPERTREND_ORDER", "SUPERTREND"}:
+                continue
+            add(event.get("order"), event.get("recorded_at"))
+
+        add(entry.get("supertrend_order"), snapshot=True)
+        ordered = [value[1] for value in candidates.values()]
+        ordered.sort(key=lambda item: (
+            str(item.get("started_at_ist") or item.get("entry_time_ist") or ""),
+            str(item.get("order_id") or ""),
+        ))
+        snapshot = entry.get("supertrend_order")
+        current = None
+        if isinstance(snapshot, dict):
+            snapshot_id = str(snapshot.get("order_id") or snapshot.get("started_at_ist")
+                               or snapshot.get("entry_time_ist") or "")
+            current = candidates.get(snapshot_id, (None, dict(snapshot)))[1]
+        elif ordered:
+            current = ordered[-1]
+        current_id = str(
+            (current or {}).get("order_id")
+            or (current or {}).get("started_at_ist")
+            or (current or {}).get("entry_time_ist")
+            or ""
+        )
+        history = [
+            order for order in ordered
+            if str(order.get("order_id") or order.get("started_at_ist")
+                   or order.get("entry_time_ist") or "") != current_id
+        ]
+        return {
+            "isolation_id": isolation_id,
+            "isolated_instrument": entry.get("isolated_instrument") or {},
+            "current_order": current,
+            "order_history": history,
+            "order_count": len(ordered),
+        }
+
     def list_date_keys(self, limit: int = 365) -> list[str]:
         """Return archived IST trading dates, newest first."""
         safe_limit = max(1, min(int(limit), 3650))

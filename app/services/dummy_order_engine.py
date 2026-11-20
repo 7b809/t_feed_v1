@@ -342,6 +342,17 @@ class DummyOrderEngine:
             iso_time = _text_time(iso_time_raw) or _now().isoformat()
             instrument_context = self._instrument_context(payload, legs, isolation_id, iso_time)
 
+            date_key = self._date_key(payload, isolation_id)
+            mongo_state = None
+            if self._mongo_store is not None and hasattr(self._mongo_store, "load_isolation"):
+                try:
+                    mongo_state = await asyncio.to_thread(
+                        self._mongo_store.load_isolation, date_key, isolation_id
+                    )
+                except Exception:
+                    logger.exception("Mongo dummy-order restore failed date=%s iso=%s",
+                                     date_key, isolation_id)
+
             if old is None or old.get("legs") != legs:
                 state = {
                     "schema_version": 2, "isolation_id": isolation_id,
@@ -358,6 +369,59 @@ class DummyOrderEngine:
                 state["trading_symbol"] = self._symbol(payload) or state.get("trading_symbol")
                 state["isolated_instrument"] = instrument_context
                 state["updated_at"] = _now().isoformat()
+
+            # Merge MongoDB order records into the local working state.
+            # Local state remains preferred when it has a newer/different order;
+            # Mongo fills missing state and completed snapshots that survived a
+            # failed local write or an ephemeral local filesystem.
+            if isinstance(mongo_state, dict):
+                orders = state.setdefault("orders", {})
+                local_current = orders.get("supertrend")
+                mongo_current = mongo_state.get("current_order")
+                if isinstance(mongo_current, dict):
+                    if (
+                        not isinstance(local_current, dict)
+                        or str(local_current.get("status") or "").upper() == "DISABLED"
+                    ):
+                        orders["supertrend"] = dict(mongo_current)
+                    else:
+                        local_id = str(local_current.get("order_id") or "")
+                        mongo_id = str(mongo_current.get("order_id") or "")
+                        if local_id and local_id == mongo_id:
+                            local_status = str(local_current.get("status") or "").upper()
+                            mongo_status = str(mongo_current.get("status") or "").upper()
+                            if local_status == "DUMMY_PLACED" and mongo_status.startswith("COMPLETED"):
+                                orders["supertrend"] = dict(mongo_current)
+                merged_history = {}
+                for item in list(state.get("order_history") or []) + list(mongo_state.get("order_history") or []):
+                    if not isinstance(item, dict):
+                        continue
+                    identity = str(item.get("order_id") or item.get("started_at_ist")
+                                   or item.get("entry_time_ist") or "")
+                    if identity:
+                        merged_history[identity] = dict(item)
+                current = orders.get("supertrend")
+                current_id = str((current or {}).get("order_id") or
+                                 (current or {}).get("started_at_ist") or
+                                 (current or {}).get("entry_time_ist") or "")
+                if current_id:
+                    merged_history.pop(current_id, None)
+                state["order_history"] = sorted(
+                    merged_history.values(),
+                    key=lambda item: str(item.get("started_at_ist") or item.get("entry_time_ist") or ""),
+                )[-500:]
+                state["supertrend_order_count"] = max(
+                    self._supertrend_order_count(state),
+                    int(mongo_state.get("order_count") or 0),
+                )
+                if not state.get("isolated_instrument") and mongo_state.get("isolated_instrument"):
+                    state["isolated_instrument"] = mongo_state["isolated_instrument"]
+                if isinstance(current, dict):
+                    logger.info(
+                        "Mongo dummy-order restored iso=%s order_id=%s status=%s history=%d",
+                        isolation_id, current.get("order_id"), current.get("status"),
+                        len(state["order_history"]),
+                    )
 
             # SR remains a live feed/state stream, but it no longer creates orders.
             # Remove legacy SR order slots/history from local active state safely.
@@ -414,13 +478,16 @@ class DummyOrderEngine:
             if not state or state.get("status") != "ACTIVE":
                 return
             current = state.get("supertrend_startup_recovery") or {}
-            if current.get("status") in {"COMPLETED", "SKIPPED_EXISTING_ORDER"}:
+            open_order = (state.get("orders") or {}).get("supertrend")
+            has_open_order = isinstance(open_order, dict) and open_order.get("status") == "DUMMY_PLACED"
+            if current.get("status") in {"COMPLETED", "CAUGHT_UP", "SKIPPED_EXISTING_ORDER"} and not has_open_order:
                 return
             state["supertrend_startup_recovery"] = {
                 "status": "PENDING",
                 "recovery_window_start": cutoff.isoformat(),
                 "recovery_window_end": recovery_end.isoformat(),
-                "message": "Waiting for the isolation-specific Upstox candle recovery window.",
+                "message": "Replaying persisted open positions and missed isolation-specific candles before live processing.",
+                "resuming_open_order": has_open_order,
                 "updated_at": _now().isoformat(),
             }
             state["updated_at"] = _now().isoformat()
@@ -880,7 +947,15 @@ class DummyOrderEngine:
             if not state or state.get("status") != "ACTIVE":
                 return
             previous_recovery = state.get("supertrend_startup_recovery") or {}
-            if previous_recovery.get("status") in {"COMPLETED", "SKIPPED_EXISTING_ORDER"}:
+            existing_open = (state.get("orders") or {}).get("supertrend")
+            has_open_order = (
+                isinstance(existing_open, dict)
+                and existing_open.get("status") == "DUMMY_PLACED"
+            )
+            if (
+                previous_recovery.get("status") in {"COMPLETED", "CAUGHT_UP", "SKIPPED_EXISTING_ORDER"}
+                and not has_open_order
+            ):
                 return
             trade_date = state.get("trade_date_ist") or isolation_id.split("__", 1)[0]
             cutoff = _dt(state.get("isolation_time")) or self._startup_at
@@ -1101,7 +1176,8 @@ class DummyOrderEngine:
             state["supertrend_order_limit"] = order_limit
             state["supertrend_entry_window_mode"] = entry_window_mode
             state["supertrend_startup_recovery"] = {
-                "status": "COMPLETED", "started_at_ist": self._startup_at.isoformat(),
+                "status": "CAUGHT_UP" if active is not None else "COMPLETED",
+                "started_at_ist": self._startup_at.isoformat(),
                 "completed_at_ist": _now().isoformat(), "signals_found": len(signals),
                 "orders_replayed": replayed, "orders_completed": len(history),
                 "order_limit": order_limit,
