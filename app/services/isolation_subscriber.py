@@ -17,6 +17,7 @@ from .supertrend_ws_client_service import SupertrendWsClientService
 from .live_feed_state_store import LiveFeedStateStore
 from .live_feed_ws_client_service import LiveFeedWsClientService
 from .dummy_order_engine import DummyOrderEngine
+from .local_supertrend_service import LocalSupertrendService
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,10 @@ class IsolationSubscriber:
             candle_store=live_feed_candle_store,
         )
         self._dummy_order_engine = dummy_order_engine
+        self._local_supertrend_service = (
+            LocalSupertrendService(config, dummy_order_engine)
+            if dummy_order_engine is not None and config.supertrend_enabled else None
+        )
 
         self._clients: Dict[str, SrWsClientService] = {}
         self._supertrend_clients: Dict[str, SupertrendWsClientService] = {}
@@ -266,6 +271,23 @@ class IsolationSubscriber:
                 except Exception:
                     logger.exception("Live-feed registration failed for %s", isolation_id)
 
+            if self._local_supertrend_service is not None:
+                try:
+                    raw_time = next((payload.get(k) for k in (
+                        "isolation_time", "isolated_at", "isolation_timestamp",
+                        "created_at", "received_at", "timestamp"
+                    ) if payload.get(k)), None)
+                    parsed_time = datetime.fromisoformat(
+                        str(raw_time).replace("Z", "+00:00")
+                    ) if raw_time else datetime.now(ZoneInfo("Asia/Kolkata"))
+                    if parsed_time.tzinfo is None:
+                        parsed_time = parsed_time.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+                    await self._local_supertrend_service.start_isolation(
+                        isolation_id, new_legs, parsed_time
+                    )
+                except Exception:
+                    logger.exception("Local Upstox Supertrend registration failed for %s", isolation_id)
+
             try:
                 self._isolation_store.set_status(
                     isolation_id, "subscribing", subscribed
@@ -291,6 +313,8 @@ class IsolationSubscriber:
         if not legs:
             return
         await self._live_feed_client.unregister_isolation(isolation_id)
+        if self._local_supertrend_service is not None:
+            await self._local_supertrend_service.stop_isolation(isolation_id)
         for key in legs.values():
             client = self._clients.pop(key, None)
             if client is not None:
@@ -307,6 +331,8 @@ class IsolationSubscriber:
             self._supertrend_clients.clear()
             self._isolation_legs.clear()
         await self._live_feed_client.stop()
+        if self._local_supertrend_service is not None:
+            await self._local_supertrend_service.stop()
         results = await asyncio.gather(
             *(c.stop() for c in clients + supertrend_clients), return_exceptions=True
         )

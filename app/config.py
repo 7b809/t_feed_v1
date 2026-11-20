@@ -106,6 +106,15 @@ class Settings:
     gtt_max_quote_age_seconds: int = 10
     gtt_live_frame_max_age_seconds: int = 5
 
+    # Local Upstox HistoryV3 Supertrend recovery and live polling.
+    supertrend_history_days: int = 10
+    supertrend_atr_period: int = 10
+    supertrend_multiplier: float = 3.0
+    supertrend_change_atr: bool = True
+    supertrend_poll_seconds: int = 15
+    supertrend_recovery_buffer_seconds: int = 300
+    supertrend_fetch_timeout_seconds: int = 25
+
     def __post_init__(self) -> None:
         if not 1 <= self.live_feed_port <= 65535:
             raise ValueError("LIVE_FEED_PORT must be between 1 and 65535")
@@ -158,6 +167,18 @@ class Settings:
             raise ValueError("GTT_MAX_QUOTE_AGE_SECONDS must be >= 1")
         if self.gtt_live_frame_max_age_seconds < 1:
             raise ValueError("GTT_LIVE_FRAME_MAX_AGE_SECONDS must be >= 1")
+        if self.supertrend_history_days < 1:
+            raise ValueError("SUPERTREND_HISTORY_DAYS must be >= 1")
+        if self.supertrend_atr_period < 1:
+            raise ValueError("SUPERTREND_ATR_PERIOD must be >= 1")
+        if self.supertrend_multiplier <= 0:
+            raise ValueError("SUPERTREND_MULTIPLIER must be > 0")
+        if self.supertrend_poll_seconds < 5:
+            raise ValueError("SUPERTREND_POLL_SECONDS must be >= 5")
+        if self.supertrend_recovery_buffer_seconds < 0:
+            raise ValueError("SUPERTREND_RECOVERY_BUFFER_SECONDS must be >= 0")
+        if self.supertrend_fetch_timeout_seconds < 3:
+            raise ValueError("SUPERTREND_FETCH_TIMEOUT_SECONDS must be >= 3")
 
 
     @property
@@ -253,4 +274,11 @@ def load_settings() -> Settings:
         gtt_max_signal_age_seconds=_env_int("GTT_MAX_SIGNAL_AGE_SECONDS", 60),
         gtt_max_quote_age_seconds=_env_int("GTT_MAX_QUOTE_AGE_SECONDS", 10),
         gtt_live_frame_max_age_seconds=_env_int("GTT_LIVE_FRAME_MAX_AGE_SECONDS", 5),
+        supertrend_history_days=_env_int("SUPERTREND_HISTORY_DAYS", 10),
+        supertrend_atr_period=_env_int("SUPERTREND_ATR_PERIOD", 10),
+        supertrend_multiplier=float(os.getenv("SUPERTREND_MULTIPLIER", "3.0")),
+        supertrend_change_atr=_env_bool("SUPERTREND_CHANGE_ATR", True),
+        supertrend_poll_seconds=_env_int("SUPERTREND_POLL_SECONDS", 15),
+        supertrend_recovery_buffer_seconds=_env_int("SUPERTREND_RECOVERY_BUFFER_SECONDS", 300),
+        supertrend_fetch_timeout_seconds=_env_int("SUPERTREND_FETCH_TIMEOUT_SECONDS", 25),
     )
