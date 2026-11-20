@@ -124,6 +124,13 @@ class DummyOrderEngine:
         self._locks: dict[str, asyncio.Lock] = {}
         self._watch_index: dict[str, set[tuple[str, str]]] = {}
         self._pivot_refresh_last_minute: dict[str, str] = {}
+        self._startup_backfill_isolation_ids: set[str] = set()
+
+    def mark_startup_backfill_isolations(self, isolation_ids: list[str]) -> None:
+        """Prevent delayed per-isolation recovery pings after the startup digest."""
+        self._startup_backfill_isolation_ids.update(
+            str(value) for value in isolation_ids if value
+        )
 
     def _lock(self, key: str) -> asyncio.Lock:
         return self._locks.setdefault(key, asyncio.Lock())
@@ -1673,6 +1680,13 @@ class DummyOrderEngine:
 
     async def _notify_recovery(self, state: dict) -> None:
         if self._telegram is None:
+            return
+        isolation_id = str(state.get("isolation_id") or "")
+        if isolation_id in self._startup_backfill_isolation_ids:
+            logger.info(
+                "Per-isolation recovery Telegram suppressed; included in startup digest iso=%s",
+                isolation_id,
+            )
             return
         try:
             await self._send_formatted_telegram(
