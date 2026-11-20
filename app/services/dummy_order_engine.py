@@ -748,7 +748,8 @@ class DummyOrderEngine:
                 return
             await asyncio.to_thread(
                 self._refresh_pivot_levels,
-                [target_key, getattr(self._config, "nifty_instrument_key", "")],
+                list((meta.get("legs") or {}).values())
+                + [getattr(self._config, "nifty_instrument_key", "")],
                 str(state.get("trade_date_ist") or self._date_key(state, isolation_id)),
             )
             eligibility = self._live_execution_eligibility(
