@@ -82,6 +82,7 @@ class PivotLevelsService:
             if isinstance(item, dict)
             and _valid_number(item.get("high")) is not None
             and _valid_number(item.get("low")) is not None
+            and _valid_number(item.get("high")) >= _valid_number(item.get("low"))
         ]
         yesterday = None
         if prior:
@@ -92,6 +93,7 @@ class PivotLevelsService:
                 "high": round(previous_high, 4),
                 "low": round(previous_low, 4),
                 "avg": round((previous_high + previous_low) / 2.0, 4),
+                "average_points": round((previous_high + previous_low) / 2.0, 4),
                 "candles_count": len(prior),
                 "formula": "(previous_session_high + previous_session_low) / 2",
             }
@@ -109,6 +111,7 @@ class PivotLevelsService:
             "pivot_levels": pivots,
             "previous_session": yesterday,
             "yesterday_avg": yesterday["avg"] if yesterday else None,
+            "yesterday_avg_points": yesterday["average_points"] if yesterday else None,
             "source": "local_live_feed_one_minute_candles",
             "pivot_formula": "R1=opening_high; S1=opening_low; AVG=(R1+S1)/2; R2/R3 and S2/S3 extend by half_range",
         }
@@ -128,9 +131,18 @@ class PivotLevelsService:
                         payload.update(loaded)
             except (OSError, json.JSONDecodeError):
                 logger.exception("Could not read existing pivot-level file %s", self.path)
-            trade_dates = payload.setdefault("trade_dates", {})
-            day_data = trade_dates.setdefault(trade_date, {"instruments": {}})
-            instruments = day_data.setdefault("instruments", {})
+            trade_dates = payload.get("trade_dates")
+            if not isinstance(trade_dates, dict):
+                trade_dates = {}
+                payload["trade_dates"] = trade_dates
+            day_data = trade_dates.get(trade_date)
+            if not isinstance(day_data, dict):
+                day_data = {"instruments": {}}
+                trade_dates[trade_date] = day_data
+            instruments = day_data.get("instruments")
+            if not isinstance(instruments, dict):
+                instruments = {}
+                day_data["instruments"] = instruments
             instruments[instrument_key] = record
             payload["updated_at_ist"] = datetime.now(IST).isoformat()
             fd, temp_name = tempfile.mkstemp(
