@@ -305,7 +305,14 @@ def format_startup_backfill_notification(
     for index, isolation in enumerate(isolations, 1):
         if not isinstance(isolation, dict):
             continue
-        isolation_id = str(isolation.get("isolation_id") or isolation.get("_id") or "—")
+        isolation_id = str(
+            isolation.get("isolation_id")
+            or (
+                f"{str(isolation.get('trade_date_ist'))[:10]}__{isolation.get('instrument_key')}"
+                if isolation.get("trade_date_ist") and isolation.get("instrument_key")
+                else isolation.get("_id") or "—"
+            )
+        )
         instrument_key = _first_text(isolation, "instrument_key") or "—"
         symbol = _instrument_name(isolation, instrument_key)
         opposite = isolation.get("opposite_leg") if isinstance(isolation.get("opposite_leg"), dict) else {}
@@ -378,4 +385,4 @@ def format_startup_backfill_notification(
         "ℹ️ This is a restored-state snapshot; no broker order was created by this report.",
         "🔔 Individual Telegram notifications are enabled for subsequent live actions.",
     ])
-    return "\\n".join(lines)
+    return "\n".join(lines)
