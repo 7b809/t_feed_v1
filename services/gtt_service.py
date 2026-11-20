@@ -1,13 +1,7 @@
-"""Upstox v3 multi-leg GTT order integration.
+"""Upstox v3 multi-leg GTT placement for the configured Upstox account.
 
-GTT placement is a live-account operation. It deliberately refuses sandbox
-configuration and respects the existing TRADING_ENABLED safety switch.
-
-By default, placing a GTT first hard-closes every existing position via the
-same broker-native global "exit all positions" service that backs the
-order API's no-order-ID square-off (``OrderService.exit_all_positions``).
-This is intentional: a new GTT is only ever placed on a clean book. Pass
-``cancel_existing=False`` to opt out explicitly.
+GTT placement does not close or cancel unrelated existing positions. The
+broker-side GTT manages only its own entry, target and stop-loss lifecycle.
 """
 from __future__ import annotations
 
@@ -208,18 +202,15 @@ def place_gtt_order(
     trading_symbol: str | None = None,
     product: str = "I",
     transaction_type: str = "BUY",
-    cancel_existing: bool = True,
+    cancel_existing: bool = False,
 ) -> dict[str, Any]:
     """Place a multi-leg BUY GTT.
 
     Example: place_gtt_order("NSE_FO|...", None, 150, 130)
     means one lot, ENTRY at current LTP, TARGET 150 and STOPLOSS 130.
 
-    By default (``cancel_existing=True``) every existing position is
-    hard-closed first through the global broker-native ``exit_positions``
-    service (``OrderService.exit_all_positions``), regardless of whether
-    anything was actually open. If that square-off fails, the GTT is not
-    placed. Pass ``cancel_existing=False`` to skip this step explicitly.
+    Existing positions are left untouched. GTT placement must not call the
+    global exit-all API because that could close unrelated live trades.
     """
     if UPSTOX_SANDBOX:
         raise GTTServiceError(
@@ -239,12 +230,8 @@ def place_gtt_order(
     if transaction_type != "BUY":
         raise GTTServiceError("This application currently supports BUY-entry GTT orders only.")
 
-    # Mandatory pre-step: hard-close the whole book before opening anything new.
-    # Runs after the safety gates so a sandbox/disabled config never fires a
-    # live square-off. Failures abort placement.
-    closed_existing: dict[str, Any] | None = None
-    if cancel_existing:
-        closed_existing = _close_all_existing_positions()
+    # Deliberately do not square off existing positions. The GTT manages
+    # only its own broker-side entry, target and stop-loss legs.
 
     resolved_lot_size = resolve_lot_size(instrument_key, lot_size, trading_symbol)
     quantity = int(lot) * resolved_lot_size
@@ -304,14 +291,6 @@ def place_gtt_order(
         "gtt_order_ids": ids,
         "broker_response": broker_payload,
         "request": payload,
-        "existing_positions_closed": (
-            {
-                "attempted": True,
-                "status": closed_existing.get("status"),
-                "exit_order_ids": list(closed_existing.get("order_ids") or []),
-            }
-            if closed_existing is not None
-            else {"attempted": False}
-        ),
+        "existing_positions_closed": {"attempted": False},
     }
     return result

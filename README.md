@@ -37,10 +37,10 @@ Settings:
 - Token source: **app_tokens**, document **_id=upstox_access_token**, field **access_token**
 - Daily order collection: **sandbox_orders**
 - Default order: **BUY**, quantity **65**, **MARKET**, product **I (Intraday)**, validity **DAY**
-- Upstox sandbox mode: enabled by default
+- Upstox live mode: selected by default (sandbox mode must be explicitly enabled)
 - Order execution: disabled by default
 
-The dashboard order-entry workflow is BUY-only. The API model also rejects SELL order placement; opposite-side SELL requests are created internally only by the existing square-off workflow. The service does not submit orders until `TRADING_ENABLED=true` is configured. Keep `UPSTOX_SANDBOX=true` with a sandbox token for initial tests.
+The dashboard order-entry workflow is BUY-only. The API model also rejects SELL order placement; opposite-side SELL requests are created internally only by the existing square-off workflow. The service does not submit orders until `TRADING_ENABLED=true` is configured. This deployment targets the live Upstox account. Configure a valid live access token in MongoDB. To intentionally switch to sandbox for testing, set `UPSTOX_SANDBOX=true` and use a sandbox token.
 
 ## Install and run
 
@@ -129,7 +129,7 @@ A blank/null entry fetches the current LTP from Upstox and uses an ENTRY rule wi
 
 The request is sent to `POST https://api.upstox.com/v3/order/gtt/place` as a `MULTIPLE` GTT with ENTRY, TARGET and STOPLOSS rules. Per Upstox documentation, TARGET and STOPLOSS are exit-side SELL legs for a BUY entry, and SELL GTT legs require EDIS authorization. Complete EDIS authorization on an Upstox platform before placing these GTT orders. GTT legs execute as LIMIT orders when triggered; a GTT can remain active up to one year, subject to Upstox's rules.
 
-**Live-trading safety:** GTT placement is disabled unless `UPSTOX_SANDBOX=false` and `TRADING_ENABLED=true`. The GTT endpoint refuses sandbox mode. Use a valid live token and verify all prices, lot size, product and account before enabling. No live GTT has been submitted as part of deploying this code.
+**Live-account operation:** this project defaults to `UPSTOX_SANDBOX=false`; order/GTT submission remains disabled until `TRADING_ENABLED=true`. Set a valid live access token in the configured MongoDB token document. GTT placement does not square off or cancel unrelated positions. A GTT is a real broker-side order: verify instrument, lot size, quantity, entry, target, stop-loss and product before submitting. Sandbox testing requires explicitly setting `UPSTOX_SANDBOX=true` and using a sandbox token.
 
 
 
