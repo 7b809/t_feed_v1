@@ -124,10 +124,18 @@ class OrderRepository:
         raise KeyError(f"Local order record not found: {local_id}")
 
     def find_order(self, order_id: str) -> dict | None:
+        """Prefer an exact order record over a parent GTT record listing it."""
         document = self.load_daily_document()
-        for entry in document.get("orders", []):
+        entries = document.get("orders", [])
+        for entry in entries:
+            if entry.get("order_id") == order_id and entry.get("record_type") == "ORDER":
+                return entry
+        for entry in entries:
+            if entry.get("order_id") == order_id:
+                return entry
+        for entry in entries:
             identifiers = entry.get("order_ids") or []
-            if entry.get("order_id") == order_id or order_id in identifiers:
+            if order_id in identifiers:
                 return entry
         return None
 
