@@ -9,8 +9,10 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def _stamp(candle: dict[str, Any]) -> str:
@@ -130,7 +132,7 @@ class PivotLevelsService:
             day_data = trade_dates.setdefault(trade_date, {"instruments": {}})
             instruments = day_data.setdefault("instruments", {})
             instruments[instrument_key] = record
-            payload["updated_at_ist"] = datetime.now().astimezone().isoformat()
+            payload["updated_at_ist"] = datetime.now(IST).isoformat()
             fd, temp_name = tempfile.mkstemp(
                 prefix="pivot_levels.", suffix=".tmp", dir=str(self.path.parent)
             )
