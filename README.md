@@ -729,3 +729,23 @@ Keep GTT_ORDERS_ENABLED=false until the receiving service is configured for
 the intended account, the token is set privately, and all price/quantity
 calculations have been checked. Turning this flag on submits live GTT requests
 for newly created eligible orders.
+
+## Supertrend GTT replacement cleanup
+
+When `GTT_ORDERS_ENABLED=true`, a new eligible Supertrend entry must first reconcile prior GTT exposure from the same isolation. The existing per-isolation execution lock, signal idempotency, 09:15 session start, 09:40 early/late cutoff, and two-entry/one-entry caps remain in force.
+
+Configure the same 32-character token used by `sandbox_v1` and the authenticated cleanup endpoint:
+
+```env
+GTT_ORDERS_ENABLED=true
+GTT_API_URL=https://sandbox.novag7.in/api/external/v1/gtt/place
+GTT_CLEANUP_URL=https://sandbox.novag7.in/api/external/v1/gtt/cleanup
+GTT_API_TOKEN=<same 32-character EXTERNAL_API_SOURCE_TOKEN>
+GTT_PRODUCT=I
+```
+
+Before a replacement GTT is submitted, Orderflow sends the previously stored GTT IDs to `GTT_CLEANUP_URL`. The sandbox service cancels untriggered GTTs or reconciles triggered GTTs against their generated regular order IDs. The dummy order stores the cleanup request, result, timestamp and error. Unknown/submitting prior GTT states, missing IDs, timeouts, broker errors or incomplete cleanup block the replacement. No automatic retry is performed for an unknown outcome.
+
+The sandbox must have `EXTERNAL_API_AUTH_ENABLED=true` and `ORDERFLOW_CLEANUP_ENABLED=true`. The cleanup permission is separate from `TRADING_ENABLED`; regular dashboard order placement remains disabled unless separately enabled.
+
+A triggered GTT with an active conditional exit rule but no generated broker order ID cannot be safely disarmed or squared off without risking a later unintended sell. That state is intentionally blocked for manual reconciliation.
