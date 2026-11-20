@@ -45,6 +45,26 @@
 
   .tag-badge { font-size: .72rem; font-weight: 500; }
   .divider-label { font-size: .68rem; letter-spacing: .08em; }
+
+  /* Live feed section */
+  .live-section { background: #f8f9fa; }
+  .live-ltp { font-variant-numeric: tabular-nums; }
+  .live-pnl { font-variant-numeric: tabular-nums; }
+  .live-track { position: relative; height: 10px; background: linear-gradient(90deg,#dc3545 0%,#dc3545 8%,#e9ecef 8%,#e9ecef 92%,#198754 92%,#198754 100%); border-radius: 5px; overflow: hidden; }
+  .live-track-fill { position: absolute; top: 0; bottom: 0; left: 0; background: rgba(13,110,253,.35); transition: width .4s ease; }
+  .live-marker { position: absolute; top: -3px; bottom: -3px; width: 3px; background: #0d6efd; box-shadow: 0 0 0 2px #fff; transition: left .4s ease; }
+  .live-legend { display: flex; justify-content: space-between; font-size: .72rem; color: #6c757d; margin-top: .35rem; }
+
+  .pulse-dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 50%; margin-right: .3rem; }
+  .pulse-dot.live { background: #198754; box-shadow: 0 0 0 0 rgba(25,135,84,.7); animation: pulse 1.8s infinite; }
+  .pulse-dot.stale { background: #ffc107; }
+  .pulse-dot.err { background: #dc3545; }
+  .pulse-dot.idle { background: #6c757d; }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(25,135,84,.5); }
+    70% { box-shadow: 0 0 0 8px rgba(25,135,84,0); }
+    100% { box-shadow: 0 0 0 0 rgba(25,135,84,0); }
+  }
 </style>
 
 <!-- ============================= PAGE HEADING ============================= -->
@@ -52,9 +72,12 @@
   <div>
     <div class="eyebrow text-uppercase text-primary fw-semibold small mb-1">Simulation ledger</div>
     <h1 class="h3 fw-bold mb-2">Dummy orders</h1>
-    <p class="text-muted mb-0">Supertrend simulated orders, execution outcomes and recorded P&amp;L. Each isolation is limited to two entries.</p>
+    <p class="text-muted mb-0">Supertrend simulated orders with live per-instrument feed. Each isolation is limited to two entries.</p>
   </div>
-  <div class="d-flex align-items-center gap-2">
+  <div class="d-flex align-items-center gap-2 flex-wrap">
+    <span class="badge text-bg-light border fw-normal px-3 py-2" id="feed-status" title="Live feed connection">
+      <span class="pulse-dot idle" id="feed-dot"></span><span id="feed-status-text">Feed idle</span>
+    </span>
     <span class="badge text-bg-light border fw-normal px-3 py-2" id="last-refresh">Connecting…</span>
     <button class="btn btn-primary btn-sm px-3 py-2" onclick="loadOrders(false)">
       <i class="bi bi-arrow-clockwise me-1"></i>Refresh
@@ -65,7 +88,7 @@
 <!-- ============================== METRIC CARDS ============================= -->
 <div class="row g-3 g-lg-4 mb-4">
 
-  <div class="col-6 col-md-4 col-xl-2">
+  <div class="col-6 col-md-4 col-xl-3">
     <div class="card h-100 border-0 shadow-sm metric-card">
       <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
         <div class="d-flex justify-content-between align-items-start mb-3">
@@ -77,7 +100,7 @@
     </div>
   </div>
 
-  <div class="col-6 col-md-4 col-xl-2">
+  <div class="col-6 col-md-4 col-xl-3">
     <div class="card h-100 border-0 shadow-sm metric-card">
       <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
         <div class="d-flex justify-content-between align-items-start mb-3">
@@ -89,7 +112,7 @@
     </div>
   </div>
 
-  <div class="col-6 col-md-4 col-xl-2">
+  <div class="col-6 col-md-4 col-xl-3">
     <div class="card h-100 border-0 shadow-sm metric-card">
       <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
         <div class="d-flex justify-content-between align-items-start mb-3">
@@ -101,7 +124,7 @@
     </div>
   </div>
 
-  <div class="col-6 col-md-4 col-xl-2">
+  <div class="col-6 col-md-4 col-xl-3">
     <div class="card h-100 border-0 shadow-sm metric-card">
       <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
         <div class="d-flex justify-content-between align-items-start mb-3">
@@ -113,7 +136,7 @@
     </div>
   </div>
 
-  <div class="col-6 col-md-4 col-xl-2">
+  <div class="col-6 col-md-4 col-xl-3">
     <div class="card h-100 border-0 shadow-sm metric-card">
       <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
         <div class="d-flex justify-content-between align-items-start mb-3">
@@ -125,7 +148,7 @@
     </div>
   </div>
 
-  <div class="col-6 col-md-4 col-xl-2">
+  <div class="col-6 col-md-4 col-xl-3">
     <div class="card h-100 border-0 shadow-sm metric-card">
       <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
         <div class="d-flex justify-content-between align-items-start mb-3">
@@ -137,18 +160,43 @@
     </div>
   </div>
 
+  <div class="col-6 col-md-4 col-xl-3">
+    <div class="card h-100 border-0 shadow-sm metric-card border-start border-4 border-warning">
+      <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <span class="text-uppercase text-muted small fw-semibold">Live MTM <span class="text-lowercase fw-normal">(open)</span></span>
+          <span class="metric-icon rounded-3 bg-warning-subtle text-warning"><i class="bi bi-broadcast"></i></span>
+        </div>
+        <div class="fs-4 fw-bold lh-1" id="o-mtm">—</div>
+        <div class="text-muted small mt-1" id="o-mtm-note">—</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-6 col-md-4 col-xl-3">
+    <div class="card h-100 border-0 shadow-sm metric-card border-start border-4 border-success">
+      <div class="card-body d-flex flex-column justify-content-between p-3 p-lg-4">
+        <div class="d-flex justify-content-between align-items-start mb-3">
+          <span class="text-uppercase text-muted small fw-semibold">Feeds healthy</span>
+          <span class="metric-icon rounded-3 bg-success-subtle text-success"><i class="bi bi-wifi"></i></span>
+        </div>
+        <div class="fs-3 fw-bold lh-1" id="o-feeds">—</div>
+        <div class="text-muted small mt-1" id="o-feeds-note">—</div>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- =============================== ORDER BOOK ============================= -->
 <div class="card border-0 shadow-sm">
 
-  <!-- header + filters -->
   <div class="card-header bg-white border-0 px-3 px-lg-4 pt-3 pt-lg-4 pb-0">
     <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
       <div>
         <h2 class="h5 fw-semibold mb-1">Order book</h2>
         <p class="text-muted small mb-0">
-          Two cards per row · use − / + buttons or type to change lot size (min 1) · capital values update live
+          Two cards per row · live feed per instrument · lot multiplier scales P&amp;L, MTM and capital
         </p>
       </div>
       <span class="badge text-bg-light border fw-normal px-3 py-2" id="order-count">0 orders</span>
@@ -192,7 +240,6 @@
     </div>
   </div>
 
-  <!-- card grid (2 per row from lg) -->
   <div class="card-body p-3 p-lg-4">
     <div class="row g-3 g-lg-4" id="order-grid">
       <div class="col-12">
@@ -221,9 +268,9 @@
   <div class="card-footer bg-white border-0 px-3 px-lg-4 py-3">
     <p class="text-muted small mb-0">
       <i class="bi bi-info-circle me-1"></i>
-      P&amp;L follows the cost model stored with each order. Capital values shown next to prices are
-      <strong>position notional</strong> at that price = price × quantity × lot_size × multiplier.
-      Gross-only records exclude brokerage, taxes and slippage.
+      P&amp;L follows the cost model stored with each order. Live MTM uses the current feed LTP for the order's instrument
+      (WebSocket if available, otherwise polling the feed endpoint). Capital values are
+      <strong>position notional</strong> = price × quantity × lot_size × multiplier.
     </p>
   </div>
 
@@ -233,6 +280,173 @@
 
 {% block scripts %}
 <script>
+/* ==========================================================================
+   Live feed manager — per-instrument feed connection with poll fallback
+   ========================================================================== */
+const FEED_CONFIG = {
+  pollEndpoint: '/api/v1/dashboard/isolations',
+  pollIntervalMs: 1500,
+  wsEnabled: false, // set true if a per-instrument WS endpoint exists
+  wsUrlFor: (k) => `/ws/feed?instrument_key=${encodeURIComponent(k)}`,
+  wsReconnectMax: 3,
+};
+
+class FeedManager {
+  constructor(cfg) {
+    this.cfg = cfg;
+    this.feeds = new Map();     // instrument_key -> feed object
+    this.listeners = new Set();
+    this.pollTimer = null;
+    this.pollInFlight = false;
+    this.pollFailures = 0;
+    this.lastPollAt = null;
+  }
+
+  subscribe(instrumentKeys) {
+    const keep = new Set(instrumentKeys);
+    for (const k of keep) {
+      if (!this.feeds.has(k)) {
+        const feed = {
+          key: k, ltp: null, lastUpdate: null,
+          state: 'idle', source: null,
+          ws: null, reconnectAttempts: 0, error: null,
+        };
+        this.feeds.set(k, feed);
+        if (this.cfg.wsEnabled) this._tryWebSocket(feed);
+      }
+    }
+    for (const k of [...this.feeds.keys()]) {
+      if (!keep.has(k)) {
+        const f = this.feeds.get(k);
+        if (f.ws) { try { f.ws.close(); } catch (_) {} }
+        this.feeds.delete(k);
+      }
+    }
+    this._startPoller();
+  }
+
+  _startPoller() {
+    if (this.pollTimer) return;
+    this.pollTimer = setInterval(() => this._poll(), this.cfg.pollIntervalMs);
+    this._poll();
+  }
+
+  async _poll() {
+    if (this.pollInFlight) return;
+    if (this.feeds.size === 0) return;
+    if (document.hidden) return;
+    this.pollInFlight = true;
+    try {
+      const r = await fetch(this.cfg.pollEndpoint, { cache: 'no-store' });
+      if (!r.ok) throw new Error('feed poll ' + r.status);
+      const d = await r.json();
+      const instruments = d.instruments || [];
+      const byKey = new Map(instruments.map(i => [i.instrument_key, i]));
+      let changed = false;
+
+      for (const [k, feed] of this.feeds.entries()) {
+        const inst = byKey.get(k);
+        if (!inst) continue;
+        const fd = inst.feed_details || {};
+        if (fd.ltp != null) {
+          const newLtp = Number(fd.ltp);
+          const newTs = fd.last_tick_at || fd.date || new Date().toISOString();
+          if (feed.ltp !== newLtp || feed.lastUpdate !== newTs) {
+            feed.ltp = newLtp;
+            feed.lastUpdate = newTs;
+            feed.error = null;
+            if (!feed.ws || feed.ws.readyState !== WebSocket.OPEN) {
+              feed.state = 'polling';
+              feed.source = 'poll';
+            }
+            changed = true;
+          }
+        }
+      }
+      this.pollFailures = 0;
+      this.lastPollAt = new Date().toISOString();
+      if (changed) this._notify();
+      this._notifyStatus();
+    } catch (e) {
+      this.pollFailures += 1;
+      this._notifyStatus();
+    } finally {
+      this.pollInFlight = false;
+    }
+  }
+
+  _tryWebSocket(feed) {
+    if (typeof WebSocket === 'undefined') return;
+    try {
+      const url = this.cfg.wsUrlFor(feed.key);
+      const ws = new WebSocket(url);
+      feed.ws = ws;
+      feed.state = 'connecting';
+      const openTimer = setTimeout(() => {
+        try { ws.close(); } catch (_) {}
+      }, 3000);
+
+      ws.onopen = () => {
+        clearTimeout(openTimer);
+        feed.state = 'connected';
+        feed.source = 'websocket';
+        feed.reconnectAttempts = 0;
+        feed.error = null;
+        this._notify();
+        this._notifyStatus();
+      };
+      ws.onmessage = (evt) => {
+        try {
+          const m = JSON.parse(evt.data);
+          const ltp = m.ltp ?? m.last_price ?? m.price ?? m.lastPrice
+                     ?? m.data?.ltp ?? m.tick?.ltp;
+          if (ltp != null) {
+            feed.ltp = Number(ltp);
+            feed.lastUpdate = m.timestamp || m.last_tick_at || new Date().toISOString();
+            feed.source = 'websocket';
+            this._notify();
+          }
+        } catch (_) {}
+      };
+      ws.onerror = () => { feed.error = 'WebSocket error'; };
+      ws.onclose = () => {
+        clearTimeout(openTimer);
+        feed.ws = null;
+        if (feed.state === 'connected' && feed.reconnectAttempts < this.cfg.wsReconnectMax) {
+          feed.reconnectAttempts += 1;
+          feed.state = 'reconnecting';
+          setTimeout(() => this._tryWebSocket(feed), 1000 * feed.reconnectAttempts);
+        } else {
+          feed.state = 'polling';
+          feed.source = 'poll';
+        }
+        this._notifyStatus();
+      };
+    } catch (e) {
+      feed.state = 'polling';
+      feed.source = 'poll';
+      feed.error = e.message;
+    }
+  }
+
+  _notify() { this.listeners.forEach(fn => { try { fn(); } catch (_) {} }); }
+  _notifyStatus() { if (this.onStatus) this.onStatus(this.getStatus()); }
+
+  onChange(fn) { this.listeners.add(fn); return () => this.listeners.delete(fn); }
+  getFeed(k) { return this.feeds.get(k) || null; }
+  getAllFeeds() { return Array.from(this.feeds.values()); }
+  getStatus() {
+    const feeds = this.getAllFeeds();
+    const total = feeds.length;
+    const healthy = feeds.filter(f =>
+      f.ltp != null && (f.state === 'connected' || f.state === 'polling')
+    ).length;
+    return { total, healthy, lastPollAt: this.lastPollAt, failures: this.pollFailures };
+  }
+}
+
+const feedManager = new FeedManager(FEED_CONFIG);
+
 /* --------------------------------------------------------------------------
    State
    -------------------------------------------------------------------------- */
@@ -249,7 +463,7 @@ let orderRequestSequence = 0;
 let historySearchTimer = null;
 
 /* --------------------------------------------------------------------------
-   Small formatters / badges
+   Formatters / badges (existing + new)
    -------------------------------------------------------------------------- */
 function fmtTime(iso) {
   if (!iso) return '—';
@@ -260,59 +474,57 @@ function fmtTime(iso) {
     });
   } catch (_) { return '—'; }
 }
-
 function fmtDuration(sec) {
   if (sec == null) return '—';
   const s = Math.max(0, Math.floor(Number(sec)));
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
-  const r = s % 60;
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
   if (h) return `${h}h ${m}m`;
   if (m) return `${m}m ${r}s`;
   return `${r}s`;
+}
+function fmtAge(iso) {
+  if (!iso) return '—';
+  try {
+    const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diff < 0) return 'in ' + fmtDuration(-diff);
+    if (diff < 60) return Math.round(diff) + 's ago';
+    if (diff < 3600) return Math.round(diff / 60) + 'm ago';
+    return Math.round(diff / 3600) + 'h ago';
+  } catch (_) { return '—'; }
 }
 
 function modeBadge(mode) {
   if (!mode) return '';
   const map = {
-    'DUMMY_ONLY':        { cls: 'text-bg-secondary',                            icon: 'bi-cpu' },
-    'LIVE':              { cls: 'text-bg-danger',                               icon: 'bi-broadcast' },
-    'BACKTEST':          { cls: 'text-bg-info-subtle text-info border border-info-subtle', icon: 'bi-clock-history' },
-    'PAPER':             { cls: 'text-bg-warning-subtle text-warning border border-warning-subtle', icon: 'bi-journal-text' }
+    'DUMMY_ONLY': { cls: 'text-bg-secondary', icon: 'bi-cpu' },
+    'LIVE':       { cls: 'text-bg-danger',    icon: 'bi-broadcast' },
+    'BACKTEST':   { cls: 'text-bg-info-subtle text-info border border-info-subtle', icon: 'bi-clock-history' },
+    'PAPER':      { cls: 'text-bg-warning-subtle text-warning border border-warning-subtle', icon: 'bi-journal-text' }
   };
   const info = map[mode] || { cls: 'text-bg-light border', icon: 'bi-tag' };
-  return `<span class="badge ${info.cls} rounded-pill tag-badge">
-            <i class="bi ${info.icon} me-1"></i>${escapeHtml(String(mode).replaceAll('_',' '))}
-          </span>`;
+  return `<span class="badge ${info.cls} rounded-pill tag-badge"><i class="bi ${info.icon} me-1"></i>${escapeHtml(String(mode).replaceAll('_',' '))}</span>`;
 }
-
 function simulationBadge(mode) {
   if (!mode) return '';
   const map = {
     'STARTUP_RECOVERY': { cls: 'text-bg-warning-subtle text-warning border border-warning-subtle', icon: 'bi-arrow-counterclockwise' },
     'LIVE_TICK':        { cls: 'text-bg-success-subtle text-success border border-success-subtle', icon: 'bi-activity' },
-    'REPLAY':           { cls: 'text-bg-info-subtle text-info border border-info-subtle',          icon: 'bi-play-btn' },
-    'BACKFILL':         { cls: 'text-bg-info-subtle text-info border border-info-subtle',          icon: 'bi-clock-history' }
+    'REPLAY':           { cls: 'text-bg-info-subtle text-info border border-info-subtle', icon: 'bi-play-btn' },
+    'BACKFILL':         { cls: 'text-bg-info-subtle text-info border border-info-subtle', icon: 'bi-clock-history' }
   };
   const info = map[mode] || { cls: 'text-bg-light border', icon: 'bi-diagram-3' };
-  return `<span class="badge ${info.cls} rounded-pill tag-badge">
-            <i class="bi ${info.icon} me-1"></i>${escapeHtml(String(mode).replaceAll('_',' '))}
-          </span>`;
+  return `<span class="badge ${info.cls} rounded-pill tag-badge"><i class="bi ${info.icon} me-1"></i>${escapeHtml(String(mode).replaceAll('_',' '))}</span>`;
 }
-
 function signalBadge(dir) {
   const d = String(dir || '').toUpperCase();
   const map = {
     'BULLISH': { cls: 'text-bg-success-subtle text-success border border-success-subtle', icon: 'bi-arrow-up-right' },
-    'BEARISH': { cls: 'text-bg-danger-subtle text-danger border border-danger-subtle',    icon: 'bi-arrow-down-right' },
-    'NEUTRAL': { cls: 'text-bg-secondary-subtle text-secondary border',                   icon: 'bi-dash' }
+    'BEARISH': { cls: 'text-bg-danger-subtle text-danger border border-danger-subtle', icon: 'bi-arrow-down-right' },
+    'NEUTRAL': { cls: 'text-bg-secondary-subtle text-secondary border', icon: 'bi-dash' }
   };
   const info = map[d] || map['NEUTRAL'];
-  return `<span class="badge ${info.cls} rounded-pill tag-badge">
-            <i class="bi ${info.icon} me-1"></i>${escapeHtml(d || 'NEUTRAL')}
-          </span>`;
+  return `<span class="badge ${info.cls} rounded-pill tag-badge"><i class="bi ${info.icon} me-1"></i>${escapeHtml(d || 'NEUTRAL')}</span>`;
 }
-
 function priceSourceBadge(src) {
   if (!src) return '';
   const s = String(src).toLowerCase();
@@ -320,121 +532,249 @@ function priceSourceBadge(src) {
   const isPersisted = s.includes('persist') || s.includes('ohlc') || s.includes('history') || s.includes('replay');
   const cls = isLive ? 'text-bg-success' : isPersisted ? 'text-bg-info' : 'text-bg-light border';
   const icon = isLive ? 'bi-broadcast' : isPersisted ? 'bi-database-check' : 'bi-database';
-  return `<span class="badge ${cls} rounded-pill tag-badge">
-            <i class="bi ${icon} me-1"></i>${escapeHtml(String(src).replaceAll('_',' '))}
-          </span>`;
+  return `<span class="badge ${cls} rounded-pill tag-badge"><i class="bi ${icon} me-1"></i>${escapeHtml(String(src).replaceAll('_',' '))}</span>`;
 }
-
 function executionBadge(o) {
-  if (o.real_order_submitted) {
-    return `<span class="badge text-bg-danger rounded-pill tag-badge">
-              <i class="bi bi-broadcast me-1"></i>LIVE EXECUTED
-            </span>`;
-  }
-  return `<span class="badge text-bg-secondary rounded-pill tag-badge">
-            <i class="bi bi-cpu me-1"></i>SIMULATED
-          </span>`;
+  return o.real_order_submitted
+    ? `<span class="badge text-bg-danger rounded-pill tag-badge"><i class="bi bi-broadcast me-1"></i>LIVE EXECUTED</span>`
+    : `<span class="badge text-bg-secondary rounded-pill tag-badge"><i class="bi bi-cpu me-1"></i>SIMULATED</span>`;
 }
-
 function targetRuleBadge(rule) {
   if (!rule) return '';
-  return `<span class="badge text-bg-light border rounded-pill tag-badge">
-            <i class="bi bi-bullseye me-1"></i>${escapeHtml(rule)}
-          </span>`;
+  return `<span class="badge text-bg-light border rounded-pill tag-badge"><i class="bi bi-bullseye me-1"></i>${escapeHtml(rule)}</span>`;
 }
-
-/* --------------------------------------------------------------------------
-   Existing helpers
-   -------------------------------------------------------------------------- */
-function orderKey(o, idx) {
-  return o.history_key || (o.order_id ? String(o.order_id) : `__idx_${idx}`);
-}
-
-function statusLabel(o) {
-  return o.status === 'DUMMY_PLACED'
-    ? 'IN PROGRESS'
-    : String(o.exit_reason || o.status || 'UNKNOWN').replaceAll('_', ' ');
-}
-
 function sideBadge(side) {
   const s = String(side || 'BUY').toUpperCase();
   const isBuy = s === 'BUY';
-  return `<span class="badge rounded-pill ${isBuy ? 'text-bg-success' : 'text-bg-danger'}">
-            <i class="bi ${isBuy ? 'bi-arrow-up-right' : 'bi-arrow-down-right'} me-1"></i>${escapeHtml(s)}
-          </span>`;
+  return `<span class="badge rounded-pill ${isBuy ? 'text-bg-success' : 'text-bg-danger'}"><i class="bi ${isBuy ? 'bi-arrow-up-right' : 'bi-arrow-down-right'} me-1"></i>${escapeHtml(s)}</span>`;
 }
-
+function statusLabel(o) {
+  return o.status === 'DUMMY_PLACED' ? 'IN PROGRESS'
+    : String(o.exit_reason || o.status || 'UNKNOWN').replaceAll('_', ' ');
+}
 function pnlCell(v) {
   if (v == null) return '<span class="text-muted">—</span>';
   const n = Number(v);
   const cls = n > 0 ? 'pnl-positive' : n < 0 ? 'pnl-negative' : 'text-muted';
-  const sign = n > 0 ? '+' : '';
-  return `<span class="fw-semibold ${cls}">${sign}₹${formatPrice(v)}</span>`;
+  return `<span class="fw-semibold ${cls}">${n > 0 ? '+' : ''}₹${formatPrice(v)}</span>`;
 }
-
 function plainPnl(v, suffix = '') {
   if (v == null) return '<span class="text-muted">—</span>';
   const n = Number(v);
   const cls = n > 0 ? 'pnl-positive' : n < 0 ? 'pnl-negative' : 'text-muted';
-  const sign = n > 0 ? '+' : '';
-  return `<span class="${cls}">${sign}${formatPrice(v)}${suffix}</span>`;
+  return `<span class="${cls}">${n > 0 ? '+' : ''}${formatPrice(v)}${suffix}</span>`;
 }
 
-/* ---- capital calculation helpers ---- */
+function liveStateBadge(feed) {
+  if (!feed) {
+    return `<span class="badge text-bg-light border rounded-pill tag-badge live-state-badge">
+              <span class="pulse-dot idle"></span>no feed
+            </span>`;
+  }
+  const s = feed.state;
+  let cls = 'text-bg-light border', icon = 'bi-plug', dot = 'idle';
+  if (s === 'connected')   { cls = 'text-bg-success'; icon = 'bi-wifi'; dot = 'live'; }
+  else if (s === 'polling'){ cls = 'text-bg-info text-dark'; icon = 'bi-arrow-repeat'; dot = 'live'; }
+  else if (s === 'connecting' || s === 'reconnecting') { cls = 'text-bg-warning text-dark'; icon = 'bi-arrow-clockwise'; dot = 'stale'; }
+  else if (s === 'error')  { cls = 'text-bg-danger'; icon = 'bi-exclamation-triangle'; dot = 'err'; }
+  const srcLabel = feed.source === 'websocket' ? 'WS' : feed.source === 'poll' ? 'poll' : 'idle';
+  return `<span class="badge ${cls} rounded-pill tag-badge live-state-badge">
+            <span class="pulse-dot ${dot}"></span>${escapeHtml(s)} · ${srcLabel}
+          </span>`;
+}
+
+/* --------------------------------------------------------------------------
+   Capital / units helpers
+   -------------------------------------------------------------------------- */
+function orderKey(o, idx) {
+  return o.history_key || (o.order_id ? String(o.order_id) : `__idx_${idx}`);
+}
 function totalUnits(o, key) {
   const qty   = Number(o.quantity) || 0;
   const lotSz = Number(o.lot_size) || 1;
   const mult  = Number(lotMultipliers[key] ?? 1) || 1;
   return qty ? qty * lotSz * mult : 0;
 }
-
 function capitalAt(price, o, key) {
   if (price == null) return null;
   const units = totalUnits(o, key);
   if (!units) return null;
   return Number(price) * units;
 }
-
-function capText(cap) {
-  return cap == null ? '/ —' : '/ ₹' + formatPrice(cap);
-}
-
+function capText(cap) { return cap == null ? '/ —' : '/ ₹' + formatPrice(cap); }
 function calcAdjustedPnl(o, key) {
   if (o.pnl_net == null) return null;
-  const m = Number(lotMultipliers[key] ?? 1);
-  return Number(o.pnl_net) * m;
+  return Number(o.pnl_net) * Number(lotMultipliers[key] ?? 1);
 }
-
 function findCard(key) {
-  return Array.from(document.querySelectorAll('.order-card'))
-    .find(c => c.dataset.key === key);
+  return Array.from(document.querySelectorAll('.order-card')).find(c => c.dataset.key === key);
 }
-
 function changePct(from, to) {
   if (from == null || to == null) return null;
-  const f = Number(from);
-  if (!f) return null;
+  const f = Number(from); if (!f) return null;
   return ((Number(to) - f) / f) * 100;
 }
-
 function fmtPct(v) {
   if (v == null) return '';
   const n = Number(v);
-  const sign = n > 0 ? '+' : '';
   const cls = n > 0 ? 'text-success' : n < 0 ? 'text-danger' : 'text-muted';
-  return `<span class="small ${cls}">${sign}${n.toFixed(2)}%</span>`;
+  return `<span class="small ${cls}">${n > 0 ? '+' : ''}${n.toFixed(2)}%</span>`;
 }
 
-function fmtPts(v) {
-  if (v == null) return '';
-  const n = Number(v);
-  const sign = n > 0 ? '+' : '';
-  return `<span class="small text-muted">${sign}${formatPrice(n)} pts</span>`;
+/* ==========================================================================
+   Live P&L computation
+   ========================================================================== */
+function computeLivePnl(o, key) {
+  const feed = feedManager.getFeed(o.instrument_key);
+  if (!feed || feed.ltp == null || o.entry_price == null) return null;
+  const entry = Number(o.entry_price);
+  const live = Number(feed.ltp);
+  const units = totalUnits(o, key);
+  if (!units) return null;
+  const side = String(o.side || 'BUY').toUpperCase();
+  const sign = side === 'BUY' ? 1 : -1;
+  const points = (live - entry) * sign;
+  const pnl = points * units;
+  const pct = entry ? (live - entry) / entry * 100 * sign : null;
+  return { live, points, pnl, pct, feed, units };
 }
 
-/* --------------------------------------------------------------------------
-   Card template
-   -------------------------------------------------------------------------- */
+function liveProgress(o, live) {
+  const sl = Number(o.stop_loss_price);
+  const tgt = Number(o.target_price);
+  const isBuy = String(o.side || 'BUY').toUpperCase() === 'BUY';
+  if (!isFinite(sl) || !isFinite(tgt) || !isFinite(live)) return null;
+  if (isBuy) {
+    const range = tgt - sl;
+    if (range <= 0) return null;
+    return Math.max(0, Math.min(100, ((live - sl) / range) * 100));
+  } else {
+    const range = sl - tgt;
+    if (range <= 0) return null;
+    return Math.max(0, Math.min(100, ((sl - live) / range) * 100));
+  }
+}
+
+function slGap(o, live) {
+  const sl = Number(o.stop_loss_price);
+  const isBuy = String(o.side || 'BUY').toUpperCase() === 'BUY';
+  const gap = isBuy ? (live - sl) : (sl - live);
+  return { gap, safe: gap >= 0, sl };
+}
+function tgtGap(o, live) {
+  const tgt = Number(o.target_price);
+  const isBuy = String(o.side || 'BUY').toUpperCase() === 'BUY';
+  const gap = isBuy ? (tgt - live) : (live - tgt);
+  return { gap, hit: gap <= 0, tgt };
+}
+
+/* ==========================================================================
+   Live section renderer
+   ========================================================================== */
+function renderLiveSection(o, key) {
+  const live = computeLivePnl(o, key);
+  const feed = feedManager.getFeed(o.instrument_key);
+  const isOpen = o.status === 'DUMMY_PLACED';
+  const realizedPnl = o.pnl_net != null ? Number(o.pnl_net) * Number(lotMultipliers[key] ?? 1) : null;
+
+  const ltpHtml = live
+    ? `<span class="fs-5 fw-bold live-ltp">₹${formatPrice(live.live)}</span>`
+    : `<span class="fs-5 fw-bold live-ltp text-muted">—</span>`;
+
+  const updatedHtml = feed && feed.lastUpdate
+    ? `${fmtTime(feed.lastUpdate)} · ${fmtAge(feed.lastUpdate)}`
+    : 'no data yet';
+
+  let pnlHtml = '<span class="text-muted">—</span>';
+  let pctHtml = '';
+  if (live) {
+    const cls = live.pnl > 0 ? 'pnl-positive' : live.pnl < 0 ? 'pnl-negative' : 'text-muted';
+    pnlHtml = `<span class="fs-5 fw-bold ${cls} live-pnl">${live.pnl > 0 ? '+' : ''}₹${formatPrice(live.pnl)}</span>`;
+    const pc = live.pct ?? 0;
+    const pcls = pc > 0 ? 'text-success' : pc < 0 ? 'text-danger' : 'text-muted';
+    pctHtml = `<span class="small ${pcls} live-pct">${pc > 0 ? '+' : ''}${pc.toFixed(2)}% · ${live.points >= 0 ? '+' : ''}${formatPrice(live.points)} pts</span>`;
+  }
+
+  const progress = live ? liveProgress(o, live.live) : null;
+  const progressHtml = progress != null ? `
+    <div class="mt-2">
+      <div class="d-flex justify-content-between small text-muted mb-1">
+        <span>SL ₹${formatPrice(o.stop_loss_price)}</span>
+        <span class="fw-semibold">Live at ${progress.toFixed(0)}%</span>
+        <span>TGT ₹${formatPrice(o.target_price)}</span>
+      </div>
+      <div class="live-track">
+        <div class="live-track-fill" style="width:${progress.toFixed(1)}%"></div>
+        <div class="live-marker live-marker" style="left:${progress.toFixed(1)}%"></div>
+      </div>
+    </div>` : '';
+
+  const sl = live ? slGap(o, live.live) : null;
+  const tg = live ? tgtGap(o, live.live) : null;
+  const slHtml = sl
+    ? (sl.safe
+        ? `<span class="text-muted">₹${formatPrice(sl.gap)} (${((sl.gap / sl.sl) * 100).toFixed(2)}%)</span>`
+        : `<span class="text-danger fw-semibold">BREACHED by ₹${formatPrice(Math.abs(sl.gap))}</span>`)
+    : '<span class="text-muted">—</span>';
+  const tgHtml = tg
+    ? (tg.hit
+        ? `<span class="text-success fw-semibold">HIT · ₹${formatPrice(Math.abs(tg.gap))} past</span>`
+        : `<span class="text-muted">₹${formatPrice(tg.gap)} (${((tg.gap / tg.tgt) * 100).toFixed(2)}%)</span>`)
+    : '<span class="text-muted">—</span>';
+
+  const hypoHtml = (!isOpen && live && realizedPnl != null) ? `
+    <div class="d-flex justify-content-between small pt-2 mt-2 border-top live-hypo-wrap">
+      <span class="text-muted"><i class="bi bi-arrow-repeat me-1"></i>If still open at live</span>
+      <span class="${live.pnl > 0 ? 'pnl-positive' : live.pnl < 0 ? 'pnl-negative' : 'text-muted'} fw-semibold live-hypo">
+        ${live.pnl > 0 ? '+' : ''}₹${formatPrice(live.pnl)}
+        <span class="text-muted fw-normal">vs realized ${realizedPnl > 0 ? '+' : ''}₹${formatPrice(realizedPnl)}</span>
+      </span>
+    </div>` : '';
+
+  return `
+  <div class="live-section border rounded-3 p-2 p-lg-3 mb-3" data-key="${escapeHtml(key)}">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <div class="divider-label text-uppercase text-muted fw-semibold">
+        <i class="bi bi-broadcast me-1"></i>Live feed &amp; MTM
+      </div>
+      ${liveStateBadge(feed)}
+    </div>
+
+    <div class="row g-2">
+      <div class="col-6">
+        <div class="text-uppercase text-muted small fw-semibold mb-1">Live LTP</div>
+        ${ltpHtml}
+        <div class="small text-muted live-updated">${updatedHtml}</div>
+      </div>
+      <div class="col-6">
+        <div class="text-uppercase text-muted small fw-semibold mb-1">
+          Live MTM P&amp;L ${isOpen ? '<span class="badge text-bg-warning-subtle text-warning border border-warning-subtle tag-badge">open</span>' : '<span class="badge text-bg-light border tag-badge">hypothetical</span>'}
+        </div>
+        ${pnlHtml}
+        <div>${pctHtml}</div>
+      </div>
+    </div>
+
+    ${progressHtml}
+
+    <div class="row g-2 mt-1">
+      <div class="col-6">
+        <div class="text-uppercase text-muted small fw-semibold mb-1">Dist to SL</div>
+        <div class="small live-dist-sl">${slHtml}</div>
+      </div>
+      <div class="col-6">
+        <div class="text-uppercase text-muted small fw-semibold mb-1">Dist to Target</div>
+        <div class="small live-dist-tgt">${tgHtml}</div>
+      </div>
+    </div>
+
+    ${hypoHtml}
+  </div>`;
+}
+
+/* ==========================================================================
+   Order card template (all existing fields + new live section)
+   ========================================================================== */
 function orderCard(o, idx, key) {
   const mult          = Number(lotMultipliers[key] ?? 1);
   const originalPnl   = o.pnl_net != null ? Number(o.pnl_net) : null;
@@ -452,14 +792,10 @@ function orderCard(o, idx, key) {
   const exitCap  = capitalAt(o.exit_price, o, key);
   const slCap    = capitalAt(o.stop_loss_price, o, key);
   const tgtCap   = capitalAt(o.target_price, o, key);
+  const units    = totalUnits(o, key);
 
-  const units = totalUnits(o, key);
-
-  const side      = String(o.side || 'BUY').toUpperCase();
-  const isBuy     = side === 'BUY';
   const isOpen    = o.status === 'DUMMY_PLACED';
   const isWin     = (o.pnl_net != null && Number(o.pnl_net) > 0);
-
   const exitPct   = changePct(o.entry_price, o.exit_price);
   const highPct   = changePct(o.entry_price, o.high_price);
   const lowPct    = changePct(o.entry_price, o.low_price);
@@ -480,7 +816,7 @@ function orderCard(o, idx, key) {
     <div class="card h-100 border-0 shadow-sm order-card" data-key="${escapeHtml(key)}">
       <div class="card-body p-3 p-lg-4 d-flex flex-column">
 
-        <!-- ================= HEADER ================= -->
+        <!-- HEADER -->
         <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
           <div class="overflow-hidden">
             <div class="h6 fw-bold mb-1 text-truncate"
@@ -497,7 +833,7 @@ function orderCard(o, idx, key) {
           </div>
         </div>
 
-        <!-- ================= TAGS ================= -->
+        <!-- TAGS -->
         <div class="d-flex flex-wrap gap-2 mb-3">
           <span class="badge rounded-pill text-bg-light border tag-badge">
             <i class="bi bi-diagram-3 me-1"></i>${escapeHtml(o.strategy || '—')}
@@ -510,46 +846,27 @@ function orderCard(o, idx, key) {
           ${executionBadge(o)}
         </div>
 
-        <!-- ================= TIMELINE ================= -->
+        <!-- TIMELINE -->
         <div class="timeline-box border rounded-3 p-2 p-lg-3 mb-3">
           <div class="divider-label text-uppercase text-muted fw-semibold mb-2">
             <i class="bi bi-clock-history me-1"></i>Timeline (IST)
           </div>
           <div class="row g-2">
             <div class="col-12 col-md-6">
-              <div class="tl-row">
-                <span class="tl-key"><i class="bi bi-lightning-charge me-1"></i>Signal confirmed</span>
-                <span class="tl-val fw-semibold">${fmtTime(trigger.confirmed_time || o.entry_time_ist)}</span>
-              </div>
-              <div class="tl-row">
-                <span class="tl-key"><i class="bi bi-box-arrow-in-right me-1"></i>Entry</span>
-                <span class="tl-val fw-semibold">${fmtTime(o.entry_time_ist || o.started_at_ist)}</span>
-              </div>
-              <div class="tl-row">
-                <span class="tl-key"><i class="bi bi-box-arrow-right me-1"></i>Exit</span>
-                <span class="tl-val fw-semibold">${isOpen ? '<span class="text-warning">open</span>' : fmtTime(o.completed_at_ist)}</span>
-              </div>
+              <div class="tl-row"><span class="tl-key"><i class="bi bi-lightning-charge me-1"></i>Signal confirmed</span><span class="tl-val fw-semibold">${fmtTime(trigger.confirmed_time || o.entry_time_ist)}</span></div>
+              <div class="tl-row"><span class="tl-key"><i class="bi bi-box-arrow-in-right me-1"></i>Entry</span><span class="tl-val fw-semibold">${fmtTime(o.entry_time_ist || o.started_at_ist)}</span></div>
+              <div class="tl-row"><span class="tl-key"><i class="bi bi-box-arrow-right me-1"></i>Exit</span><span class="tl-val fw-semibold">${isOpen ? '<span class="text-warning">open</span>' : fmtTime(o.completed_at_ist)}</span></div>
             </div>
             <div class="col-12 col-md-6">
-              <div class="tl-row">
-                <span class="tl-key"><i class="bi bi-arrow-up-circle me-1"></i>High</span>
-                <span class="tl-val fw-semibold">${fmtTime(o.high_time_ist)}</span>
-              </div>
-              <div class="tl-row">
-                <span class="tl-key"><i class="bi bi-arrow-down-circle me-1"></i>Low</span>
-                <span class="tl-val fw-semibold">${fmtTime(o.low_time_ist)}</span>
-              </div>
-              <div class="tl-row">
-                <span class="tl-key"><i class="bi bi-stopwatch me-1"></i>Duration</span>
-                <span class="tl-val fw-semibold">${fmtDuration(o.duration_seconds)}</span>
-              </div>
+              <div class="tl-row"><span class="tl-key"><i class="bi bi-arrow-up-circle me-1"></i>High</span><span class="tl-val fw-semibold">${fmtTime(o.high_time_ist)}</span></div>
+              <div class="tl-row"><span class="tl-key"><i class="bi bi-arrow-down-circle me-1"></i>Low</span><span class="tl-val fw-semibold">${fmtTime(o.low_time_ist)}</span></div>
+              <div class="tl-row"><span class="tl-key"><i class="bi bi-stopwatch me-1"></i>Duration</span><span class="tl-val fw-semibold">${fmtDuration(o.duration_seconds)}</span></div>
             </div>
           </div>
         </div>
 
-        <!-- ================= PRICES + CAPITAL ================= -->
+        <!-- PRICES + CAPITAL -->
         <div class="row g-2 g-lg-3 p-2 p-lg-3 bg-light border rounded-3 mb-3">
-
           <div class="col-6">
             <div class="text-uppercase text-muted small fw-semibold mb-1">Entry</div>
             <div class="price-row">
@@ -557,7 +874,6 @@ function orderCard(o, idx, key) {
               <div class="text-muted small price-cap cap-entry">${capText(entryCap)}</div>
             </div>
           </div>
-
           <div class="col-6">
             <div class="text-uppercase text-muted small fw-semibold mb-1">Exit ${exitPct != null ? fmtPct(exitPct) : ''}</div>
             <div class="price-row">
@@ -565,7 +881,6 @@ function orderCard(o, idx, key) {
               <div class="text-muted small price-cap cap-exit">${capText(exitCap)}</div>
             </div>
           </div>
-
           <div class="col-6">
             <div class="text-uppercase text-muted small fw-semibold mb-1">
               Stop loss ${o.stop_loss_percent != null ? `<span class="badge text-bg-danger-subtle text-danger border border-danger-subtle tag-badge ms-1">${formatPrice(o.stop_loss_percent)}%</span>` : ''}
@@ -575,7 +890,6 @@ function orderCard(o, idx, key) {
               <div class="text-muted small price-cap cap-sl">${capText(slCap)}</div>
             </div>
           </div>
-
           <div class="col-6">
             <div class="text-uppercase text-muted small fw-semibold mb-1">
               Target ${o.target_points != null ? `<span class="badge text-bg-success-subtle text-success border border-success-subtle tag-badge ms-1">${formatPrice(o.target_points)} pts</span>` : ''}
@@ -585,21 +899,14 @@ function orderCard(o, idx, key) {
               <div class="text-muted small price-cap cap-tgt">${capText(tgtCap)}</div>
             </div>
           </div>
-
           <div class="col-6">
             <div class="text-uppercase text-muted small fw-semibold mb-1">High ${highPct != null ? fmtPct(highPct) : ''}</div>
-            <div class="price-row">
-              <div class="fw-semibold">₹${formatPrice(o.high_price)}</div>
-            </div>
+            <div class="price-row"><div class="fw-semibold">₹${formatPrice(o.high_price)}</div></div>
           </div>
-
           <div class="col-6">
             <div class="text-uppercase text-muted small fw-semibold mb-1">Low ${lowPct != null ? fmtPct(lowPct) : ''}</div>
-            <div class="price-row">
-              <div class="fw-semibold">₹${formatPrice(o.low_price)}</div>
-            </div>
+            <div class="price-row"><div class="fw-semibold">₹${formatPrice(o.low_price)}</div></div>
           </div>
-
           ${rr != null ? `
           <div class="col-12">
             <div class="d-flex flex-wrap justify-content-between gap-2 pt-2 border-top small">
@@ -612,7 +919,10 @@ function orderCard(o, idx, key) {
           </div>` : ''}
         </div>
 
-        <!-- ================= TRIGGER + TARGET RULE ================= -->
+        <!-- ============ LIVE FEED SECTION (NEW) ============ -->
+        ${renderLiveSection(o, key)}
+
+        <!-- TRIGGER + TARGET RULE -->
         <div class="mb-3">
           <div class="divider-label text-uppercase text-muted fw-semibold mb-2">
             <i class="bi bi-broadcast-pin me-1"></i>Trigger &amp; rule
@@ -625,68 +935,33 @@ function orderCard(o, idx, key) {
           </div>
         </div>
 
-        <!-- ================= ORDER DETAILS ================= -->
+        <!-- ORDER DETAILS -->
         <div class="mb-3">
           <div class="divider-label text-uppercase text-muted fw-semibold mb-2">
             <i class="bi bi-list-check me-1"></i>Order details
           </div>
           <div class="kv-list small">
-            <div class="kv-row">
-              <span class="kv-key">Quantity × lot size</span>
-              <span class="kv-val">${o.quantity ?? '—'} × ${o.lot_size ?? 1}${o.quantity_units != null ? ` = ${o.quantity_units} units` : ''}</span>
-            </div>
-            <div class="kv-row">
-              <span class="kv-key">Adjusted units</span>
-              <span class="kv-val qty-units">${units ? units.toLocaleString('en-IN') + ' units' : '—'}</span>
-            </div>
-            <div class="kv-row">
-              <span class="kv-key">Order sequence</span>
-              <span class="kv-val">${o.order_sequence ?? '—'} / ${o.max_orders_per_isolation ?? '—'}</span>
-            </div>
-            <div class="kv-row">
-              <span class="kv-key">Isolation ID</span>
-              <span class="kv-val font-monospace">${escapeHtml(o.isolation_id || '—')}</span>
-            </div>
-            <div class="kv-row">
-              <span class="kv-key">Source instrument (${escapeHtml(o.source_leg_role || '—')})</span>
-              <span class="kv-val font-monospace">${escapeHtml(sourceInst || '—')}</span>
-            </div>
-            ${!sameInstr ? `
-            <div class="kv-row">
-              <span class="kv-key">Target instrument (${escapeHtml(o.target_leg_role || '—')})</span>
-              <span class="kv-val font-monospace">${escapeHtml(targetInst || '—')}</span>
-            </div>` : ''}
-            <div class="kv-row">
-              <span class="kv-key">Broker order</span>
-              <span class="kv-val">${o.broker_order_id
-                ? `<span class="font-monospace">${escapeHtml(o.broker_order_id)}</span>`
-                : '<span class="text-muted">—</span>'}</span>
-            </div>
-            <div class="kv-row">
-              <span class="kv-key">Real order submitted</span>
-              <span class="kv-val">${o.real_order_submitted
-                ? '<span class="text-danger fw-semibold">YES</span>'
-                : '<span class="text-muted">No</span>'}</span>
-            </div>
+            <div class="kv-row"><span class="kv-key">Quantity × lot size</span><span class="kv-val">${o.quantity ?? '—'} × ${o.lot_size ?? 1}${o.quantity_units != null ? ` = ${o.quantity_units} units` : ''}</span></div>
+            <div class="kv-row"><span class="kv-key">Adjusted units</span><span class="kv-val qty-units">${units ? units.toLocaleString('en-IN') + ' units' : '—'}</span></div>
+            <div class="kv-row"><span class="kv-key">Order sequence</span><span class="kv-val">${o.order_sequence ?? '—'} / ${o.max_orders_per_isolation ?? '—'}</span></div>
+            <div class="kv-row"><span class="kv-key">Isolation ID</span><span class="kv-val font-monospace">${escapeHtml(o.isolation_id || '—')}</span></div>
+            <div class="kv-row"><span class="kv-key">Source instrument (${escapeHtml(o.source_leg_role || '—')})</span><span class="kv-val font-monospace">${escapeHtml(sourceInst || '—')}</span></div>
+            ${!sameInstr ? `<div class="kv-row"><span class="kv-key">Target instrument (${escapeHtml(o.target_leg_role || '—')})</span><span class="kv-val font-monospace">${escapeHtml(targetInst || '—')}</span></div>` : ''}
+            <div class="kv-row"><span class="kv-key">Broker order</span><span class="kv-val">${o.broker_order_id ? `<span class="font-monospace">${escapeHtml(o.broker_order_id)}</span>` : '<span class="text-muted">—</span>'}</span></div>
+            <div class="kv-row"><span class="kv-key">Real order submitted</span><span class="kv-val">${o.real_order_submitted ? '<span class="text-danger fw-semibold">YES</span>' : '<span class="text-muted">No</span>'}</span></div>
           </div>
         </div>
 
-        <!-- ================= LOT SIZE INPUT ================= -->
+        <!-- LOT SIZE INPUT -->
         <div class="row g-2 align-items-end mb-3">
           <div class="col-6">
             <div class="text-uppercase text-muted small fw-semibold mb-1">Multiplier</div>
             <div class="fw-semibold">${mult}×</div>
           </div>
           <div class="col-6">
-            <label for="lot-${escapeHtml(key)}" class="text-uppercase text-muted small fw-semibold mb-1">
-              Lot size (×)
-            </label>
+            <label for="lot-${escapeHtml(key)}" class="text-uppercase text-muted small fw-semibold mb-1">Lot size (×)</label>
             <div class="input-group input-group-sm lot-group">
-              <button type="button"
-                      class="btn btn-outline-secondary lot-dec"
-                      data-key="${escapeHtml(key)}"
-                      aria-label="Decrease lot size"
-                      ${canDecrement ? '' : 'disabled'}>
+              <button type="button" class="btn btn-outline-secondary lot-dec" data-key="${escapeHtml(key)}" aria-label="Decrease lot size" ${canDecrement ? '' : 'disabled'}>
                 <i class="bi bi-dash"></i>
               </button>
               <input type="number" min="1" step="1" inputmode="numeric"
@@ -694,50 +969,32 @@ function orderCard(o, idx, key) {
                      class="form-control lot-input"
                      value="${mult}"
                      data-key="${escapeHtml(key)}"
-                     title="Multiplier applied to this order's realized P&amp;L and capital values">
-              <button type="button"
-                      class="btn btn-outline-secondary lot-inc"
-                      data-key="${escapeHtml(key)}"
-                      aria-label="Increase lot size">
+                     title="Multiplier applied to realized P&amp;L, live MTM and capital values">
+              <button type="button" class="btn btn-outline-secondary lot-inc" data-key="${escapeHtml(key)}" aria-label="Increase lot size">
                 <i class="bi bi-plus"></i>
               </button>
             </div>
           </div>
         </div>
 
-        <!-- ================= P&L BREAKDOWN ================= -->
+        <!-- P&L BREAKDOWN -->
         <div class="mt-auto pt-3 border-top">
           <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
             <div class="divider-label text-uppercase text-muted fw-semibold">
-              <i class="bi bi-cash-coin me-1"></i>P&amp;L breakdown${isAdjusted ? ' (adjusted)' : ''}
+              <i class="bi bi-cash-coin me-1"></i>Realized P&amp;L${isAdjusted ? ' (adjusted)' : ''}
             </div>
             ${isAdjusted ? `<span class="badge text-bg-warning-subtle text-warning border border-warning-subtle tag-badge">×${mult}</span>` : ''}
           </div>
-
           <div class="pnl-grid">
-            <div class="pnl-row">
-              <span class="text-muted">Points ${originalPoints != null ? `<span class="badge text-bg-light border tag-badge ms-1">per unit</span>` : ''}</span>
-              <span class="pnl-points">${plainPnl(originalPoints, ' pts')}</span>
-            </div>
-            <div class="pnl-row">
-              <span class="text-muted">Gross</span>
-              <span class="pnl-gross">${plainPnl(adjustedGross)}</span>
-            </div>
-            <div class="pnl-row">
-              <span class="text-muted">Estimated costs</span>
-              <span class="pnl-costs">${plainPnl(adjustedCosts)}</span>
-            </div>
-            <div class="pnl-row">
-              <span class="text-muted fw-semibold">Net realized</span>
-              <span class="pnl-net pnl-display fs-5">${pnlCell(adjustedPnl)}</span>
-            </div>
+            <div class="pnl-row"><span class="text-muted">Points ${originalPoints != null ? `<span class="badge text-bg-light border tag-badge ms-1">per unit</span>` : ''}</span><span class="pnl-points">${plainPnl(originalPoints, ' pts')}</span></div>
+            <div class="pnl-row"><span class="text-muted">Gross</span><span class="pnl-gross">${plainPnl(adjustedGross)}</span></div>
+            <div class="pnl-row"><span class="text-muted">Estimated costs</span><span class="pnl-costs">${plainPnl(adjustedCosts)}</span></div>
+            <div class="pnl-row"><span class="text-muted fw-semibold">Net realized</span><span class="pnl-net pnl-display fs-5">${pnlCell(adjustedPnl)}</span></div>
           </div>
-
           <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top small">
             <span class="text-muted">
               <i class="bi bi-currency-exchange me-1"></i>
-              ${escapeHtml(o.pnl_currency || 'INR')}
-              · ${escapeHtml(o.pnl_cost_model || '—')}
+              ${escapeHtml(o.pnl_currency || 'INR')} · ${escapeHtml(o.pnl_cost_model || '—')}
             </span>
             <span class="pnl-base text-muted ${isAdjusted ? '' : 'd-none'}">
               Base net: ${originalPnl == null ? '—' : '₹' + formatPrice(originalPnl)}
@@ -745,7 +1002,7 @@ function orderCard(o, idx, key) {
           </div>
         </div>
 
-        <!-- ================= FOOTER ================= -->
+        <!-- FOOTER -->
         <div class="text-muted small mt-3 pt-2 border-top d-flex justify-content-between flex-wrap gap-2">
           <span><i class="bi bi-clock me-1"></i>${formatDate(o.entry_time_ist || o.started_at_ist)}</span>
           <span>
@@ -763,9 +1020,9 @@ function orderCard(o, idx, key) {
   </div>`;
 }
 
-/* --------------------------------------------------------------------------
-   Render / update
-   -------------------------------------------------------------------------- */
+/* ==========================================================================
+   Rendering / updates
+   ========================================================================== */
 function renderOrders() {
   const q  = document.getElementById('order-search').value.toLowerCase();
   const s  = document.getElementById('order-strategy').value;
@@ -784,24 +1041,14 @@ function renderOrders() {
     : rows.length + (rows.length === 1 ? ' order' : ' orders');
 
   const grid = document.getElementById('order-grid');
-
   if (!rows.length) {
-    grid.innerHTML = `
-      <div class="col-12">
-        <div class="card border shadow-sm">
-          <div class="card-body text-center text-muted py-5">
-            <i class="bi bi-inbox d-block fs-3 mb-2"></i>
-            No orders match the selected filters.
-          </div>
-        </div>
-      </div>`;
+    grid.innerHTML = `<div class="col-12"><div class="card border shadow-sm"><div class="card-body text-center text-muted py-5"><i class="bi bi-inbox d-block fs-3 mb-2"></i>No orders match the selected filters.</div></div></div>`;
     return;
   }
 
   grid.innerHTML = rows.map(o => {
     const realIdx = allOrders.indexOf(o);
-    const key = orderKey(o, realIdx);
-    return orderCard(o, realIdx, key);
+    return orderCard(o, realIdx, orderKey(o, realIdx));
   }).join('');
 
   attachOrderListeners();
@@ -814,7 +1061,6 @@ function renderOrders() {
 function refreshCard(key) {
   const idx = allOrders.findIndex((o, i) => orderKey(o, i) === key);
   if (idx < 0) return;
-
   const o = allOrders[idx];
   const card = findCard(key);
   if (!card) return;
@@ -826,42 +1072,132 @@ function refreshCard(key) {
   const adjustedCosts = o.estimated_costs != null ? Number(o.estimated_costs) * mult : null;
   const isAdjusted  = mult !== 1 && originalPnl != null;
 
-  /* ---- P&L block ---- */
+  // Realized P&L block
   const display = card.querySelector('.pnl-display');
   const base    = card.querySelector('.pnl-base');
-
   if (display) display.innerHTML = pnlCell(adjustedPnl);
-
   const grossEl = card.querySelector('.pnl-gross');
   const costsEl = card.querySelector('.pnl-costs');
   if (grossEl) grossEl.innerHTML = plainPnl(adjustedGross);
   if (costsEl) costsEl.innerHTML = plainPnl(adjustedCosts);
-
   if (base) {
     if (isAdjusted) {
       base.classList.remove('d-none');
       base.innerHTML = `Base net: ${originalPnl == null ? '—' : '₹' + formatPrice(originalPnl)}`;
-    } else {
-      base.classList.add('d-none');
-    }
+    } else base.classList.add('d-none');
   }
 
-  /* ---- capital block ---- */
+  // Capital block
   const capEntryEl = card.querySelector('.cap-entry');
   const capExitEl  = card.querySelector('.cap-exit');
   const capSlEl    = card.querySelector('.cap-sl');
   const capTgtEl   = card.querySelector('.cap-tgt');
-
   if (capEntryEl) capEntryEl.textContent = capText(capitalAt(o.entry_price, o, key));
   if (capExitEl)  capExitEl.textContent  = capText(capitalAt(o.exit_price, o, key));
   if (capSlEl)    capSlEl.textContent    = capText(capitalAt(o.stop_loss_price, o, key));
   if (capTgtEl)   capTgtEl.textContent   = capText(capitalAt(o.target_price, o, key));
 
-  /* ---- units block ---- */
+  // Units
   const unitsEl = card.querySelector('.qty-units');
   if (unitsEl) {
     const u = totalUnits(o, key);
     unitsEl.textContent = u ? u.toLocaleString('en-IN') + ' units' : '—';
+  }
+
+  // Live section (units changed → live P&L / progress changed)
+  refreshCardLive(key);
+}
+
+function refreshCardLive(key) {
+  const idx = allOrders.findIndex((o, i) => orderKey(o, i) === key);
+  if (idx < 0) return;
+  const o = allOrders[idx];
+  const card = findCard(key);
+  if (!card) return;
+
+  const live = computeLivePnl(o, key);
+  const feed = feedManager.getFeed(o.instrument_key);
+  const isOpen = o.status === 'DUMMY_PLACED';
+  const mult = Number(lotMultipliers[key] ?? 1);
+  const realizedPnl = o.pnl_net != null ? Number(o.pnl_net) * mult : null;
+
+  // State badge
+  const stateEl = card.querySelector('.live-state-badge');
+  if (stateEl) stateEl.outerHTML = liveStateBadge(feed);
+
+  // LTP
+  const ltpEl = card.querySelector('.live-ltp');
+  if (ltpEl) {
+    ltpEl.innerHTML = live
+      ? `₹${formatPrice(live.live)}`
+      : '<span class="text-muted">—</span>';
+  }
+
+  // Updated time
+  const updEl = card.querySelector('.live-updated');
+  if (updEl) {
+    updEl.textContent = feed && feed.lastUpdate
+      ? `${fmtTime(feed.lastUpdate)} · ${fmtAge(feed.lastUpdate)}`
+      : 'no data yet';
+  }
+
+  // P&L
+  const pnlEl = card.querySelector('.live-pnl');
+  if (pnlEl) {
+    if (live) {
+      const cls = live.pnl > 0 ? 'pnl-positive' : live.pnl < 0 ? 'pnl-negative' : 'text-muted';
+      pnlEl.innerHTML = `<span class="${cls}">${live.pnl > 0 ? '+' : ''}₹${formatPrice(live.pnl)}</span>`;
+    } else {
+      pnlEl.innerHTML = '<span class="text-muted">—</span>';
+    }
+  }
+
+  // Pct / points
+  const pctEl = card.querySelector('.live-pct');
+  if (pctEl) {
+    if (live) {
+      const pc = live.pct ?? 0;
+      const cls = pc > 0 ? 'text-success' : pc < 0 ? 'text-danger' : 'text-muted';
+      pctEl.innerHTML = `<span class="${cls}">${pc > 0 ? '+' : ''}${pc.toFixed(2)}% · ${live.points >= 0 ? '+' : ''}${formatPrice(live.points)} pts</span>`;
+    } else {
+      pctEl.innerHTML = '';
+    }
+  }
+
+  // Progress bar
+  const trackFill = card.querySelector('.live-track-fill');
+  const marker    = card.querySelector('.live-marker');
+  const livePctEl = card.querySelector('.live-section .fw-semibold');
+  const progress  = live ? liveProgress(o, live.live) : null;
+  if (trackFill && progress != null) trackFill.style.width = progress.toFixed(1) + '%';
+  if (marker && progress != null) marker.style.left = progress.toFixed(1) + '%';
+  const progressTextEl = card.querySelector('.live-section .live-track')?.previousElementSibling?.querySelector('.fw-semibold');
+  if (progressTextEl && progress != null) progressTextEl.textContent = `Live at ${progress.toFixed(0)}%`;
+
+  // Distances
+  const slEl = card.querySelector('.live-dist-sl');
+  const tgEl = card.querySelector('.live-dist-tgt');
+  if (slEl && live) {
+    const sl = slGap(o, live.live);
+    slEl.innerHTML = sl.safe
+      ? `<span class="text-muted">₹${formatPrice(sl.gap)} (${((sl.gap / sl.sl) * 100).toFixed(2)}%)</span>`
+      : `<span class="text-danger fw-semibold">BREACHED by ₹${formatPrice(Math.abs(sl.gap))}</span>`;
+  }
+  if (tgEl && live) {
+    const tg = tgtGap(o, live.live);
+    tgEl.innerHTML = tg.hit
+      ? `<span class="text-success fw-semibold">HIT · ₹${formatPrice(Math.abs(tg.gap))} past</span>`
+      : `<span class="text-muted">₹${formatPrice(tg.gap)} (${((tg.gap / tg.tgt) * 100).toFixed(2)}%)</span>`;
+  }
+
+  // Hypothetical line for closed orders
+  const hypoEl = card.querySelector('.live-hypo');
+  if (hypoEl && live && realizedPnl != null && !isOpen) {
+    const cls = live.pnl > 0 ? 'pnl-positive' : live.pnl < 0 ? 'pnl-negative' : 'text-muted';
+    hypoEl.innerHTML = `
+      <span class="${cls} fw-semibold">${live.pnl > 0 ? '+' : ''}₹${formatPrice(live.pnl)}</span>
+      <span class="text-muted fw-normal"> vs realized ${realizedPnl > 0 ? '+' : ''}₹${formatPrice(realizedPnl)}</span>
+    `;
   }
 }
 
@@ -876,20 +1212,19 @@ function updateLotButtonState(key) {
 function setLotValue(key, rawValue) {
   let v = parseInt(rawValue, 10);
   if (isNaN(v) || v < 1) v = 1;
-
   const inp = document.querySelector(`.lot-input[data-key="${key}"]`);
   if (inp) inp.value = v;
-
   lotMultipliers[key] = v;
   refreshCard(key);
   refreshSummary();
   updateLotButtonState(key);
 }
 
+/* ==========================================================================
+   Summary metrics (existing + Live MTM + Feeds healthy)
+   ========================================================================== */
 function refreshSummary() {
   const pnlEl = document.getElementById('o-pnl');
-  if (!pnlEl) return;
-
   const anyAdjusted = Object.values(lotMultipliers).some(v => Number(v) !== 1);
 
   let value;
@@ -906,20 +1241,72 @@ function refreshSummary() {
     value = hasAny ? total : null;
   }
 
-  if (value == null) {
-    pnlEl.textContent = '—';
-    pnlEl.className = 'fs-4 fw-bold lh-1';
-    return;
+  if (pnlEl) {
+    if (value == null) {
+      pnlEl.textContent = '—';
+      pnlEl.className = 'fs-4 fw-bold lh-1';
+    } else {
+      const n = Number(value);
+      pnlEl.textContent = (n > 0 ? '+' : '') + '₹' + formatPrice(value);
+      pnlEl.className = 'fs-4 fw-bold lh-1 ' + (n > 0 ? 'pnl-positive' : n < 0 ? 'pnl-negative' : '');
+    }
   }
-  const n = Number(value);
-  pnlEl.textContent = (n > 0 ? '+' : '') + '₹' + formatPrice(value);
-  pnlEl.className = 'fs-4 fw-bold lh-1 ' +
-    (n > 0 ? 'pnl-positive' : n < 0 ? 'pnl-negative' : '');
+
+  refreshLiveMtmMetric();
+  refreshFeedMetric();
 }
 
-/* --------------------------------------------------------------------------
+function refreshLiveMtmMetric() {
+  const mtmEl = document.getElementById('o-mtm');
+  const noteEl = document.getElementById('o-mtm-note');
+  if (!mtmEl) return;
+
+  let total = 0, openCount = 0, withLive = 0;
+  allOrders.forEach((o, i) => {
+    if (o.status !== 'DUMMY_PLACED') return; // open only
+    openCount++;
+    const live = computeLivePnl(o, orderKey(o, i));
+    if (live) { total += live.pnl; withLive++; }
+  });
+
+  if (!openCount) {
+    mtmEl.textContent = '—';
+    mtmEl.className = 'fs-4 fw-bold lh-1';
+    noteEl.textContent = 'no open orders';
+    return;
+  }
+  if (!withLive) {
+    mtmEl.textContent = '—';
+    mtmEl.className = 'fs-4 fw-bold lh-1';
+    noteEl.textContent = `${openCount} open · no live feed`;
+    return;
+  }
+  const sign = total > 0 ? '+' : '';
+  mtmEl.textContent = `${sign}₹${formatPrice(total)}`;
+  mtmEl.className = 'fs-4 fw-bold lh-1 ' + (total > 0 ? 'pnl-positive' : total < 0 ? 'pnl-negative' : '');
+  noteEl.textContent = `${withLive} / ${openCount} open order${openCount === 1 ? '' : 's'} live`;
+}
+
+function refreshFeedMetric() {
+  const feedEl = document.getElementById('o-feeds');
+  const noteEl = document.getElementById('o-feeds-note');
+  if (!feedEl) return;
+  const s = feedManager.getStatus();
+  if (!s.total) {
+    feedEl.textContent = '0';
+    noteEl.textContent = 'no instruments';
+    feedEl.className = 'fs-3 fw-bold lh-1';
+    return;
+  }
+  feedEl.innerHTML = `${s.healthy}<span class="fs-6 text-muted fw-normal"> / ${s.total}</span>`;
+  feedEl.className = 'fs-3 fw-bold lh-1 ' + (s.healthy === s.total ? 'text-success' : s.healthy > 0 ? 'text-warning' : 'text-danger');
+  const last = s.lastPollAt ? fmtAge(s.lastPollAt) : 'never';
+  noteEl.textContent = s.failures ? `${s.failures} failed · last ${last}` : `last poll ${last}`;
+}
+
+/* ==========================================================================
    Event wiring
-   -------------------------------------------------------------------------- */
+   ========================================================================== */
 function attachOrderListeners() {
   document.querySelectorAll('.lot-dec').forEach(btn => {
     btn.addEventListener('click', e => {
@@ -930,7 +1317,6 @@ function attachOrderListeners() {
       setLotValue(key, current - 1);
     });
   });
-
   document.querySelectorAll('.lot-inc').forEach(btn => {
     btn.addEventListener('click', e => {
       const key = e.currentTarget.dataset.key;
@@ -939,33 +1325,20 @@ function attachOrderListeners() {
       setLotValue(key, current + 1);
     });
   });
-
   document.querySelectorAll('.lot-input').forEach(inp => {
     inp.addEventListener('input', e => {
       const key = e.target.dataset.key;
       const raw = e.target.value;
-
-      if (raw === '' || raw === '-') {
-        updateLotButtonState(key);
-        return;
-      }
-
-      let val = parseInt(raw, 10);
-      if (isNaN(val) || val < 1) val = 1;
-
+      if (raw === '' || raw === '-') { updateLotButtonState(key); return; }
+      let val = parseInt(raw, 10); if (isNaN(val) || val < 1) val = 1;
       lotMultipliers[key] = val;
       refreshCard(key);
       refreshSummary();
       updateLotButtonState(key);
     });
-
     inp.addEventListener('blur', e => {
       const key = e.target.dataset.key;
-      const raw = e.target.value;
-
-      let val = parseInt(raw, 10);
-      if (isNaN(val) || val < 1) val = 1;
-
+      let val = parseInt(e.target.value, 10); if (isNaN(val) || val < 1) val = 1;
       e.target.value = val;
       lotMultipliers[key] = val;
       refreshCard(key);
@@ -984,33 +1357,23 @@ document.addEventListener('focusout', e => {
 
 document.getElementById('order-search').addEventListener('input', () => {
   if (ordersView === 'history') {
-    clearTimeout(historySearchTimer);
-    historyPage = 1;
+    clearTimeout(historySearchTimer); historyPage = 1;
     historySearchTimer = setTimeout(() => loadOrders(false), 250);
-  } else {
-    renderOrders();
-  }
+  } else renderOrders();
 });
-
 ['order-strategy', 'order-status'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => {
-    if (ordersView === 'history') {
-      historyPage = 1;
-      loadOrders(false);
-    } else {
-      renderOrders();
-    }
+    if (ordersView === 'history') { historyPage = 1; loadOrders(false); }
+    else renderOrders();
   })
 );
-
 document.getElementById('history-date').addEventListener('change', () => {
-  historyPage = 1;
-  loadOrders(false);
+  historyPage = 1; loadOrders(false);
 });
 
-/* --------------------------------------------------------------------------
+/* ==========================================================================
    Load
-   -------------------------------------------------------------------------- */
+   ========================================================================== */
 async function loadHistoryDates() {
   const note = document.getElementById('history-date-note');
   try {
@@ -1023,13 +1386,10 @@ async function loadHistoryDates() {
       timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
     }).format(new Date());
     picker.max = today;
-
     if (!picker.value && dates.length) picker.value = dates[0];
     if (!picker.value) picker.value = today;
     if (dates.length && !dates.includes(picker.value)) picker.value = dates[0];
-    note.textContent = dates.length
-      ? dates.length + ' archived trading day(s)'
-      : 'No archived trading dates';
+    note.textContent = dates.length ? dates.length + ' archived trading day(s)' : 'No archived trading dates';
   } catch (error) {
     note.textContent = 'Archive dates unavailable';
     console.error(error);
@@ -1057,18 +1417,11 @@ async function setOrdersView(view) {
   orderRequestSequence += 1;
   ordersView = view;
   historyPage = 1;
-
-  const todayButton = document.getElementById('view-today');
-  const historyButton = document.getElementById('view-history');
-  const historyControls = document.getElementById('history-controls');
-
-  todayButton.className = view === 'today'
-    ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-primary';
-  historyButton.className = view === 'history'
-    ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-primary';
-  historyControls.classList.toggle('d-none', view !== 'history');
-  historyControls.classList.toggle('d-flex', view === 'history');
-
+  document.getElementById('view-today').className = view === 'today' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-primary';
+  document.getElementById('view-history').className = view === 'history' ? 'btn btn-sm btn-primary' : 'btn btn-sm btn-outline-primary';
+  const hc = document.getElementById('history-controls');
+  hc.classList.toggle('d-none', view !== 'history');
+  hc.classList.toggle('d-flex', view === 'history');
   if (view === 'history') await loadHistoryDates();
   await loadOrders(false);
 }
@@ -1105,10 +1458,7 @@ async function loadOrders(silent = false) {
     if (requestSequence !== orderRequestSequence) return;
     if (!r.ok) {
       let detail = 'Dashboard API ' + r.status;
-      try {
-        const error = await r.json();
-        detail = error.detail || detail;
-      } catch (_) {}
+      try { const error = await r.json(); detail = error.detail || detail; } catch (_) {}
       throw Error(detail);
     }
 
@@ -1126,16 +1476,17 @@ async function loadOrders(silent = false) {
     }
 
     const activeKeys = new Set(allOrders.map((o, i) => orderKey(o, i)));
-    Object.keys(lotMultipliers).forEach(k => {
-      if (!activeKeys.has(k)) delete lotMultipliers[k];
-    });
+    Object.keys(lotMultipliers).forEach(k => { if (!activeKeys.has(k)) delete lotMultipliers[k]; });
+
+    /* ---- subscribe feed manager to all instrument keys ---- */
+    const instrumentKeys = allOrders.map(o => o.instrument_key).filter(Boolean);
+    feedManager.subscribe(new Set(instrumentKeys));
 
     document.getElementById('o-total').textContent = summary.total_orders ?? allOrders.length;
     document.getElementById('o-open').textContent = summary.open_orders ?? 0;
     document.getElementById('o-completed').textContent = summary.completed_orders ?? 0;
     document.getElementById('o-targets').textContent = summary.target_hits ?? 0;
     document.getElementById('o-stops').textContent = summary.stop_losses ?? 0;
-
     apiRealizedPnl = summary.realized_pnl ?? null;
 
     renderOrders();
@@ -1145,16 +1496,33 @@ async function loadOrders(silent = false) {
   } catch (e) {
     if (requestSequence !== orderRequestSequence) return;
     document.getElementById('order-grid').innerHTML =
-      '<div class="col-12"><div class="alert alert-danger shadow-sm mb-0">' +
-      '<i class="bi bi-exclamation-triangle me-1"></i>' + escapeHtml(e.message) +
-      '</div></div>';
+      '<div class="col-12"><div class="alert alert-danger shadow-sm mb-0"><i class="bi bi-exclamation-triangle me-1"></i>' + escapeHtml(e.message) + '</div></div>';
     if (ordersView === 'history') updateHistoryPagination();
   }
 }
 
-/* --------------------------------------------------------------------------
+/* ==========================================================================
    Bootstrap
-   -------------------------------------------------------------------------- */
+   ========================================================================== */
+feedManager.onChange(() => {
+  allOrders.forEach((o, i) => {
+    const k = orderKey(o, i);
+    if (findCard(k)) refreshCardLive(k);
+  });
+  refreshLiveMtmMetric();
+});
+
+feedManager.onStatus = (status) => {
+  const dot = document.getElementById('feed-dot');
+  const txt = document.getElementById('feed-status-text');
+  if (!dot || !txt) return;
+  if (!status.total) { dot.className = 'pulse-dot idle'; txt.textContent = 'Feed idle'; }
+  else if (status.healthy === status.total) { dot.className = 'pulse-dot live'; txt.textContent = `${status.healthy}/${status.total} live`; }
+  else if (status.healthy > 0) { dot.className = 'pulse-dot stale'; txt.textContent = `${status.healthy}/${status.total} live`; }
+  else { dot.className = 'pulse-dot err'; txt.textContent = 'feed error'; }
+  refreshFeedMetric();
+};
+
 loadOrders(false);
 setInterval(() => {
   if (ordersView === 'today') loadOrders(true);
