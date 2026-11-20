@@ -144,6 +144,58 @@ class LocalSupertrendService:
                     isolated_candles, opposite_candles = results
                     if not isolated_candles:
                         raise UpstoxError(f"No confirmed candles for isolated instrument {keys[0]}")
+
+                    calculated, indicator_state = calculate_supertrend(
+                        isolated_candles,
+                        int(self.config.supertrend_atr_period),
+                        float(self.config.supertrend_multiplier),
+                        bool(self.config.supertrend_change_atr),
+                    )
+                    today_signals = self._today_signals(calculated, _now().date())
+                    as_of = _now()
+                    # Upstox confirmed_time is the candle OPEN. The actual
+                    # confirmation occurs at candle-open + 1 minute. Convert
+                    # wall-clock isolation/as-of bounds to candle-open bounds.
+                    recovery_signals = [
+                        item for item in today_signals
+                        if (stamp := _parse_ts(item.get("confirmed_time"))) is not None
+                        and cutoff - timedelta(minutes=1) < stamp <= as_of - timedelta(minutes=1)
+                    ]
+                    snapshot = {
+                        "event": "snapshot", "indicator": "supertrend",
+                        "instrument_key": legs.get("isolated"), "data_scope": "today_only",
+                        "today_ist_date": as_of.date().isoformat(),
+                        "signals": recovery_signals, "signal_count": len(recovery_signals),
+                        "trend": "up" if indicator_state.get("trend", 1) == 1 else "down",
+                        "supertrend": indicator_state.get("supertrend"),
+                        "atr": indicator_state.get("atr"), "last_ts": indicator_state.get("last_ts"),
+                        "last_close": indicator_state.get("last_close"),
+                    }
+                    await self.order_engine._recover_supertrend_history(
+                        isolation_id, snapshot,
+                        candles_by_role={"isolated": isolated_candles, "opposite": opposite_candles},
+                        recovery_start=cutoff - timedelta(minutes=1),
+                        recovery_end=as_of - timedelta(minutes=1),
+                        recovery_as_of=as_of,
+                        recovery_source="upstox_history_v3_local_supertrend",
+                    )
+                    # If the latest confirmed flip has no following candle yet,
+                    # the order engine deliberately remains WAITING_FOR_HISTORY.
+                    # Re-fetch and retry so the first post-signal candle can price
+                    # the simulated entry instead of dropping that signal forever.
+                    recovery_state = await asyncio.to_thread(
+                        self.order_engine._store.load, isolation_id
+                    )
+                    recovery_status = ((recovery_state or {}).get("supertrend_startup_recovery") or {}).get("status")
+                    if recovery_status == "WAITING_FOR_HISTORY":
+                        logger.info("Local Supertrend recovery awaiting next candle iso=%s; retrying", isolation_id)
+                        await asyncio.sleep(max(5, int(self.config.supertrend_poll_seconds)))
+                        continue
+                    logger.info(
+                        "Local Supertrend recovery iso=%s candles=%d today_signals=%d replay_signals=%d trend=%s",
+                        isolation_id, len(isolated_candles), len(today_signals), len(recovery_signals),
+                        indicator_state.get("trend"),
+                    )
                     break
                 except asyncio.CancelledError:
                     raise
@@ -151,40 +203,6 @@ class LocalSupertrendService:
                     logger.exception("Local Supertrend bootstrap failed iso=%s; retrying in 15s: %s",
                                      isolation_id, exc)
                     await asyncio.sleep(15)
-
-            calculated, indicator_state = calculate_supertrend(
-                isolated_candles,
-                int(self.config.supertrend_atr_period),
-                float(self.config.supertrend_multiplier),
-                bool(self.config.supertrend_change_atr),
-            )
-            today_signals = self._today_signals(calculated, _now().date())
-            recovery_signals = [
-                item for item in today_signals
-                if (stamp := _parse_ts(item.get("confirmed_time"))) is not None
-                and cutoff < stamp <= recovery_end
-            ]
-            snapshot = {
-                "event": "snapshot", "indicator": "supertrend",
-                "instrument_key": legs.get("isolated"), "data_scope": "today_only",
-                "today_ist_date": _now().date().isoformat(),
-                "signals": recovery_signals, "signal_count": len(recovery_signals),
-                "trend": "up" if indicator_state.get("trend", 1) == 1 else "down",
-                "supertrend": indicator_state.get("supertrend"),
-                "atr": indicator_state.get("atr"), "last_ts": indicator_state.get("last_ts"),
-                "last_close": indicator_state.get("last_close"),
-            }
-            await self.order_engine._recover_supertrend_history(
-                isolation_id, snapshot,
-                candles_by_role={"isolated": isolated_candles, "opposite": opposite_candles},
-                recovery_start=cutoff, recovery_end=recovery_end, recovery_as_of=_now(),
-                recovery_source="upstox_history_v3_local_supertrend",
-            )
-            logger.info(
-                "Local Supertrend recovery iso=%s candles=%d signals_today=%d signals_in_buffer=%d trend=%s",
-                isolation_id, len(isolated_candles), len(today_signals), len(recovery_signals),
-                indicator_state.get("trend"),
-            )
 
             seen = {signal_identity(item) for item in today_signals}
             history = isolated_candles
