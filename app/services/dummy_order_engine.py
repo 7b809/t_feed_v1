@@ -205,6 +205,14 @@ class DummyOrderEngine:
                     key, today, completed_today, previous_day, previous_candles
                 )
                 if record is not None:
+                    roles = set()
+                    for meta in self._meta.values():
+                        for role, role_key in (meta.get("legs") or {}).items():
+                            if role_key == key:
+                                roles.add(role)
+                    if key == getattr(self._config, "nifty_instrument_key", ""):
+                        roles.add("main_index")
+                    record["roles"] = sorted(roles)
                     self._pivot_service.update(record)
             except Exception:
                 logger.exception("Pivot-level refresh failed instrument=%s date=%s", key, today)
