@@ -88,6 +88,16 @@ async def lifespan(app: FastAPI):
         )
         active_today = []
 
+    if startup_backfill_digest:
+        startup_isolation_ids = [
+            IsolationStore.make_isolation_id(
+                doc.get("trade_date_ist"), doc.get("instrument_key")
+            )
+            for doc in active_today
+            if doc.get("trade_date_ist") and doc.get("instrument_key")
+        ]
+        dummy_order_engine.mark_startup_backfill_isolations(startup_isolation_ids)
+
     if not active_today:
         logger.info(
             "no active isolations for today (%s); waiting for API POST",
