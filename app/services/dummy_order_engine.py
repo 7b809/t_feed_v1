@@ -167,6 +167,45 @@ class DummyOrderEngine:
         return max(stored_count, len(identities))
 
     @staticmethod
+    def _startup_recovery_order_counts(orders: list[dict] | None) -> tuple[int, int]:
+        """Count unique persisted startup-recovery orders and their completions.
+
+        A completed recovery order can remain in orders.supertrend while
+        order_history is empty (for example, after restoring a Mongo snapshot).
+        Count both locations and deduplicate by order identity.
+        """
+        unique: dict[str, dict] = {}
+        for order in orders or []:
+            if not isinstance(order, dict):
+                continue
+            status = str(order.get("status") or "").upper()
+            if status != "DUMMY_PLACED" and not status.startswith("COMPLETED"):
+                continue
+            order_id = str(order.get("order_id") or "").strip()
+            is_recovery = (
+                str(order.get("simulation_mode") or "").upper() == "STARTUP_RECOVERY"
+                or str(order.get("price_source") or "").lower() == "persisted_one_minute_ohlc"
+                or order_id.startswith("RECOVERY-SUPERTREND-")
+            )
+            if not is_recovery:
+                continue
+            identity = order_id or str(
+                order.get("started_at_ist") or order.get("entry_time_ist")
+                or order.get("placed_at") or id(order)
+            )
+            previous = unique.get(identity)
+            if previous is None or (
+                not str(previous.get("status") or "").upper().startswith("COMPLETED")
+                and status.startswith("COMPLETED")
+            ):
+                unique[identity] = order
+        completed = sum(
+            str(order.get("status") or "").upper().startswith("COMPLETED")
+            for order in unique.values()
+        )
+        return len(unique), completed
+
+    @staticmethod
     def _resolve_supertrend_entry_limit(state: dict, first_signal: dict | None = None) -> int:
         """Return the durable limit selected by the first eligible signal."""
         mode = state.get("supertrend_entry_window_mode")
@@ -1001,13 +1040,18 @@ class DummyOrderEngine:
             if persisted_count >= order_limit and not (
                 isinstance(persisted_order, dict) and persisted_order.get("status") == "DUMMY_PLACED"
             ):
+                restored_orders, completed_orders = self._startup_recovery_order_counts(persisted_orders)
                 state["supertrend_order_count"] = persisted_count
                 state["supertrend_order_limit"] = order_limit
                 state["supertrend_entry_window_mode"] = entry_window_mode
                 state["supertrend_startup_recovery"] = {
                     "status": "COMPLETED", "started_at_ist": self._startup_at.isoformat(),
                     "completed_at_ist": _now().isoformat(),
-                    "orders_replayed": 0, "order_limit": order_limit,
+                    "signals_found": len(signals),
+                    "orders_restored": restored_orders,
+                    "orders_replayed": restored_orders,
+                    "orders_completed": completed_orders,
+                    "order_limit": order_limit,
                     "order_limit_reached": True,
                     "message": "The per-isolation Supertrend entry limit was already reached; historical replay was skipped.",
                 }
@@ -1042,6 +1086,7 @@ class DummyOrderEngine:
 
 
             history = list(state.get("order_history") or [])
+            initial_history_count = len(history)
             order_count = self._supertrend_order_count(state)
             active, active_role, active_candles, last_processed = None, None, None, None
             replayed, limit_reached = 0, False
@@ -1175,11 +1220,24 @@ class DummyOrderEngine:
             state["supertrend_order_count"] = order_count
             state["supertrend_order_limit"] = order_limit
             state["supertrend_entry_window_mode"] = entry_window_mode
+            # Report cumulative persisted recovery state, not only work done
+            # during this process start. Include the current order slot because
+            # a completed order may not also be present in order_history.
+            summary_orders = list(state.get("order_history") or [])
+            current_summary_order = (state.get("orders") or {}).get("supertrend")
+            if isinstance(current_summary_order, dict):
+                summary_orders.append(current_summary_order)
+            restored_orders, _ = self._startup_recovery_order_counts(persisted_orders)
+            replayed_orders, completed_replayed_orders = self._startup_recovery_order_counts(summary_orders)
             state["supertrend_startup_recovery"] = {
                 "status": "CAUGHT_UP" if active is not None else "COMPLETED",
                 "started_at_ist": self._startup_at.isoformat(),
                 "completed_at_ist": _now().isoformat(), "signals_found": len(signals),
-                "orders_replayed": replayed, "orders_completed": len(history),
+                "orders_restored": restored_orders,
+                "orders_replayed": replayed_orders,
+                "orders_completed": completed_replayed_orders,
+                "orders_replayed_this_run": replayed,
+                "orders_completed_this_run": max(0, len(history) - initial_history_count),
                 "order_limit": order_limit,
                 "order_limit_reached": limit_reached or order_count >= order_limit,
                 "method": "one_minute_ohlc_stop_first_if_both_levels_touch",
@@ -1192,7 +1250,7 @@ class DummyOrderEngine:
             await asyncio.to_thread(self._store.save, isolation_id, state)
             self._index_open_orders(isolation_id, state)
             logger.info("Supertrend startup recovery complete iso=%s signals=%d replayed=%d completed=%d limit_reached=%s",
-                        isolation_id, len(signals), replayed, len(history),
+                        isolation_id, len(signals), replayed_orders, completed_replayed_orders,
                         limit_reached or order_count >= order_limit)
             await self._notify_recovery(state)
 
