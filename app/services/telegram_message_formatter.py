@@ -268,3 +268,114 @@ def format_recovery_notification(state: dict[str, Any]) -> str:
         lines.append("Daily target reached • further Supertrend entries locked")
     lines.append("SIMULATION ONLY • No live order sent")
     return "\n".join(lines)
+
+
+
+def format_startup_backfill_notification(
+    app_name: str,
+    session: dict[str, Any],
+    isolations: list[dict[str, Any]],
+    order_states: list[dict[str, Any]],
+    *,
+    today_summary: dict[str, Any] | None = None,
+) -> str:
+    """Build one detailed snapshot of the state restored during an in-session start."""
+    summary = today_summary or {}
+    state_by_id = {
+        str(item.get("isolation_id") or ""): item
+        for item in order_states if isinstance(item, dict)
+    }
+    lines = [
+        f"🚀 {app_name} • STARTUP BACKFILL SNAPSHOT",
+        "📡 Started during the live market session; startup events consolidated below.",
+        f"📅 Trade date: {session.get('trade_date_ist', '—')} IST",
+        f"🕒 Startup time: {_time(session.get('current_time_ist')) or '—'}",
+        f"⏱ Market: {session.get('session_start', '09:15')}–{session.get('session_end', '15:30')} IST",
+        "",
+        "📊 RESTORED SUMMARY",
+        f"🧩 Active isolations: {summary.get('active_isolations', len(isolations))}",
+        f"📂 Orders found: {summary.get('orders', 0)}",
+        f"🟡 Open simulated orders: {summary.get('open_orders', 0)}",
+        f"✅ Completed simulated orders: {summary.get('completed_orders', 0)}",
+    ]
+
+    if not isolations:
+        lines.extend(["", "No active isolation records were found for today."])
+
+    for index, isolation in enumerate(isolations, 1):
+        if not isinstance(isolation, dict):
+            continue
+        isolation_id = str(isolation.get("isolation_id") or isolation.get("_id") or "—")
+        instrument_key = _first_text(isolation, "instrument_key") or "—"
+        symbol = _instrument_name(isolation, instrument_key)
+        opposite = isolation.get("opposite_leg") if isinstance(isolation.get("opposite_leg"), dict) else {}
+        opposite_key = _first_text(opposite, "instrument_key")
+        opposite_symbol = _instrument_name(opposite, opposite_key) if opposite_key else "—"
+        isolated_time = _time(_first_text(
+            isolation, "isolation_time", "isolated_at", "created_at", "received_at"
+        )) or "—"
+        state = state_by_id.get(isolation_id, {})
+        orders: dict[str, dict[str, Any]] = {}
+        for order in list(state.get("order_history") or []) + list((state.get("orders") or {}).values()):
+            if not isinstance(order, dict):
+                continue
+            identity = str(order.get("order_id") or order.get("started_at_ist")
+                           or order.get("entry_time_ist") or id(order))
+            orders[identity] = order
+
+        lines.extend([
+            "",
+            f"━━ ISOLATION {index} ━━",
+            f"📌 {symbol}",
+            f"Key: {instrument_key}",
+            f"↔️ Opposite: {opposite_symbol}",
+            f"Opposite key: {opposite_key or '—'}",
+            f"Status: {isolation.get('status', 'ACTIVE')}",
+            f"Isolated at: {isolated_time}",
+            f"Isolation ID: {isolation_id}",
+            f"Orders for this isolation: {len(orders)}",
+        ])
+        if not orders:
+            lines.append("No persisted dummy orders found.")
+        for order_no, order in enumerate(sorted(
+            orders.values(),
+            key=lambda item: str(item.get("started_at_ist") or item.get("entry_time_ist") or ""),
+        ), 1):
+            order_symbol = _instrument_name(
+                order, order.get("target_instrument_key") or order.get("instrument_key")
+            )
+            status = str(order.get("status") or "UNKNOWN")
+            lines.extend([
+                f"  {order_no}) {order.get('indicator') or order.get('strategy') or 'ORDER'} • {status}",
+                f"     Instrument: {order_symbol}",
+                f"     Entry: {_money(order.get('entry_price'))} | Exit: {_money(order.get('exit_price'))}",
+                f"     Target: {_money(order.get('target_price'))} | SL: {_money(order.get('stop_loss_price'))}",
+                f"     Qty: {order.get('quantity', '—')} | Entry time: {_time(order.get('started_at_ist') or order.get('entry_time_ist')) or '—'}",
+            ])
+            if order.get("pnl_net") is not None:
+                lines.append(f"     P&L: {_money(order.get('pnl_net'))}")
+            if order.get("exit_reason"):
+                lines.append(f"     Exit reason: {str(order.get('exit_reason')).replace('_', ' ').title()}")
+            gtt = order.get("gtt_submission") if isinstance(order.get("gtt_submission"), dict) else {}
+            if gtt:
+                ids = gtt.get("gtt_order_ids") or []
+                lines.append(
+                    f"     GTT: {gtt.get('status', '—')}"
+                    + (f" | IDs: {', '.join(map(str, ids))}" if ids else "")
+                )
+
+        recovery = state.get("supertrend_startup_recovery") or {}
+        if recovery:
+            lines.append(
+                f"Supertrend backfill: {recovery.get('status', '—')} | "
+                f"Signals: {recovery.get('signals_found', 0)} | "
+                f"Replayed: {recovery.get('orders_replayed', 0)} | "
+                f"Closed: {recovery.get('orders_completed', 0)}"
+            )
+
+    lines.extend([
+        "",
+        "ℹ️ This is a restored-state snapshot; no broker order was created by this report.",
+        "🔔 Individual Telegram notifications are enabled for subsequent live actions.",
+    ])
+    return "\\n".join(lines)
