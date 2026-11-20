@@ -177,3 +177,34 @@ External mutation endpoints:
 - `POST /api/external/v1/gtt/place`
 
 When `EXTERNAL_API_AUTH_ENABLED=false`, external requests do not require the token. Never commit the real secret, expose it in browser JavaScript, or send it over plain HTTP. Use HTTPS. This authentication gate does not override `TRADING_ENABLED`, `UPSTOX_SANDBOX`, request validation, or broker account restrictions.
+
+## Orderflow GTT lifecycle and broker cleanup
+
+The authenticated server-to-server API exposes:
+
+- `POST /api/external/v1/gtt/place` — place a multi-leg GTT and persist its GTT ID, source order and isolation.
+- `POST /api/external/v1/gtt/cancel` — cancel one untriggered GTT by ID.
+- `POST /api/external/v1/gtt/cleanup` — reconcile and clean up only the supplied Orderflow GTT IDs.
+
+Enable these independently from normal dashboard order placement:
+
+```env
+EXTERNAL_API_AUTH_ENABLED=true
+EXTERNAL_API_SOURCE_TOKEN=<same 32-character token configured in orderflow_v1>
+ORDERFLOW_CLEANUP_ENABLED=true
+GTT_ENABLED=true
+TRADING_ENABLED=false
+UPSTOX_SANDBOX=false
+```
+
+`ORDERFLOW_CLEANUP_ENABLED` permits authenticated, ID-scoped cancellation and square-off for GTTs supplied by Orderflow. It does not enable regular dashboard orders and the cleanup manager never calls account-wide `exit_positions`.
+
+Cleanup behavior:
+
+1. Fetch GTT details and inspect the ENTRY/TARGET/STOPLOSS rule statuses.
+2. Cancel an ENTRY that is still `SCHEDULED` and has no generated order ID.
+3. For a triggered ENTRY, reconcile its exact generated order ID, cancel pending entry/exit orders, and square off only the remaining quantity tracked against that ENTRY.
+4. Treat zero filled entry quantity as `NO_OPEN_POSITION`.
+5. Block replacement if a triggered GTT has an active TARGET/STOPLOSS rule without an order ID, if a broker state cannot be reconciled, or if cancellation/square-off is not confirmed.
+
+Upstox does not provide details for completed GTTs. Such IDs cannot be reconstructed from the GTT details API alone; cleanup therefore fails closed and requires manual reconciliation rather than assuming that exposure is gone. The existing account-wide Exit All endpoint remains separate and is not used by this manager.
