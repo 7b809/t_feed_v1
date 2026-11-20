@@ -159,6 +159,25 @@ class IsolationSubscriber:
                     isolation_id, payload, new_legs, overwrite=overwrite
                 )
 
+            # Persist PENDING recovery before any WebSocket task can receive
+            # a signal; this closes the startup race with remote live frames.
+            if self._local_supertrend_service is not None:
+                try:
+                    raw_time = next((payload.get(k) for k in (
+                        "isolation_time", "isolated_at", "isolation_timestamp",
+                        "created_at", "received_at", "timestamp"
+                    ) if payload.get(k)), None)
+                    parsed_time = datetime.fromisoformat(
+                        str(raw_time).replace("Z", "+00:00")
+                    ) if raw_time else datetime.now(ZoneInfo("Asia/Kolkata"))
+                    if parsed_time.tzinfo is None:
+                        parsed_time = parsed_time.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+                    await self._local_supertrend_service.start_isolation(
+                        isolation_id, new_legs, parsed_time
+                    )
+                except Exception:
+                    logger.exception("Local Upstox Supertrend registration failed for %s", isolation_id)
+
             # If the same isolation previously had different legs → tear down
             old_legs = self._isolation_legs.get(isolation_id) or {}
             for role in ("isolated", "opposite"):
@@ -270,23 +289,6 @@ class IsolationSubscriber:
                         sessions.setdefault(key, {})["live_feed_state"] = "registered"
                 except Exception:
                     logger.exception("Live-feed registration failed for %s", isolation_id)
-
-            if self._local_supertrend_service is not None:
-                try:
-                    raw_time = next((payload.get(k) for k in (
-                        "isolation_time", "isolated_at", "isolation_timestamp",
-                        "created_at", "received_at", "timestamp"
-                    ) if payload.get(k)), None)
-                    parsed_time = datetime.fromisoformat(
-                        str(raw_time).replace("Z", "+00:00")
-                    ) if raw_time else datetime.now(ZoneInfo("Asia/Kolkata"))
-                    if parsed_time.tzinfo is None:
-                        parsed_time = parsed_time.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
-                    await self._local_supertrend_service.start_isolation(
-                        isolation_id, new_legs, parsed_time
-                    )
-                except Exception:
-                    logger.exception("Local Upstox Supertrend registration failed for %s", isolation_id)
 
             try:
                 self._isolation_store.set_status(
