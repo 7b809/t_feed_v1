@@ -183,7 +183,7 @@ class TelegramService:
             self._startup_batch_active = False
         message = str(digest)
         if buffered_messages:
-            message += "\\n\\n🧾 STARTUP EVENTS"
+            message += "\n\n🧾 STARTUP EVENTS"
             remaining = 1100
             for event in buffered_messages:
                 compact = str(event).strip()
@@ -192,7 +192,7 @@ class TelegramService:
                 compact = compact[:min(260, remaining)]
                 if remaining <= 0:
                     break
-                message += "\\n• " + compact.replace("\\n", " | ")
+                message += "\n• " + compact.replace("\n", " | ")
                 remaining -= len(compact) + 3
         if not self._enabled:
             return False
