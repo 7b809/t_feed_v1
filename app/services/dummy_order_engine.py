@@ -123,6 +123,7 @@ class DummyOrderEngine:
         self._meta: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._watch_index: dict[str, set[tuple[str, str]]] = {}
+        self._pivot_refresh_last_minute: dict[str, str] = {}
 
     def _lock(self, key: str) -> asyncio.Lock:
         return self._locks.setdefault(key, asyncio.Lock())
@@ -1413,6 +1414,15 @@ class DummyOrderEngine:
         if price is None or price <= 0:
             return
         tick_time = _dt(received_at) or _now()
+        if self._pivot_service is not None and self._candle_store is not None:
+            minute_key = tick_time.replace(second=0, microsecond=0).isoformat()
+            if self._pivot_refresh_last_minute.get(instrument_key) != minute_key:
+                self._pivot_refresh_last_minute[instrument_key] = minute_key
+                await asyncio.to_thread(
+                    self._refresh_pivot_levels,
+                    [instrument_key, getattr(self._config, "nifty_instrument_key", "")],
+                    tick_time.date().isoformat(),
+                )
         for isolation_id, indicator in list(self._watch_index.get(instrument_key, set())):
             try:
                 await self._update_order_from_tick(isolation_id, indicator, instrument_key, price, tick_time)
