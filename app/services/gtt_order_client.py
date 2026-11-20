@@ -103,6 +103,12 @@ def submit_gtt_order(config: Settings, order: dict[str, Any]) -> dict[str, Any]:
     ids = (data.get("gtt_order_ids") or []) if isinstance(data, dict) else []
     if not ids and isinstance(body, dict):
         ids = body.get("gtt_order_ids") or []
+    if not ids:
+        raise GTTOrderSubmissionError(
+            "GTT service accepted the request but returned no GTT IDs; outcome must be reconciled manually.",
+            outcome_unknown=True,
+            http_status=response.status_code,
+        )
 
     return {
         "status": "SUBMITTED",
