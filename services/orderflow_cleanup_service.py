@@ -259,7 +259,15 @@ class OrderflowCleanupService:
                     for rule in rules:
                         if str(rule.get("strategy") or "").upper() == "ENTRY":
                             continue
+                        rule_status = self._rule_status(rule)
                         order_id = str(rule.get("order_id") or "").strip()
+                        if rule_status not in {"completed", "cancelled", "expired", "failed", "inactive"} and not order_id:
+                            raise OrderflowCleanupError(
+                                f"GTT {gtt_id} has an active {rule.get('strategy')} rule ({rule_status}) "
+                                "without a broker order ID. It cannot be safely disarmed after ENTRY trigger.",
+                                details={"gtt_order_id": gtt_id, "rule": rule,
+                                         "status": "ACTIVE_EXIT_RULE_UNTRACKED"},
+                            )
                         if order_id and order_id not in exit_ids:
                             exit_ids.append(order_id)
                     order_record = self.repository.find_order(entry_order_id) or order_record
