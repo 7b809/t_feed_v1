@@ -161,16 +161,21 @@ class DummyOrderEngine:
                 available_days = sorted(set(local_days) | set(supplied_days))
                 prior_days = [day for day in available_days if day < today]
                 previous_day = prior_days[-1] if prior_days else None
-                today_candles = (
+                local_today = (
                     self._candle_store.read_day(key, today)
                     if self._candle_store is not None else []
                 )
-                if not today_candles:
-                    today_candles = [
-                        item for item in supplied_candles
-                        if (stamp := self._candle_dt(item)) is not None
-                        and stamp.date().isoformat() == today
-                    ]
+                today_by_time = {
+                    str(item.get("ts") or item.get("timestamp")): item
+                    for item in supplied_candles
+                    if (stamp := self._candle_dt(item)) is not None
+                    and stamp.date().isoformat() == today
+                }
+                today_by_time.update({
+                    str(item.get("ts") or item.get("timestamp")): item
+                    for item in local_today if self._candle_dt(item) is not None
+                })
+                today_candles = list(today_by_time.values())
                 # The first opening candle must be complete before its OHLC
                 # becomes a stable pivot input.
                 completed_today = [
@@ -180,16 +185,21 @@ class DummyOrderEngine:
                 ]
                 if not completed_today:
                     continue
-                previous_candles = (
+                local_previous = (
                     self._candle_store.read_day(key, previous_day)
                     if self._candle_store is not None and previous_day in local_days else []
                 )
-                if not previous_candles and previous_day:
-                    previous_candles = [
-                        item for item in supplied_candles
-                        if (stamp := self._candle_dt(item)) is not None
-                        and stamp.date().isoformat() == previous_day
-                    ]
+                previous_by_time = {
+                    str(item.get("ts") or item.get("timestamp")): item
+                    for item in supplied_candles
+                    if (stamp := self._candle_dt(item)) is not None
+                    and previous_day and stamp.date().isoformat() == previous_day
+                }
+                previous_by_time.update({
+                    str(item.get("ts") or item.get("timestamp")): item
+                    for item in local_previous if self._candle_dt(item) is not None
+                })
+                previous_candles = list(previous_by_time.values())
                 record = self._pivot_service.calculate(
                     key, today, completed_today, previous_day, previous_candles
                 )
