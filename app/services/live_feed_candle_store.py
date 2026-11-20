@@ -250,6 +250,26 @@ class LiveFeedCandleStore:
         return [unique[key] for key in sorted(unique)]
 
 
+    def list_days(self, instrument_key: str) -> list[str]:
+        """Return available persisted candle dates for one instrument, oldest first."""
+        days = set()
+        for folder in self.base_dir.glob(f"*_{_safe(instrument_key)}"):
+            if not folder.is_dir():
+                continue
+            for path in folder.glob("*_1min.json"):
+                day = path.name.removesuffix("_1min.json")
+                try:
+                    datetime.strptime(day, "%Y-%m-%d")
+                except ValueError:
+                    continue
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if payload.get("instrument_key") == instrument_key:
+                    days.add(day)
+        return sorted(days)
+
     def latest_tick(self, instrument_key: str) -> dict[str, Any] | None:
         """Return the latest persisted one-minute candle snapshot for an instrument."""
         candidates = []
