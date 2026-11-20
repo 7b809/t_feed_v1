@@ -12,6 +12,7 @@ from ..config import Settings
 from .dummy_order_store import DummyOrderStore
 from .gtt_order_client import GTTOrderSubmissionError, submit_gtt_order
 from .live_feed_state_store import LiveFeedStateStore
+from .pivot_levels_service import PivotLevelsService
 from .telegram_message_formatter import (
     format_order_completion_notification,
     format_order_entry_notification,
@@ -111,11 +112,13 @@ def _market_ltp(value: Any) -> float | None:
 class DummyOrderEngine:
     def __init__(self, config: Settings, store: DummyOrderStore,
                  live_feed_store: LiveFeedStateStore, telegram: Any = None,
-                 mongo_store: Any = None, candle_store: Any = None) -> None:
+                 mongo_store: Any = None, candle_store: Any = None,
+                 pivot_service: PivotLevelsService | None = None) -> None:
         self._config, self._store = config, store
         self._live_feed, self._telegram = live_feed_store, telegram
         self._mongo_store = mongo_store
         self._candle_store = candle_store
+        self._pivot_service = pivot_service
         self._startup_at = _now()
         self._meta: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -133,6 +136,88 @@ class DummyOrderEngine:
             if isinstance(value, str) and value.strip():
                 return value.strip()
         return None
+
+    def _refresh_pivot_levels(self, instrument_keys: list[str], trade_date: str) -> None:
+        """Refresh local opening pivots and previous-session averages from saved 1m candles."""
+        if self._pivot_service is None or self._candle_store is None:
+            return
+        today = str(trade_date or "")[:10]
+        if not today:
+            return
+        now = _now()
+        for key in sorted({str(value) for value in instrument_keys if value}):
+            try:
+                available_days = self._candle_store.list_days(key)
+                prior_days = [day for day in available_days if day < today]
+                previous_day = prior_days[-1] if prior_days else None
+                today_candles = self._candle_store.read_day(key, today)
+                # The first opening candle must be complete before its OHLC
+                # becomes a stable pivot input.
+                completed_today = [
+                    item for item in today_candles
+                    if (stamp := self._candle_dt(item)) is not None
+                    and stamp + timedelta(minutes=1) <= now
+                ]
+                if not completed_today:
+                    continue
+                previous_candles = (
+                    self._candle_store.read_day(key, previous_day)
+                    if previous_day else []
+                )
+                record = self._pivot_service.calculate(
+                    key, today, completed_today, previous_day, previous_candles
+                )
+                if record is not None:
+                    self._pivot_service.update(record)
+            except Exception:
+                logger.exception("Pivot-level refresh failed instrument=%s date=%s", key, today)
+
+    def _pivot_adjusted_stop_loss(
+        self, instrument_key: str, trade_date: str, entry: float, raw_stop: float
+    ) -> tuple[float, dict[str, Any]]:
+        """Snap a percentage stop to the nearest opening-range support.
+
+        Choose the highest S-level at/below the percentage stop. If the
+        percentage stop is below S3, use S3 as the defined support floor.
+        If pivot data is missing or invalid, preserve the percentage stop.
+        """
+        record = (
+            self._pivot_service.get(instrument_key, trade_date)
+            if self._pivot_service is not None else None
+        )
+        pivots = (record or {}).get("pivot_levels") or {}
+        supports = [
+            (name, _valid)
+            for name in ("S1", "S2", "S3")
+            if (_valid := self._safe_positive_float(pivots.get(name))) is not None
+            and _valid < entry
+        ]
+        selected = [(name, value) for name, value in supports if value <= raw_stop]
+        if selected:
+            level_name, final_stop = max(selected, key=lambda item: item[1])
+        else:
+            s3 = self._safe_positive_float(pivots.get("S3"))
+            if s3 is not None and s3 < entry:
+                level_name, final_stop = "S3_FLOOR", s3
+            else:
+                level_name, final_stop = "PERCENTAGE", raw_stop
+        return round(final_stop, 2), {
+            "instrument_key": instrument_key,
+            "trade_date_ist": trade_date,
+            "raw_percentage_stop_loss": round(raw_stop, 2),
+            "final_stop_loss": round(final_stop, 2),
+            "selected_level": level_name,
+            "pivot_levels": pivots or None,
+            "rule": "nearest_support_at_or_below_percentage_stop; use_S3_if_percentage_stop_below_S3",
+        }
+
+    @staticmethod
+    def _safe_positive_float(value: Any) -> float | None:
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return None
+        return result if result > 0 and result < float("inf") else None
 
     def _indicator_enabled(self) -> bool:
         return bool(
@@ -316,7 +401,11 @@ class DummyOrderEngine:
             return {"eligible": False, "reason": "LIVE_QUOTE_HAS_NO_VALID_LTP"}
         stop_loss_percent = float(getattr(self._config, "dummy_order_stop_loss_percent", 30))
         target_points = self._target_points(entry)
-        stop_loss = round(entry * (1 - stop_loss_percent / 100), 2)
+        raw_stop_loss = round(entry * (1 - stop_loss_percent / 100), 2)
+        trade_date = str(state.get("trade_date_ist") or _now().date().isoformat())[:10]
+        stop_loss, stop_loss_pivot = self._pivot_adjusted_stop_loss(
+            target_key, trade_date, entry, raw_stop_loss
+        )
         target_price = round(entry + target_points, 2)
         if not (0 < stop_loss < entry < target_price):
             return {"eligible": False, "reason": "INVALID_LIVE_ENTRY_OR_RISK_LEVELS"}
@@ -326,8 +415,9 @@ class DummyOrderEngine:
             "quote_age_seconds": round(quote_age, 3),
             "signal_age_seconds": round(signal_age, 3),
             "frame_received_at": frame_time.isoformat(),
-            "stop_loss_price": stop_loss, "target_points": target_points,
-            "target_price": target_price,
+            "stop_loss_price": stop_loss, "raw_stop_loss_price": raw_stop_loss,
+            "stop_loss_pivot": stop_loss_pivot,
+            "target_points": target_points, "target_price": target_price,
         }
 
     async def _persist_mongo_isolation(self, date_key: str, isolation_id: str,
@@ -509,6 +599,11 @@ class DummyOrderEngine:
                 },
                 "date_key": date_key,
             }
+            await asyncio.to_thread(
+                self._refresh_pivot_levels,
+                list(legs.values()) + [getattr(self._config, "nifty_instrument_key", "")],
+                date_key,
+            )
 
     async def prepare_supertrend_recovery(self, isolation_id: str, cutoff: datetime,
                                           recovery_end: datetime) -> None:
@@ -651,6 +746,11 @@ class DummyOrderEngine:
             if not target_key:
                 logger.warning("Dummy order target role %s missing for %s", role, isolation_id)
                 return
+            await asyncio.to_thread(
+                self._refresh_pivot_levels,
+                [target_key, getattr(self._config, "nifty_instrument_key", "")],
+                str(state.get("trade_date_ist") or self._date_key(state, isolation_id)),
+            )
             eligibility = self._live_execution_eligibility(
                 payload, signal, target_key, state, event_origin, live_event_received_at
             )
@@ -785,6 +885,8 @@ class DummyOrderEngine:
                 "exit_price": None,
                 "stop_loss_percent": stop_loss_percent,
                 "stop_loss_price": eligibility["stop_loss_price"],
+                "raw_stop_loss_price": eligibility.get("raw_stop_loss_price"),
+                "stop_loss_pivot": eligibility.get("stop_loss_pivot"),
                 "target_points": target_points,
                 "target_price": eligibility["target_price"],
                 "target_rule": (
@@ -929,6 +1031,9 @@ class DummyOrderEngine:
         entry_time = self._candle_dt(candle) or signal["dt"]
         target_points = self._target_points(entry)
         stop_percent = float(getattr(self._config, "dummy_order_stop_loss_percent", 30))
+        raw_stop = round(entry * (1 - stop_percent / 100), 2)
+        trade_date = str(meta.get("date_key") or isolation_id.split("__", 1)[0])[:10]
+        stop_loss, stop_loss_pivot = self._pivot_adjusted_stop_loss(key, trade_date, entry, raw_stop)
         quantity = int(getattr(self._config, "dummy_order_quantity", 1))
         lot_size = int((meta.get("instrument_meta") or {}).get(role, {}).get("lot_size") or 1)
         return {
@@ -943,7 +1048,8 @@ class DummyOrderEngine:
             "started_at_ist": entry_time.isoformat(), "high_price": entry,
             "high_time_ist": entry_time.isoformat(), "low_price": entry,
             "low_time_ist": entry_time.isoformat(), "stop_loss_percent": stop_percent,
-            "stop_loss_price": round(entry * (1 - stop_percent / 100), 2),
+            "raw_stop_loss_price": raw_stop, "stop_loss_price": stop_loss,
+            "stop_loss_pivot": stop_loss_pivot,
             "target_points": target_points, "target_price": round(entry + target_points, 2),
             "target_rule": "configured entry-price target bands",
             "trigger": {"direction": signal["direction"], "confirmed_time": signal["time"],
@@ -1069,6 +1175,11 @@ class DummyOrderEngine:
             else:
                 candles = {role: self._candle_store.read_day(key, trade_date) if key else []
                            for role, key in keys.items()}
+            await asyncio.to_thread(
+                self._refresh_pivot_levels,
+                list(keys.values()) + [getattr(self._config, "nifty_instrument_key", "")],
+                trade_date,
+            )
             required_roles = {("isolated" if x["direction"] == "BULLISH" else "opposite") for x in signals}
             missing = [role for role in required_roles if not candles.get(role)]
             if missing:
