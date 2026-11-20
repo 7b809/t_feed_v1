@@ -21,6 +21,7 @@ from .services.isolation_store import IsolationStore, today_ist_date
 from .services.isolation_subscriber import IsolationSubscriber
 from .services.live_feed_state_store import LiveFeedStateStore
 from .services.live_feed_candle_store import LiveFeedCandleStore
+from .services.pivot_levels_service import PivotLevelsService
 from .services.mongodb_service import MongoDbService
 from .services.sr_state_store import SrStateStore
 from .services.supertrend_state_store import SupertrendStateStore
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
     supertrend_state_store = SupertrendStateStore(config)
     live_feed_state_store = LiveFeedStateStore(config)
     live_feed_candle_store = LiveFeedCandleStore(config)
+    pivot_levels_service = PivotLevelsService(config.data_dir)
     telegram = TelegramService(config)
     dummy_order_store = DummyOrderStore(config)
     dummy_order_mongo_store = DummyOrderMongoStore(mongo.db["dummy_orders"])
@@ -55,6 +57,7 @@ async def lifespan(app: FastAPI):
         config, dummy_order_store, live_feed_state_store, telegram,
         mongo_store=dummy_order_mongo_store,
         candle_store=live_feed_candle_store,
+        pivot_service=pivot_levels_service,
     )
     backup_collection = mongo.db[config.daily_data_backup_collection]
     daily_backup_service = DailyDataBackupService(config, telegram, backup_collection)
@@ -191,6 +194,7 @@ async def lifespan(app: FastAPI):
     app.state.supertrend_state_store = supertrend_state_store
     app.state.live_feed_state_store = live_feed_state_store
     app.state.live_feed_candle_store = live_feed_candle_store
+    app.state.pivot_levels_service = pivot_levels_service
     app.state.subscriber = subscriber
     app.state.scheduler = scheduler
     app.state.telegram = telegram
