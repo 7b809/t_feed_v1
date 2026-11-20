@@ -426,6 +426,11 @@ class DummyOrderEngine:
             state["updated_at"] = _now().isoformat()
             await asyncio.to_thread(self._store.save, isolation_id, state)
 
+    async def get_isolation_time(self, isolation_id: str) -> datetime | None:
+        """Return the original persisted isolation timestamp (IST-aware)."""
+        state = await asyncio.to_thread(self._store.load, isolation_id)
+        return _dt(state.get("isolation_time")) if isinstance(state, dict) else None
+
     async def mark_closed(self, isolation_id: str) -> None:
         state = await asyncio.to_thread(self._store.load, isolation_id)
         if state:
@@ -917,16 +922,10 @@ class DummyOrderEngine:
             state["supertrend_entry_window_mode"] = entry_window_mode
             state["supertrend_order_limit"] = order_limit
             persisted_order = (state.get("orders") or {}).get("supertrend")
-            if isinstance(persisted_order, dict) and persisted_order.get("status") == "DUMMY_PLACED":
-                state["supertrend_startup_recovery"] = {
-                    "status": "SKIPPED_EXISTING_ORDER", "started_at_ist": as_of.isoformat(),
-                    "message": "An open order already exists; preserving it prevents duplicate replay.",
-                }
-                await asyncio.to_thread(self._store.save, isolation_id, state)
-                self._index_open_orders(isolation_id, state)
-                return
             persisted_count = self._supertrend_order_count(state)
-            if persisted_count >= order_limit:
+            if persisted_count >= order_limit and not (
+                isinstance(persisted_order, dict) and persisted_order.get("status") == "DUMMY_PLACED"
+            ):
                 state["supertrend_order_count"] = persisted_count
                 state["supertrend_order_limit"] = order_limit
                 state["supertrend_entry_window_mode"] = entry_window_mode
@@ -972,6 +971,47 @@ class DummyOrderEngine:
             active, active_role, active_candles, last_processed = None, None, None, None
             replayed, limit_reached = 0, False
 
+            # Resume a persisted open dummy position instead of declaring
+            # recovery complete. The application may have been offline while
+            # its stop-loss/target was touched; replay candles since its last
+            # safely knowable entry boundary before accepting newer signals.
+            if isinstance(persisted_order, dict) and persisted_order.get("status") == "DUMMY_PLACED":
+                active = persisted_order
+                active_role = str(active.get("target_leg_role") or "").lower()
+                if active_role not in {"isolated", "opposite"}:
+                    target_key = active.get("target_instrument_key") or active.get("instrument_key")
+                    active_role = next((role for role, key in keys.items() if key == target_key), None)
+                if active_role not in {"isolated", "opposite"} or not candles.get(active_role):
+                    state["supertrend_startup_recovery"] = {
+                        "status": "WAITING_FOR_HISTORY",
+                        "started_at_ist": as_of.isoformat(),
+                        "message": "Cannot resume the persisted open dummy order without its target-leg candle history.",
+                        "missing_candle_roles": [active_role] if active_role else ["unknown"],
+                    }
+                    state["updated_at"] = _now().isoformat()
+                    await asyncio.to_thread(self._store.save, isolation_id, state)
+                    return
+                active_candles = candles[active_role]
+                started = _dt(active.get("started_at_ist") or active.get("entry_time_ist"))
+                if started is None:
+                    state["supertrend_startup_recovery"] = {
+                        "status": "WAITING_FOR_HISTORY",
+                        "started_at_ist": as_of.isoformat(),
+                        "message": "Persisted open dummy order has no valid entry timestamp.",
+                    }
+                    await asyncio.to_thread(self._store.save, isolation_id, state)
+                    return
+                if active.get("price_source") == "persisted_one_minute_ohlc":
+                    last_processed = started
+                else:
+                    # A live LTP entry can occur part-way through a one-minute
+                    # bar. Skip that partial bar because OHLC cannot tell
+                    # whether its high/low happened before or after the fill.
+                    last_processed = (
+                        started if started.second == 0 and started.microsecond == 0
+                        else started.replace(second=0, microsecond=0) + timedelta(minutes=1)
+                    )
+
             async def persist_closed(order: dict):
                 self._finish_recovery_order(order, order["exit_reason"],
                                             float(order["exit_price"]), _dt(order["completed_at_ist"]))
@@ -985,9 +1025,14 @@ class DummyOrderEngine:
                 role = "isolated" if signal["direction"] == "BULLISH" else "opposite"
                 key, role_candles = keys.get(role), candles.get(role) or []
                 if active is not None:
-                    hit, result, _ = self._simulate_candles(
-                        active, active_candles or [], last_processed or _dt(active["started_at_ist"]),
-                        signal["dt"])
+                    # The signal timestamp is the OPEN of the candle whose
+                    # close confirms the flip. Include that complete candle in
+                    # exit replay before applying a signal-reversal close.
+                    signal_candle_end = signal["dt"] + timedelta(minutes=1)
+                    hit, result, scanned_through = self._simulate_candles(
+                        active, active_candles or [],
+                        last_processed or _dt(active["started_at_ist"]),
+                        signal_candle_end)
                     if hit:
                         active["exit_reason"], active["exit_price"] = result["reason"], result["price"]
                         active["completed_at_ist"] = result["time"].isoformat()
@@ -995,7 +1040,7 @@ class DummyOrderEngine:
                         active = active_role = active_candles = last_processed = None
                     elif role != active_role:
                         prior = [bar for bar in (active_candles or [])
-                                 if (self._candle_dt(bar) or self._startup_at) < signal["dt"]]
+                                 if (self._candle_dt(bar) or self._startup_at) <= signal["dt"]]
                         if not prior:
                             state["supertrend_startup_recovery"] = {
                                 "status": "WAITING_FOR_HISTORY",
@@ -1009,6 +1054,8 @@ class DummyOrderEngine:
                         await persist_closed(active)
                         active = active_role = active_candles = last_processed = None
                     else:
+                        if scanned_through is not None:
+                            last_processed = scanned_through + timedelta(minutes=1)
                         continue
                 if order_count >= order_limit:
                     limit_reached = True

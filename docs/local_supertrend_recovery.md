@@ -24,10 +24,18 @@ unfinished bars, and calculates today's confirmed Supertrend signals.
    actual fetch-completion time. The five-minute buffer delays the recovery
    attempt; it is not a five-minute cap on the signals being recovered.
 7. Simulate entry at the first available one-minute candle after each
-   confirmed signal, then replay OHLC for target/stop/reversal. If no
-   following entry candle is available yet, keep recovery pending and retry
-   after the local polling interval. Never guess an entry price.
-8. Once recovery completes, poll today's intraday candles and forward only
+   confirmed signal, then replay OHLC chronologically for target/stop/reversal.
+   If one candle touches both stop and target, stop-loss wins (conservative
+   OHLC-only assumption). Include the full candle that confirms an opposite
+   Supertrend flip before pricing a reversal at that candle's close.
+8. If a persisted dummy order is still open when the process restarts, resume
+   it from its last safely knowable candle boundary and replay missed candles
+   through the recovery time. For a live LTP fill inside a one-minute bar, skip
+   that partial bar because OHLC cannot establish whether its extremes occurred
+   before or after entry.
+9. If no following entry candle or required target-leg history is available,
+   keep recovery pending and retry. Never guess an entry or exit price.
+10. Once recovery completes, poll today's intraday candles and forward only
    newly confirmed post-recovery signals to the existing order engine.
 
 ## Candle timestamps
@@ -47,7 +55,13 @@ candle that closed before isolation is excluded.
 - Local candle confirmation gets a bounded 120-second age allowance to
   account for candle-open timestamps. Frame receive time and quote freshness
   retain their stricter checks.
-- Historical replay is simulation/backfill only and never submits GTT.
+- Historical replay and restart catch-up are simulation/backfill only and never
+  submit GTT or broker orders. Existing open dummy positions are replayed rather
+  than skipped; historical entries always persist broker_order_id=null and
+  real_order_submitted=false.
+- The original isolation timestamp is read from durable dummy-order state on
+  process restart; refreshed Mongo received_at values do not move the recovery
+  boundary.
 - Confirmed-time identities are checked against persisted orders to prevent
   duplicate processing.
 - API failures and missing candles leave recovery pending and are retried;

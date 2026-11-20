@@ -167,9 +167,11 @@ class IsolationSubscriber:
                         "isolation_time", "isolated_at", "isolation_timestamp",
                         "created_at", "received_at", "timestamp"
                     ) if payload.get(k)), None)
-                    parsed_time = datetime.fromisoformat(
-                        str(raw_time).replace("Z", "+00:00")
-                    ) if raw_time else datetime.now(ZoneInfo("Asia/Kolkata"))
+                    persisted_time = await self._dummy_order_engine.get_isolation_time(isolation_id)
+                    parsed_time = persisted_time or (
+                        datetime.fromisoformat(str(raw_time).replace("Z", "+00:00"))
+                        if raw_time else datetime.now(ZoneInfo("Asia/Kolkata"))
+                    )
                     if parsed_time.tzinfo is None:
                         parsed_time = parsed_time.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
                     await self._local_supertrend_service.start_isolation(
