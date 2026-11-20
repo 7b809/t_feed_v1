@@ -28,6 +28,23 @@
 
   .price-row { line-height: 1.25; }
   .price-cap { font-variant-numeric: tabular-nums; }
+
+  .kv-list .kv-row { display: flex; justify-content: space-between; gap: .5rem; padding: .2rem 0; }
+  .kv-list .kv-row + .kv-row { border-top: 1px dashed rgba(0,0,0,.06); }
+  .kv-list .kv-key { color: #6c757d; }
+  .kv-list .kv-val { font-weight: 500; text-align: right; word-break: break-word; }
+
+  .timeline-box { background: #f8f9fa; }
+  .timeline-box .tl-row { display: flex; justify-content: space-between; gap: .5rem; padding: .15rem 0; font-size: .8125rem; }
+  .timeline-box .tl-key { color: #6c757d; }
+  .timeline-box .tl-key i { width: 14px; text-align: center; }
+
+  .pnl-grid { font-variant-numeric: tabular-nums; }
+  .pnl-grid .pnl-row { display: flex; justify-content: space-between; gap: .5rem; padding: .15rem 0; font-size: .8125rem; }
+  .pnl-grid .pnl-row + .pnl-row { border-top: 1px dashed rgba(0,0,0,.06); }
+
+  .tag-badge { font-size: .72rem; font-weight: 500; }
+  .divider-label { font-size: .68rem; letter-spacing: .08em; }
 </style>
 
 <!-- ============================= PAGE HEADING ============================= -->
@@ -155,7 +172,7 @@
           <span class="input-group-text bg-light border-end-0">
             <i class="bi bi-search text-muted"></i>
           </span>
-          <input id="order-search" class="form-control border-start-0" placeholder="Search symbol / isolation">
+          <input id="order-search" class="form-control border-start-0" placeholder="Search symbol / isolation / order id">
         </div>
       </div>
       <div class="col-6 col-md-3">
@@ -232,7 +249,102 @@ let orderRequestSequence = 0;
 let historySearchTimer = null;
 
 /* --------------------------------------------------------------------------
-   Helpers
+   Small formatters / badges
+   -------------------------------------------------------------------------- */
+function fmtTime(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleTimeString('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+    });
+  } catch (_) { return '—'; }
+}
+
+function fmtDuration(sec) {
+  if (sec == null) return '—';
+  const s = Math.max(0, Math.floor(Number(sec)));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${r}s`;
+  return `${r}s`;
+}
+
+function modeBadge(mode) {
+  if (!mode) return '';
+  const map = {
+    'DUMMY_ONLY':        { cls: 'text-bg-secondary',                            icon: 'bi-cpu' },
+    'LIVE':              { cls: 'text-bg-danger',                               icon: 'bi-broadcast' },
+    'BACKTEST':          { cls: 'text-bg-info-subtle text-info border border-info-subtle', icon: 'bi-clock-history' },
+    'PAPER':             { cls: 'text-bg-warning-subtle text-warning border border-warning-subtle', icon: 'bi-journal-text' }
+  };
+  const info = map[mode] || { cls: 'text-bg-light border', icon: 'bi-tag' };
+  return `<span class="badge ${info.cls} rounded-pill tag-badge">
+            <i class="bi ${info.icon} me-1"></i>${escapeHtml(String(mode).replaceAll('_',' '))}
+          </span>`;
+}
+
+function simulationBadge(mode) {
+  if (!mode) return '';
+  const map = {
+    'STARTUP_RECOVERY': { cls: 'text-bg-warning-subtle text-warning border border-warning-subtle', icon: 'bi-arrow-counterclockwise' },
+    'LIVE_TICK':        { cls: 'text-bg-success-subtle text-success border border-success-subtle', icon: 'bi-activity' },
+    'REPLAY':           { cls: 'text-bg-info-subtle text-info border border-info-subtle',          icon: 'bi-play-btn' },
+    'BACKFILL':         { cls: 'text-bg-info-subtle text-info border border-info-subtle',          icon: 'bi-clock-history' }
+  };
+  const info = map[mode] || { cls: 'text-bg-light border', icon: 'bi-diagram-3' };
+  return `<span class="badge ${info.cls} rounded-pill tag-badge">
+            <i class="bi ${info.icon} me-1"></i>${escapeHtml(String(mode).replaceAll('_',' '))}
+          </span>`;
+}
+
+function signalBadge(dir) {
+  const d = String(dir || '').toUpperCase();
+  const map = {
+    'BULLISH': { cls: 'text-bg-success-subtle text-success border border-success-subtle', icon: 'bi-arrow-up-right' },
+    'BEARISH': { cls: 'text-bg-danger-subtle text-danger border border-danger-subtle',    icon: 'bi-arrow-down-right' },
+    'NEUTRAL': { cls: 'text-bg-secondary-subtle text-secondary border',                   icon: 'bi-dash' }
+  };
+  const info = map[d] || map['NEUTRAL'];
+  return `<span class="badge ${info.cls} rounded-pill tag-badge">
+            <i class="bi ${info.icon} me-1"></i>${escapeHtml(d || 'NEUTRAL')}
+          </span>`;
+}
+
+function priceSourceBadge(src) {
+  if (!src) return '';
+  const s = String(src).toLowerCase();
+  const isLive = s.includes('live') || s.includes('tick');
+  const isPersisted = s.includes('persist') || s.includes('ohlc') || s.includes('history') || s.includes('replay');
+  const cls = isLive ? 'text-bg-success' : isPersisted ? 'text-bg-info' : 'text-bg-light border';
+  const icon = isLive ? 'bi-broadcast' : isPersisted ? 'bi-database-check' : 'bi-database';
+  return `<span class="badge ${cls} rounded-pill tag-badge">
+            <i class="bi ${icon} me-1"></i>${escapeHtml(String(src).replaceAll('_',' '))}
+          </span>`;
+}
+
+function executionBadge(o) {
+  if (o.real_order_submitted) {
+    return `<span class="badge text-bg-danger rounded-pill tag-badge">
+              <i class="bi bi-broadcast me-1"></i>LIVE EXECUTED
+            </span>`;
+  }
+  return `<span class="badge text-bg-secondary rounded-pill tag-badge">
+            <i class="bi bi-cpu me-1"></i>SIMULATED
+          </span>`;
+}
+
+function targetRuleBadge(rule) {
+  if (!rule) return '';
+  return `<span class="badge text-bg-light border rounded-pill tag-badge">
+            <i class="bi bi-bullseye me-1"></i>${escapeHtml(rule)}
+          </span>`;
+}
+
+/* --------------------------------------------------------------------------
+   Existing helpers
    -------------------------------------------------------------------------- */
 function orderKey(o, idx) {
   return o.history_key || (o.order_id ? String(o.order_id) : `__idx_${idx}`);
@@ -258,6 +370,14 @@ function pnlCell(v) {
   const cls = n > 0 ? 'pnl-positive' : n < 0 ? 'pnl-negative' : 'text-muted';
   const sign = n > 0 ? '+' : '';
   return `<span class="fw-semibold ${cls}">${sign}₹${formatPrice(v)}</span>`;
+}
+
+function plainPnl(v, suffix = '') {
+  if (v == null) return '<span class="text-muted">—</span>';
+  const n = Number(v);
+  const cls = n > 0 ? 'pnl-positive' : n < 0 ? 'pnl-negative' : 'text-muted';
+  const sign = n > 0 ? '+' : '';
+  return `<span class="${cls}">${sign}${formatPrice(v)}${suffix}</span>`;
 }
 
 /* ---- capital calculation helpers ---- */
@@ -290,13 +410,41 @@ function findCard(key) {
     .find(c => c.dataset.key === key);
 }
 
+function changePct(from, to) {
+  if (from == null || to == null) return null;
+  const f = Number(from);
+  if (!f) return null;
+  return ((Number(to) - f) / f) * 100;
+}
+
+function fmtPct(v) {
+  if (v == null) return '';
+  const n = Number(v);
+  const sign = n > 0 ? '+' : '';
+  const cls = n > 0 ? 'text-success' : n < 0 ? 'text-danger' : 'text-muted';
+  return `<span class="small ${cls}">${sign}${n.toFixed(2)}%</span>`;
+}
+
+function fmtPts(v) {
+  if (v == null) return '';
+  const n = Number(v);
+  const sign = n > 0 ? '+' : '';
+  return `<span class="small text-muted">${sign}${formatPrice(n)} pts</span>`;
+}
+
 /* --------------------------------------------------------------------------
    Card template
    -------------------------------------------------------------------------- */
 function orderCard(o, idx, key) {
   const mult          = Number(lotMultipliers[key] ?? 1);
   const originalPnl   = o.pnl_net != null ? Number(o.pnl_net) : null;
+  const originalGross = o.pnl_gross != null ? Number(o.pnl_gross) : null;
+  const originalCosts = o.estimated_costs != null ? Number(o.estimated_costs) : null;
+  const originalPoints= o.pnl_points != null ? Number(o.pnl_points) : null;
+
   const adjustedPnl   = calcAdjustedPnl(o, key);
+  const adjustedGross = originalGross != null ? originalGross * mult : null;
+  const adjustedCosts = originalCosts != null ? originalCosts * mult : null;
   const isAdjusted    = mult !== 1 && originalPnl != null;
   const canDecrement  = mult > 1;
 
@@ -307,16 +455,41 @@ function orderCard(o, idx, key) {
 
   const units = totalUnits(o, key);
 
+  const side      = String(o.side || 'BUY').toUpperCase();
+  const isBuy     = side === 'BUY';
+  const isOpen    = o.status === 'DUMMY_PLACED';
+  const isWin     = (o.pnl_net != null && Number(o.pnl_net) > 0);
+
+  const exitPct   = changePct(o.entry_price, o.exit_price);
+  const highPct   = changePct(o.entry_price, o.high_price);
+  const lowPct    = changePct(o.entry_price, o.low_price);
+
+  const riskPerUnit   = (o.entry_price != null && o.stop_loss_price != null)
+    ? Math.abs(Number(o.entry_price) - Number(o.stop_loss_price)) : null;
+  const rewardPerUnit = (o.entry_price != null && o.target_price != null)
+    ? Math.abs(Number(o.target_price) - Number(o.entry_price)) : null;
+  const rr = (riskPerUnit && rewardPerUnit) ? rewardPerUnit / riskPerUnit : null;
+
+  const trigger = o.trigger || {};
+  const sourceInst = o.source_instrument_key || '';
+  const targetInst = o.target_instrument_key || o.instrument_key || '';
+  const sameInstr  = sourceInst && targetInst && sourceInst === targetInst;
+
   return `
   <div class="col-12 col-lg-6">
     <div class="card h-100 border-0 shadow-sm order-card" data-key="${escapeHtml(key)}">
       <div class="card-body p-3 p-lg-4 d-flex flex-column">
 
-        <!-- header -->
+        <!-- ================= HEADER ================= -->
         <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
           <div class="overflow-hidden">
-            <div class="h6 fw-bold mb-1 text-truncate">${escapeHtml(o.trading_symbol || o.instrument_key || '—')}</div>
-            <div class="text-muted small text-truncate">${escapeHtml(o.order_id || '—')}</div>
+            <div class="h6 fw-bold mb-1 text-truncate"
+                 title="${escapeHtml(o.trading_symbol || o.instrument_key || '')}">
+              ${escapeHtml(o.trading_symbol || o.instrument_key || '—')}
+            </div>
+            <div class="text-muted small text-truncate" title="${escapeHtml(o.order_id || '')}">
+              <i class="bi bi-hash me-1"></i>${escapeHtml(o.order_id || '—')}
+            </div>
           </div>
           <div class="d-flex align-items-center gap-2 flex-shrink-0">
             ${stateBadge(statusLabel(o))}
@@ -324,13 +497,57 @@ function orderCard(o, idx, key) {
           </div>
         </div>
 
-        <!-- tags -->
+        <!-- ================= TAGS ================= -->
         <div class="d-flex flex-wrap gap-2 mb-3">
-          <span class="badge rounded-pill text-bg-light border">${escapeHtml(o.strategy || '—')}</span>
+          <span class="badge rounded-pill text-bg-light border tag-badge">
+            <i class="bi bi-diagram-3 me-1"></i>${escapeHtml(o.strategy || '—')}
+          </span>
           ${sideBadge(o.side)}
+          ${signalBadge(o.signal_direction)}
+          ${modeBadge(o.mode)}
+          ${simulationBadge(o.simulation_mode)}
+          ${priceSourceBadge(o.price_source)}
+          ${executionBadge(o)}
         </div>
 
-        <!-- prices grid with capital -->
+        <!-- ================= TIMELINE ================= -->
+        <div class="timeline-box border rounded-3 p-2 p-lg-3 mb-3">
+          <div class="divider-label text-uppercase text-muted fw-semibold mb-2">
+            <i class="bi bi-clock-history me-1"></i>Timeline (IST)
+          </div>
+          <div class="row g-2">
+            <div class="col-12 col-md-6">
+              <div class="tl-row">
+                <span class="tl-key"><i class="bi bi-lightning-charge me-1"></i>Signal confirmed</span>
+                <span class="tl-val fw-semibold">${fmtTime(trigger.confirmed_time || o.entry_time_ist)}</span>
+              </div>
+              <div class="tl-row">
+                <span class="tl-key"><i class="bi bi-box-arrow-in-right me-1"></i>Entry</span>
+                <span class="tl-val fw-semibold">${fmtTime(o.entry_time_ist || o.started_at_ist)}</span>
+              </div>
+              <div class="tl-row">
+                <span class="tl-key"><i class="bi bi-box-arrow-right me-1"></i>Exit</span>
+                <span class="tl-val fw-semibold">${isOpen ? '<span class="text-warning">open</span>' : fmtTime(o.completed_at_ist)}</span>
+              </div>
+            </div>
+            <div class="col-12 col-md-6">
+              <div class="tl-row">
+                <span class="tl-key"><i class="bi bi-arrow-up-circle me-1"></i>High</span>
+                <span class="tl-val fw-semibold">${fmtTime(o.high_time_ist)}</span>
+              </div>
+              <div class="tl-row">
+                <span class="tl-key"><i class="bi bi-arrow-down-circle me-1"></i>Low</span>
+                <span class="tl-val fw-semibold">${fmtTime(o.low_time_ist)}</span>
+              </div>
+              <div class="tl-row">
+                <span class="tl-key"><i class="bi bi-stopwatch me-1"></i>Duration</span>
+                <span class="tl-val fw-semibold">${fmtDuration(o.duration_seconds)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= PRICES + CAPITAL ================= -->
         <div class="row g-2 g-lg-3 p-2 p-lg-3 bg-light border rounded-3 mb-3">
 
           <div class="col-6">
@@ -342,7 +559,7 @@ function orderCard(o, idx, key) {
           </div>
 
           <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">Exit</div>
+            <div class="text-uppercase text-muted small fw-semibold mb-1">Exit ${exitPct != null ? fmtPct(exitPct) : ''}</div>
             <div class="price-row">
               <div class="fw-semibold">${o.exit_price == null ? '—' : '₹' + formatPrice(o.exit_price)}</div>
               <div class="text-muted small price-cap cap-exit">${capText(exitCap)}</div>
@@ -350,7 +567,9 @@ function orderCard(o, idx, key) {
           </div>
 
           <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">Stop loss</div>
+            <div class="text-uppercase text-muted small fw-semibold mb-1">
+              Stop loss ${o.stop_loss_percent != null ? `<span class="badge text-bg-danger-subtle text-danger border border-danger-subtle tag-badge ms-1">${formatPrice(o.stop_loss_percent)}%</span>` : ''}
+            </div>
             <div class="price-row">
               <div class="fw-semibold text-danger">₹${formatPrice(o.stop_loss_price)}</div>
               <div class="text-muted small price-cap cap-sl">${capText(slCap)}</div>
@@ -358,25 +577,105 @@ function orderCard(o, idx, key) {
           </div>
 
           <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">Target</div>
+            <div class="text-uppercase text-muted small fw-semibold mb-1">
+              Target ${o.target_points != null ? `<span class="badge text-bg-success-subtle text-success border border-success-subtle tag-badge ms-1">${formatPrice(o.target_points)} pts</span>` : ''}
+            </div>
             <div class="price-row">
               <div class="fw-semibold text-success">₹${formatPrice(o.target_price)}</div>
               <div class="text-muted small price-cap cap-tgt">${capText(tgtCap)}</div>
             </div>
           </div>
 
+          <div class="col-6">
+            <div class="text-uppercase text-muted small fw-semibold mb-1">High ${highPct != null ? fmtPct(highPct) : ''}</div>
+            <div class="price-row">
+              <div class="fw-semibold">₹${formatPrice(o.high_price)}</div>
+            </div>
+          </div>
+
+          <div class="col-6">
+            <div class="text-uppercase text-muted small fw-semibold mb-1">Low ${lowPct != null ? fmtPct(lowPct) : ''}</div>
+            <div class="price-row">
+              <div class="fw-semibold">₹${formatPrice(o.low_price)}</div>
+            </div>
+          </div>
+
+          ${rr != null ? `
+          <div class="col-12">
+            <div class="d-flex flex-wrap justify-content-between gap-2 pt-2 border-top small">
+              <span class="text-muted">
+                <i class="bi bi-rulers me-1"></i>Risk ${riskPerUnit != null ? '₹' + formatPrice(riskPerUnit) + '/unit' : '—'}
+                · Reward ${rewardPerUnit != null ? '₹' + formatPrice(rewardPerUnit) + '/unit' : '—'}
+              </span>
+              <span class="fw-semibold">R:R ≈ 1 : ${rr.toFixed(2)}</span>
+            </div>
+          </div>` : ''}
         </div>
 
-        <!-- qty + lot size input -->
+        <!-- ================= TRIGGER + TARGET RULE ================= -->
+        <div class="mb-3">
+          <div class="divider-label text-uppercase text-muted fw-semibold mb-2">
+            <i class="bi bi-broadcast-pin me-1"></i>Trigger &amp; rule
+          </div>
+          <div class="d-flex flex-wrap gap-2">
+            ${trigger.source_event ? `<span class="badge text-bg-light border tag-badge"><i class="bi bi-lightning me-1"></i>${escapeHtml(trigger.source_event)}</span>` : ''}
+            ${trigger.direction ? signalBadge(trigger.direction) : ''}
+            ${o.target_rule ? targetRuleBadge(o.target_rule) : ''}
+            ${o.indicator ? `<span class="badge text-bg-light border tag-badge"><i class="bi bi-graph-up me-1"></i>${escapeHtml(o.indicator)}</span>` : ''}
+          </div>
+        </div>
+
+        <!-- ================= ORDER DETAILS ================= -->
+        <div class="mb-3">
+          <div class="divider-label text-uppercase text-muted fw-semibold mb-2">
+            <i class="bi bi-list-check me-1"></i>Order details
+          </div>
+          <div class="kv-list small">
+            <div class="kv-row">
+              <span class="kv-key">Quantity × lot size</span>
+              <span class="kv-val">${o.quantity ?? '—'} × ${o.lot_size ?? 1}${o.quantity_units != null ? ` = ${o.quantity_units} units` : ''}</span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-key">Adjusted units</span>
+              <span class="kv-val qty-units">${units ? units.toLocaleString('en-IN') + ' units' : '—'}</span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-key">Order sequence</span>
+              <span class="kv-val">${o.order_sequence ?? '—'} / ${o.max_orders_per_isolation ?? '—'}</span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-key">Isolation ID</span>
+              <span class="kv-val font-monospace">${escapeHtml(o.isolation_id || '—')}</span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-key">Source instrument (${escapeHtml(o.source_leg_role || '—')})</span>
+              <span class="kv-val font-monospace">${escapeHtml(sourceInst || '—')}</span>
+            </div>
+            ${!sameInstr ? `
+            <div class="kv-row">
+              <span class="kv-key">Target instrument (${escapeHtml(o.target_leg_role || '—')})</span>
+              <span class="kv-val font-monospace">${escapeHtml(targetInst || '—')}</span>
+            </div>` : ''}
+            <div class="kv-row">
+              <span class="kv-key">Broker order</span>
+              <span class="kv-val">${o.broker_order_id
+                ? `<span class="font-monospace">${escapeHtml(o.broker_order_id)}</span>`
+                : '<span class="text-muted">—</span>'}</span>
+            </div>
+            <div class="kv-row">
+              <span class="kv-key">Real order submitted</span>
+              <span class="kv-val">${o.real_order_submitted
+                ? '<span class="text-danger fw-semibold">YES</span>'
+                : '<span class="text-muted">No</span>'}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= LOT SIZE INPUT ================= -->
         <div class="row g-2 align-items-end mb-3">
           <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">Order quantity</div>
-            <div class="fw-semibold">
-              ${o.quantity ?? '—'} <span class="text-muted small">× ${o.lot_size ?? 1}</span>
-            </div>
-            <div class="text-muted small qty-units">
-              ${units ? '≈ ' + units.toLocaleString('en-IN') + ' units' : ''}
-            </div>
+            <div class="text-uppercase text-muted small fw-semibold mb-1">Multiplier</div>
+            <div class="fw-semibold">${mult}×</div>
           </div>
           <div class="col-6">
             <label for="lot-${escapeHtml(key)}" class="text-uppercase text-muted small fw-semibold mb-1">
@@ -395,7 +694,7 @@ function orderCard(o, idx, key) {
                      class="form-control lot-input"
                      value="${mult}"
                      data-key="${escapeHtml(key)}"
-                     title="Multiplier applied to this order's realized P&L and capital values">
+                     title="Multiplier applied to this order's realized P&amp;L and capital values">
               <button type="button"
                       class="btn btn-outline-secondary lot-inc"
                       data-key="${escapeHtml(key)}"
@@ -406,24 +705,57 @@ function orderCard(o, idx, key) {
           </div>
         </div>
 
-        <!-- pnl -->
+        <!-- ================= P&L BREAKDOWN ================= -->
         <div class="mt-auto pt-3 border-top">
-          <div class="d-flex justify-content-between align-items-end gap-2">
-            <div>
-              <div class="text-uppercase text-muted small fw-semibold mb-1 pnl-label">
-                ${isAdjusted ? 'Adjusted P&amp;L' : 'Realized P&amp;L'}
-              </div>
-              <div class="fs-4 fw-bold lh-1 pnl-display">${pnlCell(adjustedPnl)}</div>
+          <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+            <div class="divider-label text-uppercase text-muted fw-semibold">
+              <i class="bi bi-cash-coin me-1"></i>P&amp;L breakdown${isAdjusted ? ' (adjusted)' : ''}
             </div>
-            <div class="text-end text-muted small pnl-base ${isAdjusted ? '' : 'd-none'}">
-              Base: ${originalPnl == null ? '—' : '₹' + formatPrice(originalPnl)}
+            ${isAdjusted ? `<span class="badge text-bg-warning-subtle text-warning border border-warning-subtle tag-badge">×${mult}</span>` : ''}
+          </div>
+
+          <div class="pnl-grid">
+            <div class="pnl-row">
+              <span class="text-muted">Points ${originalPoints != null ? `<span class="badge text-bg-light border tag-badge ms-1">per unit</span>` : ''}</span>
+              <span class="pnl-points">${plainPnl(originalPoints, ' pts')}</span>
             </div>
+            <div class="pnl-row">
+              <span class="text-muted">Gross</span>
+              <span class="pnl-gross">${plainPnl(adjustedGross)}</span>
+            </div>
+            <div class="pnl-row">
+              <span class="text-muted">Estimated costs</span>
+              <span class="pnl-costs">${plainPnl(adjustedCosts)}</span>
+            </div>
+            <div class="pnl-row">
+              <span class="text-muted fw-semibold">Net realized</span>
+              <span class="pnl-net pnl-display fs-5">${pnlCell(adjustedPnl)}</span>
+            </div>
+          </div>
+
+          <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top small">
+            <span class="text-muted">
+              <i class="bi bi-currency-exchange me-1"></i>
+              ${escapeHtml(o.pnl_currency || 'INR')}
+              · ${escapeHtml(o.pnl_cost_model || '—')}
+            </span>
+            <span class="pnl-base text-muted ${isAdjusted ? '' : 'd-none'}">
+              Base net: ${originalPnl == null ? '—' : '₹' + formatPrice(originalPnl)}
+            </span>
           </div>
         </div>
 
-        <!-- footer -->
-        <div class="text-muted small mt-3 pt-2 border-top">
-          <i class="bi bi-clock me-1"></i>${formatDate(o.entry_time_ist || o.started_at_ist)}
+        <!-- ================= FOOTER ================= -->
+        <div class="text-muted small mt-3 pt-2 border-top d-flex justify-content-between flex-wrap gap-2">
+          <span><i class="bi bi-clock me-1"></i>${formatDate(o.entry_time_ist || o.started_at_ist)}</span>
+          <span>
+            ${isWin
+              ? '<span class="text-success"><i class="bi bi-arrow-up-right me-1"></i>Win</span>'
+              : (o.pnl_net != null && Number(o.pnl_net) < 0
+                  ? '<span class="text-danger"><i class="bi bi-arrow-down-right me-1"></i>Loss</span>'
+                  : '<span class="text-muted"><i class="bi bi-dash me-1"></i>Flat</span>')}
+            · ${escapeHtml(o.simulation_mode || o.mode || '—')}
+          </span>
         </div>
 
       </div>
@@ -442,7 +774,8 @@ function renderOrders() {
   const rows = ordersView === 'history' ? allOrders : allOrders.filter(o =>
     (!s  || o.strategy === s) &&
     (!st || o.status   === st) &&
-    (!q  || [o.trading_symbol, o.instrument_key, o.isolation_id, o.order_id]
+    (!q  || [o.trading_symbol, o.instrument_key, o.isolation_id, o.order_id,
+             o.source_instrument_key, o.target_instrument_key, o.simulation_mode, o.mode]
               .some(v => String(v || '').toLowerCase().includes(q)))
   );
 
@@ -489,20 +822,25 @@ function refreshCard(key) {
   const mult        = Number(lotMultipliers[key] ?? 1);
   const originalPnl = o.pnl_net != null ? Number(o.pnl_net) : null;
   const adjustedPnl = calcAdjustedPnl(o, key);
+  const adjustedGross = o.pnl_gross != null ? Number(o.pnl_gross) * mult : null;
+  const adjustedCosts = o.estimated_costs != null ? Number(o.estimated_costs) * mult : null;
   const isAdjusted  = mult !== 1 && originalPnl != null;
 
   /* ---- P&L block ---- */
-  const label   = card.querySelector('.pnl-label');
   const display = card.querySelector('.pnl-display');
   const base    = card.querySelector('.pnl-base');
 
-  if (label)   label.innerHTML   = isAdjusted ? 'Adjusted P&amp;L' : 'Realized P&amp;L';
   if (display) display.innerHTML = pnlCell(adjustedPnl);
+
+  const grossEl = card.querySelector('.pnl-gross');
+  const costsEl = card.querySelector('.pnl-costs');
+  if (grossEl) grossEl.innerHTML = plainPnl(adjustedGross);
+  if (costsEl) costsEl.innerHTML = plainPnl(adjustedCosts);
 
   if (base) {
     if (isAdjusted) {
       base.classList.remove('d-none');
-      base.innerHTML = `Base: ${originalPnl == null ? '—' : '₹' + formatPrice(originalPnl)}`;
+      base.innerHTML = `Base net: ${originalPnl == null ? '—' : '₹' + formatPrice(originalPnl)}`;
     } else {
       base.classList.add('d-none');
     }
@@ -523,7 +861,7 @@ function refreshCard(key) {
   const unitsEl = card.querySelector('.qty-units');
   if (unitsEl) {
     const u = totalUnits(o, key);
-    unitsEl.textContent = u ? '≈ ' + u.toLocaleString('en-IN') + ' units' : '';
+    unitsEl.textContent = u ? u.toLocaleString('en-IN') + ' units' : '—';
   }
 }
 
@@ -556,8 +894,6 @@ function refreshSummary() {
 
   let value;
   if (ordersView === 'history' || !anyAdjusted) {
-    // History API P&L covers every matching order for the selected date,
-    // not only the current page. Lot multipliers remain a per-card preview.
     value = apiRealizedPnl;
   } else {
     let total = 0, hasAny = false;
