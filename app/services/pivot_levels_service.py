@@ -146,6 +146,8 @@ class PivotLevelsService:
             if not isinstance(instruments, dict):
                 instruments = {}
                 day_data["instruments"] = instruments
+            if instruments.get(instrument_key) == record:
+                return record
             instruments[instrument_key] = record
             payload["updated_at_ist"] = datetime.now(IST).isoformat()
             fd, temp_name = tempfile.mkstemp(
