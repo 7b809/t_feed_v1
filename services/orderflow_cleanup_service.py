@@ -233,6 +233,8 @@ class OrderflowCleanupService:
                     # SCHEDULED is the documented untriggered state. PENDING is
                     # intentionally not treated as safe-to-cancel at GTT level.
                     if entry_status == "scheduled" and not entry_order_id:
+                        self._update_audit(audit, status="CANCEL_REQUESTED",
+                                           last_gtt_details=details)
                         # A successful DELETE response is the broker's explicit
                         # cancellation acknowledgement. A triggered GTT is rejected
                         # by Upstox and therefore falls through to the fail-closed path.
