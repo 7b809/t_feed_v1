@@ -149,8 +149,14 @@ class OrderflowCleanupService:
             for exit_id in exit_ids:
                 exit_state = self._cancel_pending_order(str(exit_id))
                 total_exited += int(exit_state.get("filled_quantity") or 0)
-            if total_exited >= filled:
-                return {"status": "POSITION_ALREADY_EXITED" if total_exited else "NO_OPEN_POSITION",
+            if total_exited > filled:
+                raise OrderflowCleanupError(
+                    f"Recorded GTT exit fills exceed the ENTRY fill for {entry_order_id}; possible reverse exposure needs manual reconciliation.",
+                    details={"entry_order_id": entry_order_id, "filled_quantity": filled,
+                             "exited_quantity": total_exited, "status": "OVER_EXITED"},
+                )
+            if total_exited == filled:
+                return {"status": "POSITION_ALREADY_EXITED",
                         "entry_order_id": entry_order_id,
                         "filled_quantity": filled, "exited_quantity": total_exited}
             try:
@@ -182,6 +188,12 @@ class OrderflowCleanupService:
         order_record = self.repository.find_order(entry_order_id) or order_record
         exit_ids = list((order_record.get("exit_orders_by_order_id") or {}).get(entry_order_id) or [])
         total_exited = sum(int(self._sync(str(value)).get("filled_quantity") or 0) for value in exit_ids)
+        if total_exited > filled:
+            raise OrderflowCleanupError(
+                f"Recorded exit fills exceed ENTRY fills for {entry_order_id}; manual reconciliation is required.",
+                details={"entry_order_id": entry_order_id, "filled_quantity": filled,
+                         "exited_quantity": total_exited, "status": "OVER_EXITED"},
+            )
         if total_exited < filled:
             raise OrderflowCleanupError(
                 f"Orderflow position remains partially open for {entry_order_id}.",
