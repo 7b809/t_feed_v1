@@ -732,7 +732,7 @@ function renderLiveSection(o, key) {
     </div>` : '';
 
   return `
-  <div class="live-section border rounded-3 p-2 p-lg-3 mb-3" data-key="${escapeHtml(key)}">
+  <div class="live-section border rounded-3 p-2 p-lg-3 h-100" data-key="${escapeHtml(key)}">
     <div class="d-flex justify-content-between align-items-center mb-2">
       <div class="divider-label text-uppercase text-muted fw-semibold">
         <i class="bi bi-broadcast me-1"></i>Live feed &amp; MTM
@@ -865,62 +865,70 @@ function orderCard(o, idx, key) {
           </div>
         </div>
 
-        <!-- PRICES + CAPITAL -->
-        <div class="row g-2 g-lg-3 p-2 p-lg-3 bg-light border rounded-3 mb-3">
-          <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">Entry</div>
-            <div class="price-row">
-              <div class="fw-semibold">₹${formatPrice(o.entry_price)}</div>
-              <div class="text-muted small price-cap cap-entry">${capText(entryCap)}</div>
+        <!-- PRICES + CAPITAL & LIVE FEED (SIDE BY SIDE) -->
+        <div class="row g-3 mb-3 align-items-stretch">
+          <div class="col-12 col-xl-6">
+            <div class="bg-light border rounded-3 p-2 p-lg-3 h-100">
+              <div class="row g-2 g-lg-3">
+                <div class="col-6">
+                  <div class="text-uppercase text-muted small fw-semibold mb-1">Entry</div>
+                  <div class="price-row">
+                    <div class="fw-semibold">₹${formatPrice(o.entry_price)}</div>
+                    <div class="text-muted small price-cap cap-entry">${capText(entryCap)}</div>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="text-uppercase text-muted small fw-semibold mb-1">Exit ${exitPct != null ? fmtPct(exitPct) : ''}</div>
+                  <div class="price-row">
+                    <div class="fw-semibold">${o.exit_price == null ? '—' : '₹' + formatPrice(o.exit_price)}</div>
+                    <div class="text-muted small price-cap cap-exit">${capText(exitCap)}</div>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="text-uppercase text-muted small fw-semibold mb-1">
+                    Stop loss ${o.stop_loss_percent != null ? `<span class="badge text-bg-danger-subtle text-danger border border-danger-subtle tag-badge ms-1">${formatPrice(o.stop_loss_percent)}%</span>` : ''}
+                  </div>
+                  <div class="price-row">
+                    <div class="fw-semibold text-danger">₹${formatPrice(o.stop_loss_price)}</div>
+                    <div class="text-muted small price-cap cap-sl">${capText(slCap)}</div>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="text-uppercase text-muted small fw-semibold mb-1">
+                    Target ${o.target_points != null ? `<span class="badge text-bg-success-subtle text-success border border-success-subtle tag-badge ms-1">${formatPrice(o.target_points)} pts</span>` : ''}
+                  </div>
+                  <div class="price-row">
+                    <div class="fw-semibold text-success">₹${formatPrice(o.target_price)}</div>
+                    <div class="text-muted small price-cap cap-tgt">${capText(tgtCap)}</div>
+                  </div>
+                </div>
+                <div class="col-6">
+                  <div class="text-uppercase text-muted small fw-semibold mb-1">High ${highPct != null ? fmtPct(highPct) : ''}</div>
+                  <div class="price-row"><div class="fw-semibold">₹${formatPrice(o.high_price)}</div></div>
+                </div>
+                <div class="col-6">
+                  <div class="text-uppercase text-muted small fw-semibold mb-1">Low ${lowPct != null ? fmtPct(lowPct) : ''}</div>
+                  <div class="price-row"><div class="fw-semibold">₹${formatPrice(o.low_price)}</div></div>
+                </div>
+                ${rr != null ? `
+                <div class="col-12">
+                  <div class="d-flex flex-wrap justify-content-between gap-2 pt-2 border-top small">
+                    <span class="text-muted">
+                      <i class="bi bi-rulers me-1"></i>Risk ${riskPerUnit != null ? '₹' + formatPrice(riskPerUnit) + '/unit' : '—'}
+                      · Reward ${rewardPerUnit != null ? '₹' + formatPrice(rewardPerUnit) + '/unit' : '—'}
+                    </span>
+                    <span class="fw-semibold">R:R ≈ 1 : ${rr.toFixed(2)}</span>
+                  </div>
+                </div>` : ''}
+              </div>
             </div>
           </div>
-          <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">Exit ${exitPct != null ? fmtPct(exitPct) : ''}</div>
-            <div class="price-row">
-              <div class="fw-semibold">${o.exit_price == null ? '—' : '₹' + formatPrice(o.exit_price)}</div>
-              <div class="text-muted small price-cap cap-exit">${capText(exitCap)}</div>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">
-              Stop loss ${o.stop_loss_percent != null ? `<span class="badge text-bg-danger-subtle text-danger border border-danger-subtle tag-badge ms-1">${formatPrice(o.stop_loss_percent)}%</span>` : ''}
-            </div>
-            <div class="price-row">
-              <div class="fw-semibold text-danger">₹${formatPrice(o.stop_loss_price)}</div>
-              <div class="text-muted small price-cap cap-sl">${capText(slCap)}</div>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">
-              Target ${o.target_points != null ? `<span class="badge text-bg-success-subtle text-success border border-success-subtle tag-badge ms-1">${formatPrice(o.target_points)} pts</span>` : ''}
-            </div>
-            <div class="price-row">
-              <div class="fw-semibold text-success">₹${formatPrice(o.target_price)}</div>
-              <div class="text-muted small price-cap cap-tgt">${capText(tgtCap)}</div>
-            </div>
-          </div>
-          <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">High ${highPct != null ? fmtPct(highPct) : ''}</div>
-            <div class="price-row"><div class="fw-semibold">₹${formatPrice(o.high_price)}</div></div>
-          </div>
-          <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">Low ${lowPct != null ? fmtPct(lowPct) : ''}</div>
-            <div class="price-row"><div class="fw-semibold">₹${formatPrice(o.low_price)}</div></div>
-          </div>
-          ${rr != null ? `
-          <div class="col-12">
-            <div class="d-flex flex-wrap justify-content-between gap-2 pt-2 border-top small">
-              <span class="text-muted">
-                <i class="bi bi-rulers me-1"></i>Risk ${riskPerUnit != null ? '₹' + formatPrice(riskPerUnit) + '/unit' : '—'}
-                · Reward ${rewardPerUnit != null ? '₹' + formatPrice(rewardPerUnit) + '/unit' : '—'}
-              </span>
-              <span class="fw-semibold">R:R ≈ 1 : ${rr.toFixed(2)}</span>
-            </div>
-          </div>` : ''}
-        </div>
 
-        <!-- ============ LIVE FEED SECTION (NEW) ============ -->
-        ${renderLiveSection(o, key)}
+          <!-- ============ LIVE FEED SECTION ============ -->
+          <div class="col-12 col-xl-6">
+            ${renderLiveSection(o, key)}
+          </div>
+        </div>
 
         <!-- TRIGGER + TARGET RULE -->
         <div class="mb-3">
@@ -935,70 +943,78 @@ function orderCard(o, idx, key) {
           </div>
         </div>
 
-        <!-- ORDER DETAILS -->
-        <div class="mb-3">
-          <div class="divider-label text-uppercase text-muted fw-semibold mb-2">
-            <i class="bi bi-list-check me-1"></i>Order details
-          </div>
-          <div class="kv-list small">
-            <div class="kv-row"><span class="kv-key">Quantity × lot size</span><span class="kv-val">${o.quantity ?? '—'} × ${o.lot_size ?? 1}${o.quantity_units != null ? ` = ${o.quantity_units} units` : ''}</span></div>
-            <div class="kv-row"><span class="kv-key">Adjusted units</span><span class="kv-val qty-units">${units ? units.toLocaleString('en-IN') + ' units' : '—'}</span></div>
-            <div class="kv-row"><span class="kv-key">Order sequence</span><span class="kv-val">${o.order_sequence ?? '—'} / ${o.max_orders_per_isolation ?? '—'}</span></div>
-            <div class="kv-row"><span class="kv-key">Isolation ID</span><span class="kv-val font-monospace">${escapeHtml(o.isolation_id || '—')}</span></div>
-            <div class="kv-row"><span class="kv-key">Source instrument (${escapeHtml(o.source_leg_role || '—')})</span><span class="kv-val font-monospace">${escapeHtml(sourceInst || '—')}</span></div>
-            ${!sameInstr ? `<div class="kv-row"><span class="kv-key">Target instrument (${escapeHtml(o.target_leg_role || '—')})</span><span class="kv-val font-monospace">${escapeHtml(targetInst || '—')}</span></div>` : ''}
-            <div class="kv-row"><span class="kv-key">Broker order</span><span class="kv-val">${o.broker_order_id ? `<span class="font-monospace">${escapeHtml(o.broker_order_id)}</span>` : '<span class="text-muted">—</span>'}</span></div>
-            <div class="kv-row"><span class="kv-key">Real order submitted</span><span class="kv-val">${o.real_order_submitted ? '<span class="text-danger fw-semibold">YES</span>' : '<span class="text-muted">No</span>'}</span></div>
-          </div>
-        </div>
-
-        <!-- LOT SIZE INPUT -->
-        <div class="row g-2 align-items-end mb-3">
-          <div class="col-6">
-            <div class="text-uppercase text-muted small fw-semibold mb-1">Multiplier</div>
-            <div class="fw-semibold">${mult}×</div>
-          </div>
-          <div class="col-6">
-            <label for="lot-${escapeHtml(key)}" class="text-uppercase text-muted small fw-semibold mb-1">Lot size (×)</label>
-            <div class="input-group input-group-sm lot-group">
-              <button type="button" class="btn btn-outline-secondary lot-dec" data-key="${escapeHtml(key)}" aria-label="Decrease lot size" ${canDecrement ? '' : 'disabled'}>
-                <i class="bi bi-dash"></i>
-              </button>
-              <input type="number" min="1" step="1" inputmode="numeric"
-                     id="lot-${escapeHtml(key)}"
-                     class="form-control lot-input"
-                     value="${mult}"
-                     data-key="${escapeHtml(key)}"
-                     title="Multiplier applied to realized P&amp;L, live MTM and capital values">
-              <button type="button" class="btn btn-outline-secondary lot-inc" data-key="${escapeHtml(key)}" aria-label="Increase lot size">
-                <i class="bi bi-plus"></i>
-              </button>
+        <!-- ORDER DETAILS & REALIZED P&L BREAKDOWN (SIDE BY SIDE) -->
+        <div class="row g-3 mt-auto pt-3 border-top align-items-stretch">
+          <div class="col-12 col-xl-6">
+            <div class="border rounded-3 p-2 p-lg-3 h-100">
+              <div class="divider-label text-uppercase text-muted fw-semibold mb-2">
+                <i class="bi bi-list-check me-1"></i>Order details
+              </div>
+              <div class="kv-list small">
+                <div class="kv-row"><span class="kv-key">Quantity × lot size</span><span class="kv-val">${o.quantity ?? '—'} × ${o.lot_size ?? 1}${o.quantity_units != null ? ` = ${o.quantity_units} units` : ''}</span></div>
+                <div class="kv-row"><span class="kv-key">Adjusted units</span><span class="kv-val qty-units">${units ? units.toLocaleString('en-IN') + ' units' : '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Order sequence</span><span class="kv-val">${o.order_sequence ?? '—'} / ${o.max_orders_per_isolation ?? '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Isolation ID</span><span class="kv-val font-monospace">${escapeHtml(o.isolation_id || '—')}</span></div>
+                <div class="kv-row"><span class="kv-key">Source instrument (${escapeHtml(o.source_leg_role || '—')})</span><span class="kv-val font-monospace">${escapeHtml(sourceInst || '—')}</span></div>
+                ${!sameInstr ? `<div class="kv-row"><span class="kv-key">Target instrument (${escapeHtml(o.target_leg_role || '—')})</span><span class="kv-val font-monospace">${escapeHtml(targetInst || '—')}</span></div>` : ''}
+                <div class="kv-row"><span class="kv-key">Broker order</span><span class="kv-val">${o.broker_order_id ? `<span class="font-monospace">${escapeHtml(o.broker_order_id)}</span>` : '<span class="text-muted">—</span>'}</span></div>
+                <div class="kv-row"><span class="kv-key">Real order submitted</span><span class="kv-val">${o.real_order_submitted ? '<span class="text-danger fw-semibold">YES</span>' : '<span class="text-muted">No</span>'}</span></div>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- P&L BREAKDOWN -->
-        <div class="mt-auto pt-3 border-top">
-          <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
-            <div class="divider-label text-uppercase text-muted fw-semibold">
-              <i class="bi bi-cash-coin me-1"></i>Realized P&amp;L${isAdjusted ? ' (adjusted)' : ''}
+          <div class="col-12 col-xl-6">
+            <div class="border rounded-3 p-2 p-lg-3 h-100 d-flex flex-column justify-content-between">
+              <!-- LOT SIZE INPUT -->
+              <div class="row g-2 align-items-end mb-3 pb-2 border-bottom">
+                <div class="col-5">
+                  <div class="text-uppercase text-muted small fw-semibold mb-1">Multiplier</div>
+                  <div class="fw-semibold">${mult}×</div>
+                </div>
+                <div class="col-7">
+                  <label for="lot-${escapeHtml(key)}" class="text-uppercase text-muted small fw-semibold mb-1">Lot size (×)</label>
+                  <div class="input-group input-group-sm lot-group">
+                    <button type="button" class="btn btn-outline-secondary lot-dec" data-key="${escapeHtml(key)}" aria-label="Decrease lot size" ${canDecrement ? '' : 'disabled'}>
+                      <i class="bi bi-dash"></i>
+                    </button>
+                    <input type="number" min="1" step="1" inputmode="numeric"
+                           id="lot-${escapeHtml(key)}"
+                           class="form-control lot-input"
+                           value="${mult}"
+                           data-key="${escapeHtml(key)}"
+                           title="Multiplier applied to realized P&amp;L, live MTM and capital values">
+                    <button type="button" class="btn btn-outline-secondary lot-inc" data-key="${escapeHtml(key)}" aria-label="Increase lot size">
+                      <i class="bi bi-plus"></i>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- P&L BREAKDOWN -->
+              <div>
+                <div class="d-flex justify-content-between align-items-start gap-2 mb-2">
+                  <div class="divider-label text-uppercase text-muted fw-semibold">
+                    <i class="bi bi-cash-coin me-1"></i>Realized P&amp;L${isAdjusted ? ' (adjusted)' : ''}
+                  </div>
+                  ${isAdjusted ? `<span class="badge text-bg-warning-subtle text-warning border border-warning-subtle tag-badge">×${mult}</span>` : ''}
+                </div>
+                <div class="pnl-grid">
+                  <div class="pnl-row"><span class="text-muted">Points ${originalPoints != null ? `<span class="badge text-bg-light border tag-badge ms-1">per unit</span>` : ''}</span><span class="pnl-points">${plainPnl(originalPoints, ' pts')}</span></div>
+                  <div class="pnl-row"><span class="text-muted">Gross</span><span class="pnl-gross">${plainPnl(adjustedGross)}</span></div>
+                  <div class="pnl-row"><span class="text-muted">Estimated costs</span><span class="pnl-costs">${plainPnl(adjustedCosts)}</span></div>
+                  <div class="pnl-row"><span class="text-muted fw-semibold">Net realized</span><span class="pnl-net pnl-display fs-5">${pnlCell(adjustedPnl)}</span></div>
+                </div>
+                <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top small">
+                  <span class="text-muted">
+                    <i class="bi bi-currency-exchange me-1"></i>
+                    ${escapeHtml(o.pnl_currency || 'INR')} · ${escapeHtml(o.pnl_cost_model || '—')}
+                  </span>
+                  <span class="pnl-base text-muted ${isAdjusted ? '' : 'd-none'}">
+                    Base net: ${originalPnl == null ? '—' : '₹' + formatPrice(originalPnl)}
+                  </span>
+                </div>
+              </div>
             </div>
-            ${isAdjusted ? `<span class="badge text-bg-warning-subtle text-warning border border-warning-subtle tag-badge">×${mult}</span>` : ''}
-          </div>
-          <div class="pnl-grid">
-            <div class="pnl-row"><span class="text-muted">Points ${originalPoints != null ? `<span class="badge text-bg-light border tag-badge ms-1">per unit</span>` : ''}</span><span class="pnl-points">${plainPnl(originalPoints, ' pts')}</span></div>
-            <div class="pnl-row"><span class="text-muted">Gross</span><span class="pnl-gross">${plainPnl(adjustedGross)}</span></div>
-            <div class="pnl-row"><span class="text-muted">Estimated costs</span><span class="pnl-costs">${plainPnl(adjustedCosts)}</span></div>
-            <div class="pnl-row"><span class="text-muted fw-semibold">Net realized</span><span class="pnl-net pnl-display fs-5">${pnlCell(adjustedPnl)}</span></div>
-          </div>
-          <div class="d-flex justify-content-between align-items-center mt-2 pt-2 border-top small">
-            <span class="text-muted">
-              <i class="bi bi-currency-exchange me-1"></i>
-              ${escapeHtml(o.pnl_currency || 'INR')} · ${escapeHtml(o.pnl_cost_model || '—')}
-            </span>
-            <span class="pnl-base text-muted ${isAdjusted ? '' : 'd-none'}">
-              Base net: ${originalPnl == null ? '—' : '₹' + formatPrice(originalPnl)}
-            </span>
           </div>
         </div>
 
