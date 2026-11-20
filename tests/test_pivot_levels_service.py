@@ -29,6 +29,8 @@ def test_calculate_opening_range_pivots_and_previous_session_midpoint():
     assert record["previous_session"]["high"] == 110.0
     assert record["previous_session"]["low"] == 92.0
     assert record["yesterday_avg"] == 101.0
+    assert record["yesterday_avg_points"] == 101.0
+    assert record["previous_session"]["average_points"] == 101.0
 
 
 def test_update_merges_instruments_and_reads_local_pivot_levels(tmp_path):
