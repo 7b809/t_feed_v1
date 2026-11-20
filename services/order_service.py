@@ -16,6 +16,7 @@ from core.config import (
     DEFAULT_PRODUCT,
     DEFAULT_VALIDITY,
     ORDERS_VERBOSE,  # <-- controls extra raw_error detail when true
+    ORDERFLOW_CLEANUP_ENABLED,
     TRADING_ENABLED,
     UPSTOX_SANDBOX,
     TIMEZONE,  # noqa: F401  (kept for symmetry with config surface)
@@ -889,7 +890,7 @@ class OrderService:
     # ---------------------------------------------------------------
     # CANCEL ORDER
     # ---------------------------------------------------------------
-    def cancel_order(self, order_id: str) -> dict:
+    def cancel_order(self, order_id: str, *, cleanup: bool = False) -> dict:
         """Cancel one open/pending order. This does not square off a filled trade."""
         with self._operation_lock:
             entry = self._get_or_create_order_entry(order_id)
@@ -900,7 +901,11 @@ class OrderService:
                 require_mongo=True,
             )
             try:
-                self._require_trading()
+                if cleanup:
+                    if not ORDERFLOW_CLEANUP_ENABLED:
+                        raise OrderServiceError("Orderflow cleanup is disabled.")
+                else:
+                    self._require_trading()
                 order_v3, _ = self._clients()
                 response = order_v3.cancel_order(order_id)
                 formatted_resp = _format_success_response(response, default_status=200)
@@ -1008,7 +1013,7 @@ class OrderService:
     # ---------------------------------------------------------------
     # EXIT (SQUARE-OFF) SINGLE ORDER
     # ---------------------------------------------------------------
-    def exit_order(self, order_id: str) -> dict:
+    def exit_order(self, order_id: str, *, cleanup: bool = False) -> dict:
         """Square off the filled quantity from one order tracked by this app."""
         with self._operation_lock:
             entry = self.repository.find_order(order_id)
@@ -1024,7 +1029,11 @@ class OrderService:
                 require_mongo=True,
             )
             try:
-                self._require_trading()
+                if cleanup:
+                    if not ORDERFLOW_CLEANUP_ENABLED:
+                        raise OrderServiceError("Orderflow cleanup is disabled.")
+                else:
+                    self._require_trading()
                 order_v3, order_v2 = self._clients()
                 original = self._order_details(order_v2, order_id)
                 filled_qty = int(original.get("filled_quantity") or 0)
