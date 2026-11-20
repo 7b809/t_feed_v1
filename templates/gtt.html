@@ -29,7 +29,7 @@
       </div>
       <div class="gtt-summary" id="gttQtySummary">Select an instrument with lot-size metadata to calculate quantity.</div>
       <div class="order-notice"><i class="bi bi-info-circle"></i><span>For a BUY GTT, levels must satisfy stop-loss &lt; entry &lt; target. Blank entry uses Upstox's IMMEDIATE ENTRY rule at the fetched LTP. GTT TARGET and STOPLOSS legs submit SELL orders; complete Upstox EDIS authorization beforehand.</span></div>
-      <div class="alert alert-warning small">GTT placement is a live-account operation. Sandbox mode is not supported by this endpoint. The server must have UPSTOX_SANDBOX=false and TRADING_ENABLED=true.</div>
+      <div class="alert alert-warning small"><strong>Live Upstox GTT:</strong> submissions create real broker-side orders. The dashboard uses the live account by default and does not close or cancel unrelated positions. Ensure MongoDB contains a valid live access token and verify the instrument, quantity, entry, target, stop-loss and product before submitting.</div>
       <button id="gttPlaceBtn" class="btn btn-primary btn-lg w-100" disabled><i class="bi bi-bullseye me-2"></i>Review and place GTT</button>
       <div id="gttResponse" class="alert d-none mt-3 mb-0" role="alert"></div>
     </div>

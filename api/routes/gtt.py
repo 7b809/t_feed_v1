@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException
 
 from core.logger import get_logger
 from models.gtt_models import PlaceGTTRequest
+from core.config import GTT_ENABLED, UPSTOX_SANDBOX
 from services.gtt_service import GTTServiceError, LOT_SIZE_MAP, place_gtt_order
 
 logger = get_logger(__file__)
@@ -13,6 +14,8 @@ router = APIRouter(prefix="/api/v1/gtt", tags=["gtt"])
 def gtt_config():
     return {
         "supported": True,
+        "enabled": GTT_ENABLED and not UPSTOX_SANDBOX,
+        "account_mode": "sandbox" if UPSTOX_SANDBOX else "live",
         "transaction_type": "BUY",
         "default_lot": 1,
         "lot_size_map": LOT_SIZE_MAP,

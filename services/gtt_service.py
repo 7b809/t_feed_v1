@@ -9,7 +9,7 @@ from typing import Any
 
 import requests
 
-from core.config import TRADING_ENABLED, UPSTOX_SANDBOX, UPSTOX_HTTP_TIMEOUT_SECONDS
+from core.config import GTT_ENABLED, UPSTOX_SANDBOX, UPSTOX_HTTP_TIMEOUT_SECONDS
 from core.logger import get_logger
 from core.token_service import fetch_access_token
 
@@ -59,51 +59,6 @@ def _headers(token: str) -> dict[str, str]:
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
     }
-
-def _close_all_existing_positions() -> dict[str, Any]:
-    """Hard-close every open position via the global exit-all service.
-
-    This is the broker-native ``exit_positions`` call used by
-    ``OrderService.exit_all_positions`` (no order IDs required). It is run
-    unconditionally before a new GTT placement — "nothing to close" is a
-    normal, non-fatal outcome.
-
-    Import is lazy to avoid any module-load-order coupling with
-    ``services.order_service``.
-
-    Raises:
-        GTTServiceError: if the square-off request fails, so the caller can
-            abort GTT placement instead of stacking a new order on an
-            un-closed book.
-    """
-    try:
-        from services.order_service import OrderService
-    except Exception as exc:  # pragma: no cover - defensive import guard
-        logger.exception("Could not import OrderService for pre-GTT square-off")
-        raise GTTServiceError(
-            "Could not load the order service required to close existing "
-            "positions before placing a GTT.",
-            status_code=500,
-        ) from exc
-
-    try:
-        result = OrderService().exit_all_positions()
-    except Exception as exc:
-        logger.exception("Pre-GTT global square-off failed; aborting GTT placement")
-        raise GTTServiceError(
-            "Existing positions could not be closed, so the new GTT was not "
-            "placed. Resolve the square-off failure and retry.",
-            status_code=502,
-            payload={"square_off_error": f"{type(exc).__name__}: {exc}"},
-        ) from exc
-
-    order_ids = list(result.get("order_ids") or [])
-    logger.info(
-        "Pre-GTT global square-off submitted: status=%s exit_order_ids=%s",
-        result.get("status"),
-        order_ids or "none-returned",
-    )
-    return result
 
 def get_live_ltp(instrument_key: str, token: str | None = None) -> float:
     token = token or fetch_access_token()
@@ -202,7 +157,6 @@ def place_gtt_order(
     trading_symbol: str | None = None,
     product: str = "I",
     transaction_type: str = "BUY",
-    cancel_existing: bool = False,
 ) -> dict[str, Any]:
     """Place a multi-leg BUY GTT.
 
@@ -212,16 +166,16 @@ def place_gtt_order(
     Existing positions are left untouched. GTT placement must not call the
     global exit-all API because that could close unrelated live trades.
     """
+    if not GTT_ENABLED:
+        raise GTTServiceError(
+            "GTT placement is disabled. Set GTT_ENABLED=true to enable live GTT orders.",
+            status_code=403,
+        )
     if UPSTOX_SANDBOX:
         raise GTTServiceError(
             "GTT placement uses the Upstox live v3 endpoint. Set UPSTOX_SANDBOX=false "
             "and use a live access token before enabling this feature.",
             status_code=409,
-        )
-    if not TRADING_ENABLED:
-        raise GTTServiceError(
-            "Trading is disabled. Set TRADING_ENABLED=true only after verifying the live account.",
-            status_code=403,
         )
     if target is None or stoploss is None:
         raise GTTServiceError("Both target and stoploss prices are mandatory.")
