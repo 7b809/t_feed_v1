@@ -7,6 +7,9 @@ Rule B (Gamma/Theta profit-jump): If Δ ≤ -0.65 and Θ is less negative than -
 
 Rule C (Vega warning): If Vega drops > 0.25 from entry while Δ is still improving, do not tighten — Vega crush can mask Delta gains; keep the original trail.
 
+
+
+
 Applying these only to completed candles:
 
 Time	Completed candle	Δ	Θ	Rule fired	Action (no future data)
