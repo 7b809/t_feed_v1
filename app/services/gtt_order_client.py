@@ -56,6 +56,8 @@ def submit_gtt_order(config: Settings, order: dict[str, Any]) -> dict[str, Any]:
         "product": config.gtt_product,
         "transaction_type": "BUY",
         "api_token": config.gtt_api_token,
+        "source_order_id": str(order.get("order_id") or ""),
+        "isolation_id": str(order.get("isolation_id") or ""),
     }
     if trading_symbol:
         payload["trading_symbol"] = trading_symbol
@@ -114,4 +116,58 @@ def submit_gtt_order(config: Settings, order: dict[str, Any]) -> dict[str, Any]:
         "lot_size": int(lot_size) if lot_size not in (None, "", 0, "0") else None,
         "product": config.gtt_product,
         "entry_sent": False,
+    }
+
+
+
+def cleanup_gtt_orders(config: Settings, gtt_order_ids: list[str], *,
+                       isolation_id: str, source_order_id: str | None = None) -> dict[str, Any]:
+    """Ask sandbox_v1 to reconcile and remove only the supplied Orderflow GTTs.
+
+    A timeout or malformed response is treated as an unknown cleanup outcome.
+    The caller must block replacement GTT submission in that case.
+    """
+    ids = list(dict.fromkeys(str(value).strip() for value in gtt_order_ids if str(value).strip()))
+    if not ids:
+        return {"success": True, "cleanup_complete": True, "results": [], "skipped": "NO_PRIOR_GTT"}
+    if not config.gtt_orders_enabled:
+        raise GTTOrderSubmissionError("GTT cleanup cannot run while GTT integration is disabled.")
+    payload = {
+        "gtt_order_ids": ids,
+        "isolation_id": isolation_id,
+        "source_order_id": source_order_id,
+        "api_token": config.gtt_api_token,
+    }
+    try:
+        response = requests.post(
+            config.gtt_cleanup_url,
+            json=payload,
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            timeout=config.gtt_request_timeout_seconds,
+        )
+    except requests.RequestException:
+        raise GTTOrderSubmissionError(
+            "Orderflow broker cleanup transport outcome is unknown; replacement GTT is blocked.",
+            outcome_unknown=True,
+        ) from None
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if not response.ok or not isinstance(body, dict) or body.get("cleanup_complete") is not True:
+        detail = body.get("detail") if isinstance(body, dict) else None
+        if isinstance(detail, dict):
+            detail = detail.get("error") or detail
+        raise GTTOrderSubmissionError(
+            f"Orderflow broker cleanup was not confirmed: {str(detail or 'invalid response')[:500]}",
+            outcome_unknown=response.status_code >= 500,
+            http_status=response.status_code,
+        )
+    return {
+        "status": "CLEANUP_CONFIRMED",
+        "cleanup_complete": True,
+        "requested_at": datetime.now(IST).isoformat(),
+        "http_status": response.status_code,
+        "gtt_order_ids": ids,
+        "broker_response": body,
     }
