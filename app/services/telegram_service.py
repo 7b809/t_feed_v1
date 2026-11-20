@@ -52,6 +52,9 @@ class TelegramService:
         # Per-thread sessions: requests.Session is not thread-safe, and
         # asyncio.to_thread may run calls on different worker threads.
         self._local = threading.local()
+        self._startup_batch_lock = threading.Lock()
+        self._startup_batch_active = False
+        self._startup_batch_messages: list[str] = []
 
     # ------------------------------------------------------------------
     # Config helpers
@@ -166,9 +169,36 @@ class TelegramService:
     # ------------------------------------------------------------------
     # Async wrapper — preserves the existing async API
     # ------------------------------------------------------------------
+    def begin_startup_batch(self) -> None:
+        """Buffer event notifications while an in-session startup is reconciling."""
+        with self._startup_batch_lock:
+            self._startup_batch_messages = []
+            self._startup_batch_active = True
+
+    async def finish_startup_batch(self, digest: str) -> bool:
+        """Stop buffering and deliver exactly one consolidated startup message."""
+        with self._startup_batch_lock:
+            buffered_count = len(self._startup_batch_messages)
+            self._startup_batch_messages = []
+            self._startup_batch_active = False
+        message = str(digest)
+        if buffered_count:
+            message += f"\\n\\n🧾 Startup events consolidated: {buffered_count}"
+        if not self._enabled:
+            return False
+        try:
+            return await asyncio.to_thread(self._send_sync, message)
+        except Exception as exc:
+            self._report_failure("startup digest dispatch error", message, exc=exc)
+            return False
+
     async def _send(self, text: str) -> bool:
         if not self._enabled:
             return False
+        with self._startup_batch_lock:
+            if self._startup_batch_active:
+                self._startup_batch_messages.append(str(text))
+                return True
         try:
             return await asyncio.to_thread(self._send_sync, text)
         except Exception as exc:
