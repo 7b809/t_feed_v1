@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 
 from core.logger import get_logger
 from models.gtt_models import PlaceGTTRequest
-from core.config import GTT_ENABLED, UPSTOX_SANDBOX
+from core.config import GTT_ENABLED, ORDERFLOW_CLEANUP_ENABLED, UPSTOX_SANDBOX
 from services.gtt_service import GTTServiceError, LOT_SIZE_MAP, place_gtt_order
 
 logger = get_logger(__file__)
@@ -15,6 +15,7 @@ def gtt_config():
     return {
         "supported": True,
         "enabled": GTT_ENABLED and not UPSTOX_SANDBOX,
+        "orderflow_cleanup_enabled": ORDERFLOW_CLEANUP_ENABLED,
         "account_mode": "sandbox" if UPSTOX_SANDBOX else "live",
         "transaction_type": "BUY",
         "default_lot": 1,
