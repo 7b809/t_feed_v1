@@ -117,3 +117,7 @@ ORDERS_VERBOSE: bool = os.getenv("ORDERS_VERBOSE", "false").lower() in ("1", "tr
 # supplied in each external API JSON payload as "api_token".
 EXTERNAL_API_AUTH_ENABLED = env_bool("EXTERNAL_API_AUTH_ENABLED", False)
 EXTERNAL_API_SOURCE_TOKEN = os.getenv("EXTERNAL_API_SOURCE_TOKEN", "").strip()
+
+# Separate permission for authenticated Orderflow cleanup operations. This does
+# not enable normal dashboard order placement and never enables account-wide exit-all.
+ORDERFLOW_CLEANUP_ENABLED = env_bool("ORDERFLOW_CLEANUP_ENABLED", False)
