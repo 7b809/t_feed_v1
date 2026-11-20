@@ -10,11 +10,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.routes.orders import _raise_http, _service
 from core.external_api_auth import require_external_api_auth
 from core.logger import get_logger
-from models.gtt_models import PlaceGTTRequest
+from models.gtt_models import CancelGTTRequest, CleanupGTTRequest, PlaceGTTRequest
 from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderRequest
-from services.gtt_service import GTTServiceError, place_gtt_order
+from services.gtt_service import GTTServiceError, cancel_gtt_order, place_gtt_order
+from services.orderflow_cleanup_service import OrderflowCleanupError, OrderflowCleanupService
 
 logger = get_logger(__file__)
+_cleanup_service = OrderflowCleanupService()
 router = APIRouter(
     prefix="/api/external/v1",
     tags=["external-orders"],
@@ -83,6 +85,8 @@ def external_place_gtt(body: PlaceGTTRequest):
             trading_symbol=body.trading_symbol,
             product=body.product,
             transaction_type=body.transaction_type,
+            source_order_id=body.source_order_id,
+            isolation_id=body.isolation_id,
         )
     except GTTServiceError as exc:
         detail = {"error": str(exc)}
@@ -94,3 +98,34 @@ def external_place_gtt(body: PlaceGTTRequest):
         raise HTTPException(
             status_code=500, detail={"error": "Unexpected GTT service error."}
         ) from None
+
+
+
+@router.post("/gtt/cancel")
+def external_cancel_gtt(body: CancelGTTRequest):
+    try:
+        return cancel_gtt_order(body.gtt_order_id)
+    except GTTServiceError as exc:
+        detail = {"error": str(exc)}
+        if exc.payload:
+            detail["broker_error"] = exc.payload
+        raise HTTPException(status_code=exc.status_code, detail=detail) from None
+    except Exception:
+        logger.exception("Unexpected external GTT cancellation failure")
+        raise HTTPException(status_code=500, detail={"error": "Unexpected GTT cancellation error."}) from None
+
+
+@router.post("/gtt/cleanup")
+def external_cleanup_gtt(body: CleanupGTTRequest):
+    try:
+        return _cleanup_service.cleanup(
+            body.gtt_order_ids,
+            isolation_id=body.isolation_id,
+            source_order_id=body.source_order_id,
+        )
+    except OrderflowCleanupError as exc:
+        detail = {"error": str(exc), "cleanup": exc.details}
+        raise HTTPException(status_code=exc.status_code, detail=detail) from None
+    except Exception:
+        logger.exception("Unexpected Orderflow broker cleanup failure")
+        raise HTTPException(status_code=502, detail={"error": "Unexpected broker cleanup error."}) from None
