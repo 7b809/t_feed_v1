@@ -576,6 +576,51 @@ def test_restart_restores_mongo_open_order_and_replays_missed_candles(tmp_path):
         assert closed["exit_reason"] == "STOP_LOSS"
         assert closed["exit_price"] == 70.0
         assert final["supertrend_startup_recovery"]["status"] == "COMPLETED"
+        assert final["supertrend_startup_recovery"]["orders_restored"] == 1
+        assert final["supertrend_startup_recovery"]["orders_replayed"] == 1
+        assert final["supertrend_startup_recovery"]["orders_completed"] == 1
+
+    asyncio.run(run())
+
+
+def test_recovery_summary_counts_completed_current_order_without_order_history(tmp_path):
+    async def run():
+        engine, store = build(tmp_path)
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(
+            isolation_id, isolation_payload(),
+            {"isolated": "CE", "opposite": "PE"},
+        )
+        state = store.load(isolation_id)
+        state["orders"]["supertrend"] = {
+            "order_id": "RECOVERY-SUPERTREND-2026-11-12__CE-091800",
+            "indicator": "SUPERTREND",
+            "simulation_mode": "STARTUP_RECOVERY",
+            "price_source": "persisted_one_minute_ohlc",
+            "status": "COMPLETED_STOP_LOSS",
+            "exit_reason": "STOP_LOSS",
+            "started_at_ist": "2026-11-12T09:19:00+05:30",
+            "completed_at_ist": "2026-11-12T09:30:00+05:30",
+        }
+        state["order_history"] = []
+        store.save(isolation_id, state)
+        engine._candle_store = type("History", (), {
+            "read_day": lambda self, key, day: []
+        })()
+
+        await engine._recover_supertrend_history(
+            isolation_id, {"event": "snapshot", "signals": []},
+            recovery_as_of=datetime(2026, 11, 12, 10, 30, tzinfo=ZoneInfo("Asia/Kolkata")),
+        )
+
+        final = store.load(isolation_id)
+        summary = final["supertrend_startup_recovery"]
+        assert final["orders"]["supertrend"]["status"] == "COMPLETED_STOP_LOSS"
+        assert summary["orders_restored"] == 1
+        assert summary["orders_replayed"] == 1
+        assert summary["orders_completed"] == 1
+        assert summary["orders_replayed_this_run"] == 0
+        assert summary["orders_completed_this_run"] == 0
 
     asyncio.run(run())
 
