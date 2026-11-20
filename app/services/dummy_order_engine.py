@@ -709,6 +709,31 @@ class DummyOrderEngine:
             logger.exception("Dummy Supertrend entry failed for %s", isolation_id)
 
 
+    async def _persist_gtt_cleanup_order(
+        self, state: dict, date_key: str, isolation_id: str,
+        order: dict, isolated_instrument: dict,
+    ) -> None:
+        """Persist current and archived cleanup metadata to their correct Mongo slots."""
+        if self._mongo_store is None:
+            return
+        current = (state.get("orders") or {}).get("supertrend")
+        if order is current:
+            await self._persist_mongo_order_update(
+                date_key, isolation_id, "supertrend", order,
+                isolated_instrument, completed=False,
+            )
+            return
+        updater = getattr(self._mongo_store, "update_order_history", None)
+        if callable(updater):
+            try:
+                await asyncio.to_thread(updater, date_key, isolation_id, order)
+            except Exception:
+                logger.exception("Mongo historical dummy-order cleanup update failed iso=%s order=%s",
+                                 isolation_id, order.get("order_id"))
+        else:
+            logger.warning("Mongo store does not support historical cleanup update iso=%s order=%s",
+                           isolation_id, order.get("order_id"))
+
     async def _cleanup_prior_gtt_exposure(
         self, state: dict, isolation_id: str, *, source_order_id: str | None = None
     ) -> None:
@@ -754,9 +779,9 @@ class DummyOrderEngine:
         state["updated_at"] = requested_at
         await asyncio.to_thread(self._store.save, isolation_id, state)
         for item in pending_records:
-            await self._persist_mongo_order_update(
-                self._date_key(state, isolation_id), isolation_id, "supertrend",
-                item, state.get("isolated_instrument") or {}, completed=False)
+            await self._persist_gtt_cleanup_order(
+                state, self._date_key(state, isolation_id), isolation_id,
+                item, state.get("isolated_instrument") or {})
         try:
             result = await asyncio.to_thread(
                 cleanup_gtt_orders, self._config, gtt_ids,
@@ -771,9 +796,9 @@ class DummyOrderEngine:
             state["updated_at"] = updated_at
             await asyncio.to_thread(self._store.save, isolation_id, state)
             for item in pending_records:
-                await self._persist_mongo_order_update(
-                    self._date_key(state, isolation_id), isolation_id, "supertrend",
-                    item, state.get("isolated_instrument") or {}, completed=False)
+                await self._persist_gtt_cleanup_order(
+                state, self._date_key(state, isolation_id), isolation_id,
+                item, state.get("isolated_instrument") or {})
             raise GTTOrderSubmissionError(
                 f"Previous Orderflow exposure cleanup failed; replacement GTT blocked: {exc}",
                 outcome_unknown=cleanup_status == "UNKNOWN",
@@ -784,9 +809,9 @@ class DummyOrderEngine:
         state["updated_at"] = updated_at
         await asyncio.to_thread(self._store.save, isolation_id, state)
         for item in pending_records:
-            await self._persist_mongo_order_update(
-                self._date_key(state, isolation_id), isolation_id, "supertrend",
-                item, state.get("isolated_instrument") or {}, completed=False)
+            await self._persist_gtt_cleanup_order(
+                state, self._date_key(state, isolation_id), isolation_id,
+                item, state.get("isolated_instrument") or {})
 
     async def _process(
         self, payload: dict, source_key: str, source_role: str, isolation_id: str,
