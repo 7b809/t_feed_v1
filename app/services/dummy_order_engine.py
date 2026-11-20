@@ -137,9 +137,13 @@ class DummyOrderEngine:
                 return value.strip()
         return None
 
-    def _refresh_pivot_levels(self, instrument_keys: list[str], trade_date: str) -> None:
-        """Refresh local opening pivots and previous-session averages from saved 1m candles."""
-        if self._pivot_service is None or self._candle_store is None:
+    def _refresh_pivot_levels(
+        self, instrument_keys: list[str], trade_date: str,
+        candles_by_key: dict[str, list[dict]] | None = None,
+    ) -> None:
+        """Refresh local pivots, using supplied HistoryV3 candles when local files are absent."""
+        supplied = candles_by_key or {}
+        if self._pivot_service is None or (self._candle_store is None and not supplied):
             return
         today = str(trade_date or "")[:10]
         if not today:
@@ -147,10 +151,26 @@ class DummyOrderEngine:
         now = _now()
         for key in sorted({str(value) for value in instrument_keys if value}):
             try:
-                available_days = self._candle_store.list_days(key)
+                local_days = self._candle_store.list_days(key) if self._candle_store is not None else []
+                supplied_candles = list(supplied.get(key) or [])
+                supplied_days = sorted({
+                    stamp.date().isoformat()
+                    for item in supplied_candles
+                    if (stamp := self._candle_dt(item)) is not None
+                })
+                available_days = sorted(set(local_days) | set(supplied_days))
                 prior_days = [day for day in available_days if day < today]
                 previous_day = prior_days[-1] if prior_days else None
-                today_candles = self._candle_store.read_day(key, today)
+                today_candles = (
+                    self._candle_store.read_day(key, today)
+                    if self._candle_store is not None else []
+                )
+                if not today_candles:
+                    today_candles = [
+                        item for item in supplied_candles
+                        if (stamp := self._candle_dt(item)) is not None
+                        and stamp.date().isoformat() == today
+                    ]
                 # The first opening candle must be complete before its OHLC
                 # becomes a stable pivot input.
                 completed_today = [
@@ -162,8 +182,14 @@ class DummyOrderEngine:
                     continue
                 previous_candles = (
                     self._candle_store.read_day(key, previous_day)
-                    if previous_day else []
+                    if self._candle_store is not None and previous_day in local_days else []
                 )
+                if not previous_candles and previous_day:
+                    previous_candles = [
+                        item for item in supplied_candles
+                        if (stamp := self._candle_dt(item)) is not None
+                        and stamp.date().isoformat() == previous_day
+                    ]
                 record = self._pivot_service.calculate(
                     key, today, completed_today, previous_day, previous_candles
                 )
@@ -1176,10 +1202,15 @@ class DummyOrderEngine:
             else:
                 candles = {role: self._candle_store.read_day(key, trade_date) if key else []
                            for role, key in keys.items()}
+            candles_by_key = {
+                key: candles.get(role) or []
+                for role, key in keys.items() if key
+            }
             await asyncio.to_thread(
                 self._refresh_pivot_levels,
                 list(keys.values()) + [getattr(self._config, "nifty_instrument_key", "")],
                 trade_date,
+                candles_by_key,
             )
             required_roles = {("isolated" if x["direction"] == "BULLISH" else "opposite") for x in signals}
             missing = [role for role in required_roles if not candles.get(role)]
