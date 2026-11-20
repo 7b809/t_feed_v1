@@ -722,6 +722,14 @@ class DummyOrderEngine:
                 date_key, isolation_id, "supertrend", order,
                 isolated_instrument, completed=False,
             )
+            if str(order.get("status") or "").upper().startswith("COMPLETED"):
+                updater = getattr(self._mongo_store, "update_order_history", None)
+                if callable(updater):
+                    try:
+                        await asyncio.to_thread(updater, date_key, isolation_id, order)
+                    except Exception:
+                        logger.exception("Mongo completed-order cleanup history update failed iso=%s order=%s",
+                                         isolation_id, order.get("order_id"))
             return
         updater = getattr(self._mongo_store, "update_order_history", None)
         if callable(updater):
@@ -759,6 +767,10 @@ class DummyOrderEngine:
             if status in {"UNKNOWN", "SUBMITTING"}:
                 raise GTTOrderSubmissionError(
                     f"Previous GTT state is {status}; reconcile it manually before a replacement."
+                )
+            if cleanup_status in {"CLEANUP_SUBMITTING", "FAILED", "UNKNOWN"}:
+                raise GTTOrderSubmissionError(
+                    f"Previous broker cleanup state is {cleanup_status}; automatic retry is disabled."
                 )
             if status != "SUBMITTED" or cleanup_status in {"CLEANUP_CONFIRMED", "CLEANED"}:
                 continue
