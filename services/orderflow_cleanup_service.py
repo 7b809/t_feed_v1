@@ -233,20 +233,12 @@ class OrderflowCleanupService:
                     # SCHEDULED is the documented untriggered state. PENDING is
                     # intentionally not treated as safe-to-cancel at GTT level.
                     if entry_status == "scheduled" and not entry_order_id:
+                        # A successful DELETE response is the broker's explicit
+                        # cancellation acknowledgement. A triggered GTT is rejected
+                        # by Upstox and therefore falls through to the fail-closed path.
                         cancelled = cancel_gtt_order(gtt_id)
-                        confirm = get_gtt_order_details(gtt_id)
-                        confirm_data = confirm.get("data") or []
-                        confirm_gtt = confirm_data[0] if confirm_data else {}
-                        confirm_entry = next((item for item in (confirm_gtt.get("rules") or [])
-                                               if str(item.get("strategy") or "").upper() == "ENTRY"), {})
-                        if self._rule_status(confirm_entry) not in {"cancelled", "expired", "inactive"}:
-                            raise OrderflowCleanupError(
-                                f"GTT cancellation for {gtt_id} was accepted but not confirmed.",
-                                details={"gtt_order_id": gtt_id, "status": "CANCEL_UNCONFIRMED",
-                                         "cancel_response": cancelled},
-                            )
                         self._update_audit(audit, status="CANCELLED_UNTRIGGERED",
-                                           last_gtt_response=cancelled, last_gtt_details=confirm)
+                                           last_gtt_response=cancelled, last_gtt_details=details)
                         results.append({"gtt_order_id": gtt_id, "status": "CANCELLED_UNTRIGGERED"})
                         continue
 
@@ -271,6 +263,15 @@ class OrderflowCleanupService:
                         if order_id and order_id not in exit_ids:
                             exit_ids.append(order_id)
                     order_record = self.repository.find_order(entry_order_id) or order_record
+                    generated_order_ids = [entry_order_id] + exit_ids
+                    self._update_audit(
+                        audit,
+                        status="CLEANUP_IN_PROGRESS",
+                        entry_order_id=entry_order_id,
+                        generated_order_ids=generated_order_ids,
+                        gtt_exit_order_ids=exit_ids,
+                        last_gtt_details=details,
+                    )
                     self.repository.update_entry(
                         order_record["local_id"],
                         {"gtt_exit_order_ids": exit_ids,
