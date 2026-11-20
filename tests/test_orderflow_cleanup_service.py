@@ -71,3 +71,30 @@ def test_triggered_gtt_without_entry_order_id_blocks_cleanup(monkeypatch):
         assert "no generated ENTRY order ID" in str(exc)
     else:
         raise AssertionError("Unknown triggered exposure must block replacement")
+
+
+def test_triggered_gtt_with_untracked_active_exit_leg_blocks_squareoff(monkeypatch):
+    monkeypatch.setattr(cleanup_module, "ORDERFLOW_CLEANUP_ENABLED", True)
+    monkeypatch.setattr(
+        cleanup_module,
+        "get_gtt_order_details",
+        lambda gtt_id: {"data": [{
+            "gtt_order_id": gtt_id,
+            "instrument_token": "NSE_FO|123",
+            "quantity": 25,
+            "product": "I",
+            "rules": [
+                {"strategy": "ENTRY", "status": "TRIGGERED", "order_id": "ENTRY-1"},
+                {"strategy": "TARGET", "status": "SCHEDULED", "order_id": None},
+                {"strategy": "STOPLOSS", "status": "SCHEDULED", "order_id": None},
+            ],
+        }]},
+    )
+    repo = FakeRepository()
+    service = cleanup_module.OrderflowCleanupService(repository=repo)
+    try:
+        service.cleanup(["GTT-3"], isolation_id="iso-1")
+    except cleanup_module.OrderflowCleanupError as exc:
+        assert "active TARGET rule" in str(exc)
+    else:
+        raise AssertionError("An active conditional exit leg without an order ID must block cleanup")
