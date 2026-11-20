@@ -583,6 +583,27 @@ def test_restart_restores_mongo_open_order_and_replays_missed_candles(tmp_path):
     asyncio.run(run())
 
 
+def test_pivot_support_adjusts_percentage_stop_to_nearest_support(tmp_path):
+    engine, _ = build(tmp_path)
+
+    class Pivots:
+        def get(self, instrument_key, trade_date):
+            return {"pivot_levels": {"S1": 60, "S2": 50, "S3": 40}}
+
+    engine._pivot_service = Pivots()
+    stop, details = engine._pivot_adjusted_stop_loss("CE", "2026-11-20", 120.20, 83.65)
+    assert stop == 60.0
+    assert details["selected_level"] == "S1"
+
+    stop, details = engine._pivot_adjusted_stop_loss("CE", "2026-11-20", 120.20, 55.0)
+    assert stop == 50.0
+    assert details["selected_level"] == "S2"
+
+    stop, details = engine._pivot_adjusted_stop_loss("CE", "2026-11-20", 120.20, 35.0)
+    assert stop == 40.0
+    assert details["selected_level"] == "S3_FLOOR"
+
+
 def test_recovery_summary_counts_completed_current_order_without_order_history(tmp_path):
     async def run():
         engine, store = build(tmp_path)
