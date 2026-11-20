@@ -106,6 +106,30 @@ class DummyOrderMongoStore:
             }], "$slice": -5000}}
         self._collection.update_one({"_id": date_key}, update, upsert=True)
 
+    def update_order_history(self, date_key: str, isolation_id: str, order: dict) -> None:
+        """Update a completed historical order without replacing the current slot."""
+        order_id = str(order.get("order_id") or "")
+        if not order_id:
+            return
+        now = self._now_utc()
+        result = self._collection.update_one(
+            {"_id": date_key},
+            {
+                "$set": {
+                    "last_updated_time": now,
+                    "orders_data.last_updated_at": now.isoformat(),
+                    "orders_data.orders_history.$[item].order": self._json_safe(order),
+                }
+            },
+            array_filters=[{
+                "item.isolation_id": isolation_id,
+                "item.order.order_id": order_id,
+            }],
+        )
+        if getattr(result, "matched_count", 0) == 0:
+            logger.warning("No Mongo history entry found for cleanup update iso=%s order=%s",
+                           isolation_id, order_id)
+
     def load_isolation(self, date_key: str, isolation_id: str) -> dict[str, Any] | None:
         """Load the latest durable Supertrend state for one isolation.
 
