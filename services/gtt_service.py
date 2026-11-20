@@ -358,5 +358,22 @@ def cancel_gtt_order(gtt_order_id: str) -> dict[str, Any]:
             status_code=502 if response.status_code >= 500 else 409,
             payload={"http_status": response.status_code, "upstox_response": payload},
         )
+    audit_warning = None
+    try:
+        repository = OrderRepository()
+        entry = repository.find_order(gtt_order_id)
+        if entry:
+            events = list(entry.get("events") or [])
+            events.append({"event_type": "GTT_CANCEL_SUBMITTED", "event_time": now_iso(),
+                           "broker_response": payload})
+            repository.update_entry(entry["local_id"], {
+                "status": "CANCEL_SUBMITTED",
+                "last_gtt_cancel_response": payload,
+                "events": events,
+                "last_modified_time": now_iso(),
+            }, require_mongo=True)
+    except Exception as exc:
+        logger.exception("GTT %s cancellation was accepted but audit update failed", gtt_order_id)
+        audit_warning = f"Cancellation accepted but audit update failed: {type(exc).__name__}"
     return {"success": True, "gtt_order_id": gtt_order_id, "status": "CANCEL_SUBMITTED",
-            "broker_response": payload}
+            "broker_response": payload, "audit_warning": audit_warning}
