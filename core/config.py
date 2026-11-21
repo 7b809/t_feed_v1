@@ -81,6 +81,11 @@ TELEGRAM_ENABLED = (
 )
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Isolation-created announcements use a dedicated official group target.
+TELEGRAM_GROUP_ENABLED = (
+    os.getenv("TELEGRAM_GROUP_ENABLED", "true").strip().lower() == "true"
+)
+TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID", "")
 
 # ---------------------------------------------------------------------------
 # Upstox

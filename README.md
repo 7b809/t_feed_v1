@@ -595,6 +595,32 @@ sudo systemctl reload nginx
 
 The public WebSocket URL then uses `wss://feed.example.com/ws/market?...`. Ensure the firewall/security group allows inbound HTTPS and port 8001 is not unnecessarily exposed to the public internet.
 
+## Telegram isolation announcements
+
+The project sends a dedicated, formatted isolation-created message to the
+official Telegram group configured with `TELEGRAM_GROUP_CHAT_ID`. This target
+is separate from `TELEGRAM_CHAT_ID`, which remains the destination for
+existing runtime/operational notifications. Isolation-created messages are
+never silently redirected to the legacy chat.
+
+Configure `TELEGRAM_BOT_TOKEN`, set `TELEGRAM_GROUP_ENABLED=true`, and put
+the official group's chat ID in `TELEGRAM_GROUP_CHAT_ID`. The bot must be a
+member of the group and have permission to post messages. The group setting
+is independent of `TELEGRAM_ENABLED`, so isolation announcements can be
+enabled without changing the existing runtime-notification destination.
+
+Each announcement explains the triggering index, touched level and index LTP,
+NIFTY reference LTP used for option selection, isolated and opposite contract
+details (symbol, instrument key, exchange token, strike, option type, expiry,
+lot size, tick size, exchange and segment), selected bias, execution mode and
+reason, and the key event timestamps. All timestamps are converted to India
+Standard Time and rendered in a 12-hour clock. Startup-backfilled isolations
+are labelled clearly.
+
+Set `TELEGRAM_GROUP_ENABLED=false` to pause only the isolation group
+announcements. Existing `TELEGRAM_CHAT_ID` runtime notifications are
+unaffected.
+
 ## Daily MEGA backup and data cleanup
 
 The daily backup job creates `YYYYMMDD_data.zip` from the complete configured
