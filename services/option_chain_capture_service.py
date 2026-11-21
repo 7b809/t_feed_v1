@@ -236,7 +236,8 @@ class OptionChainCaptureService:
                             "range_points": window,
                             "range_low": lower,
                             "range_high": upper,
-                            "selected_expiry": nearest_expiry,
+                            "selected_expiry": row.get("expiry"),
+                            "selection_expiry_mode": self.expiry_mode,
                         })
                     all_contracts.extend(selected)
                     with self._lock:
