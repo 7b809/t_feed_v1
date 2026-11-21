@@ -360,5 +360,11 @@ MEGA_BACKUP_ROOT = os.getenv("MEGA_BACKUP_ROOT", "isolation_app").strip().strip(
 # Live option-chain capture
 # ---------------------------------------------------------------------------
 OPTION_CHAIN_CAPTURE_ENABLED = (
-    os.getenv("OPTION_CHAIN_CAPTURE_ENABLED", "false").strip().lower() == "true"
+    os.getenv("OPTION_CHAIN_CAPTURE_ENABLED", "true").strip().lower() == "true"
 )
+
+OPTION_CHAIN_INDEXES = [
+    key.strip()
+    for key in os.getenv("OPTION_CHAIN_INDEXES", "NSE_INDEX|Nifty 50").split(",")
+    if key.strip()
+]

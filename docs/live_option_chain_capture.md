@@ -1,86 +1,59 @@
-# Live option-chain capture
+# Live option-chain and Supertrend capture
 
-Option-chain capture is controlled by `OPTION_CHAIN_CAPTURE_ENABLED` and is
-**disabled by default**. When enabled, the service waits for today's
-`pivot_levels` document and the primary Upstox market feed to be connected.
+Capture starts at application startup once today's OR levels and the primary
+Upstox market feed are ready. A 60-second scheduler retry covers deferred
+startup, pre-market starts and temporary upstream failures.
 
-## Selection rules
+## Index and contract selection
 
-For each configured main index (`INSTRUMENT_KEYS`):
+Set `OPTION_CHAIN_INDEXES` to a comma-separated list of Upstox index
+instrument keys. The default is only `NSE_INDEX|Nifty 50`. Add BANKNIFTY,
+MIDCPNIFTY or SENSEX keys later without changing the service code.
 
-1. Read the index's Opening Range average from `indexes[instrument_key].levels.A`.
-2. Request contracts using Upstox `OptionsApi.get_option_contracts(instrument_key)`.
-3. Ignore expired contracts, missing instrument keys, and non-CE/PE instruments.
-4. Find the nearest expiry date that is today or later.
-5. Keep both CE and PE contracts whose strike is inside the inclusive
-   `average ± configured points` range.
-6. Subscribe selected instrument keys in batches of 100 on the existing
-   primary `MarketFeedService` connection. No separate duplicate upstream
-   connection is created.
+For each index, the service reads its OR average, requests contracts through
+Upstox `OptionsApi.get_option_contracts`, filters expired/non-option rows,
+then selects both CE and PE contracts at the nearest valid expiry. A positive
+strike-range setting limits contracts to the OR-average window; zero means
+all strikes returned for that nearest expiry. NIFTY defaults to zero.
 
-Default strike windows (points from the OR average):
+The selected instruments are subscribed in batches of 100 on the existing
+primary `MarketFeedService`; no second Upstox market-feed connection is
+created.
 
-| Index | Range |
-|---|---:|
-| NIFTY | ±300 |
-| BANKNIFTY | ±500 |
-| MIDCPNIFTY | ±200 |
-| SENSEX | ±500 |
-
-These are configurable. The API's returned strike ladder is authoritative:
-the service does not invent or round strikes to a presumed step size.
-
-## Output
-
-Files are separated by index and trading date:
+## Per-instrument storage
 
 ```text
-data/option_chain/
-├── option_chain_manifest_YYYYMMDD.json
-├── nifty/YYYYMMDD/
-│   ├── 25300_ce_NSE_FO_xxxxx.jsonl
-│   ├── 25300_pe_NSE_FO_xxxxx.jsonl
-│   └── ...
-├── banknifty/YYYYMMDD/
-├── midcpnifty/YYYYMMDD/
-└── sensex/YYYYMMDD/
+data/option_chain/nifty/YYYYMMDD/25100_ce_NSE_FO_64443/
+├── meta.json
+├── live_feed.jsonl
+└── supertrend_feed.jsonl
 ```
 
-Each `.jsonl` line contains the receive timestamp, index, expiry, strike,
-CE/PE side, instrument key, trading symbol, and raw Upstox feed payload.
-A per-contract `.meta.json` file records the contract details and selection
-range. The manifest records the pivot timestamp, selected contracts and
-per-index selection ranges. The daily MEGA data backup includes these files
-because they are inside `DATA_DIR`.
+Each contract folder contains its metadata, raw live Upstox market frames,
+and raw Supertrend WebSocket events. The Supertrend URL is
+`/ws/supertrend/{URL-encoded instrument_key}`. It runs on a dedicated
+asyncio loop with reconnect/backoff and a configurable concurrency cap
+(default 120). The existing isolation/opposite-leg capture is unchanged.
 
-## Scheduling and recovery
-
-The scheduler checks every 60 seconds. This allows option capture to start
-after the primary feed and today's pivot levels become available, including
-when the app starts during market hours. Successfully processed indexes
-are not repeatedly queried; indexes whose contract API call failed are
-retried, and incomplete subscriptions are retried. On a new IST date,
-previous option subscriptions are removed and the new day's files are used.
-
-The capture service requires `OPTION_CHAIN_FEED_MODE` to match the primary
-`FEED_MODE`. Default both to `full`. If they differ, capture remains
-inactive and logs the mismatch rather than silently creating another feed.
-
-## Telegram policy
-
-SR and Supertrend updates are written to the application logs and JSONL
-files only. They do not send Telegram messages. Telegram remains reserved
-for lifecycle events such as application startup/shutdown and new isolation
-creation, plus genuinely actionable system errors handled by their callers.
+The 60-second retry is idempotent by IST date and instrument key. Both feed
+types run during Mon-Fri 09:15-15:30 IST. With
+`REQUIRE_TODAY_ONLY_SCOPE=true`, frames lacking `data_scope=today_only`
+are rejected. `OPTION_CHAIN_FEED_MODE` must match the primary `FEED_MODE`.
 
 ## Environment
 
 ```env
-OPTION_CHAIN_CAPTURE_ENABLED=false
+OPTION_CHAIN_CAPTURE_ENABLED=true
+OPTION_CHAIN_INDEXES=NSE_INDEX|Nifty 50
 OPTION_CHAIN_DATA_DIR=data/option_chain
 OPTION_CHAIN_FEED_MODE=full
-OPTION_CHAIN_NIFTY_RANGE_POINTS=300
+OPTION_CHAIN_WRITE_QUEUE_SIZE=20000
+OPTION_CHAIN_NIFTY_RANGE_POINTS=0
 OPTION_CHAIN_BANKNIFTY_RANGE_POINTS=500
 OPTION_CHAIN_MIDCPNIFTY_RANGE_POINTS=200
 OPTION_CHAIN_SENSEX_RANGE_POINTS=500
+EMA_WS_BASE_URL=wss://ema.novag7.in
+OPTION_CHAIN_SUPERTREND_ENABLED=true
+OPTION_CHAIN_SUPERTREND_MAX_CONNECTIONS=120
+REQUIRE_TODAY_ONLY_SCOPE=true
 ```

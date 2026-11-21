@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import upstox_client
 
-from core.config import INDEX_METADATA, INSTRUMENT_KEYS, TIMEZONE
+from core.config import INDEX_METADATA, INSTRUMENT_KEYS, OPTION_CHAIN_INDEXES, TIMEZONE
 from core.logger import get_logger
 from core.token_service import fetch_access_token
 from jobs.daily_refresh import get_feed_service
@@ -66,7 +66,8 @@ def select_nearest_expiry_contracts(
     range_points: float,
 ) -> tuple[list[dict], str | None, float, float]:
     """Keep CE/PE contracts at the nearest valid expiry inside the inclusive range."""
-    lower, upper = average - range_points, average + range_points
+    # Zero or negative range captures every strike of the nearest expiry.
+    lower, upper = (average - range_points, average + range_points) if range_points > 0 else (None, None)
     valid: list[dict] = []
     for item in contracts or []:
         row = _plain_contract(item)
@@ -90,7 +91,7 @@ def select_nearest_expiry_contracts(
     selected = [
         row for row in valid
         if row["expiry"] == nearest_expiry
-        and lower <= row["strike_price"] <= upper
+        and (range_points <= 0 or lower <= row["strike_price"] <= upper)
     ]
     selected.sort(key=lambda row: (row["strike_price"], row["instrument_type"]))
     return selected, nearest_expiry, lower, upper
@@ -98,11 +99,12 @@ def select_nearest_expiry_contracts(
 
 class OptionChainCaptureService:
     def __init__(self):
-        self.enabled = os.getenv("OPTION_CHAIN_CAPTURE_ENABLED", "false").strip().lower() == "true"
+        self.enabled = os.getenv("OPTION_CHAIN_CAPTURE_ENABLED", "true").strip().lower() == "true"
+        self.index_keys = list(OPTION_CHAIN_INDEXES)
         self.root = Path(os.getenv("OPTION_CHAIN_DATA_DIR", "data/option_chain"))
         self.mode = os.getenv("OPTION_CHAIN_FEED_MODE", "full").strip().lower()
         self.windows = {
-            "NIFTY": float(os.getenv("OPTION_CHAIN_NIFTY_RANGE_POINTS", "300")),
+            "NIFTY": float(os.getenv("OPTION_CHAIN_NIFTY_RANGE_POINTS", "0")),
             "BANKNIFTY": float(os.getenv("OPTION_CHAIN_BANKNIFTY_RANGE_POINTS", "500")),
             "MIDCPNIFTY": float(os.getenv("OPTION_CHAIN_MIDCPNIFTY_RANGE_POINTS", "200")),
             "SENSEX": float(os.getenv("OPTION_CHAIN_SENSEX_RANGE_POINTS", "500")),
@@ -146,7 +148,7 @@ class OptionChainCaptureService:
             if (
                 self._active_date == date_key
                 and self._feed is feed
-                and len(self._processed_indexes) == len(INSTRUMENT_KEYS)
+                and len(self._processed_indexes) == len(self.index_keys)
                 and self._contract_meta.keys() <= self._subscribed
                 and self._contract_meta.keys() <= set(feed.instrument_keys)
             ):
@@ -194,7 +196,7 @@ class OptionChainCaptureService:
                 processed_indexes = set(self._processed_indexes)
             skipped = []
 
-            for instrument_key in INSTRUMENT_KEYS:
+            for instrument_key in self.index_keys:
                 if instrument_key in processed_indexes:
                     continue
                 meta = INDEX_METADATA.get(instrument_key, {})
@@ -291,6 +293,12 @@ class OptionChainCaptureService:
                 self._write_manifests(all_contracts, pivot_doc, skipped)
                 summary = dict(self._last_summary)
 
+            try:
+                from services.option_chain_supertrend_service import start_option_chain_supertrend_capture
+                start_option_chain_supertrend_capture(list(new_meta.values()))
+            except Exception:
+                logger.exception("Could not start option-chain Supertrend capture")
+
             logger.info(
                 "Option-chain live capture %s: selected=%d subscribed=%d",
                 summary["state"], summary["selected_contracts"], summary["subscribed_contracts"],
@@ -309,6 +317,11 @@ class OptionChainCaptureService:
                 feed.unsubscribe(list(old))
             except Exception:
                 logger.exception("Could not unsubscribe previous day's option-chain contracts")
+        try:
+            from services.option_chain_supertrend_service import stop_option_chain_supertrend_capture
+            stop_option_chain_supertrend_capture()
+        except Exception:
+            logger.exception("Could not stop previous-date option-chain Supertrend feeds")
         self._active_date = date_key
         self._contract_meta.clear()
         self._subscribed.clear()
@@ -343,7 +356,7 @@ class OptionChainCaptureService:
 
         indexes = doc.get("indexes") or {}
         missing_indexes = [
-            key for key in INSTRUMENT_KEYS
+            key for key in self.index_keys
             if (
                 key not in indexes
                 or not (indexes.get(key) or {}).get("levels")
@@ -395,19 +408,18 @@ class OptionChainCaptureService:
         tmp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
         tmp.replace(path)
         for row in contracts:
-            folder = (
-                self.root
-                / str(row.get("index_folder") or _safe(row.get("index_canonical") or "unknown"))
-                / date_key
-            )
+            folder = self._contract_folder(row, date_key)
             folder.mkdir(parents=True, exist_ok=True)
-            strike_label = f"{row['strike_price']:g}"
-            side = str(row["instrument_type"]).lower()
-            filename = f"{strike_label}_{side}_{_safe(row['instrument_key'])}.jsonl"
-            metadata_path = folder / filename.replace(".jsonl", ".meta.json")
+            metadata_path = folder / "meta.json"
             metadata_tmp = metadata_path.with_suffix(".json.tmp")
             metadata_tmp.write_text(json.dumps(row, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
             metadata_tmp.replace(metadata_path)
+
+    def _contract_folder(self, meta: dict, date_key: str) -> Path:
+        strike_label = f"{float(meta['strike_price']):g}"
+        side = str(meta['instrument_type']).lower()
+        folder_name = f"{strike_label}_{side}_{_safe(meta['instrument_key'])}"
+        return self.root / str(meta.get('index_folder') or 'unknown') / date_key / folder_name
 
     def _ensure_writer(self) -> None:
         if self._writer_thread and self._writer_thread.is_alive():
@@ -462,12 +474,9 @@ class OptionChainCaptureService:
                 meta, instrument_key, row = item
                 trade_date = str(row.get("trade_date_ist") or datetime.now(IST).date().isoformat())
                 date_folder = trade_date.replace("-", "")
-                folder = self.root / str(meta.get("index_folder") or "unknown") / date_folder
+                folder = self._contract_folder(meta, date_folder)
                 folder.mkdir(parents=True, exist_ok=True)
-                strike_label = f"{meta['strike_price']:g}"
-                side = str(meta["instrument_type"]).lower()
-                filename = f"{strike_label}_{side}_{_safe(instrument_key)}.jsonl"
-                path = folder / filename
+                path = folder / "live_feed.jsonl"
                 with path.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
             except Exception:
@@ -476,6 +485,11 @@ class OptionChainCaptureService:
                 self._write_queue.task_done()
 
     def stop(self) -> None:
+        try:
+            from services.option_chain_supertrend_service import stop_option_chain_supertrend_capture
+            stop_option_chain_supertrend_capture()
+        except Exception:
+            logger.exception("Could not stop option-chain Supertrend capture")
         feed = self._feed
         if feed is not None and self._listener is not None:
             try:
@@ -490,7 +504,13 @@ class OptionChainCaptureService:
 
     def status(self) -> dict:
         with self._lock:
-            return dict(self._last_summary)
+            result = dict(self._last_summary)
+        try:
+            from services.option_chain_supertrend_service import get_option_chain_supertrend_status
+            result['supertrend'] = get_option_chain_supertrend_status()
+        except Exception:
+            result['supertrend'] = {'state': 'unavailable'}
+        return result
 
 
 option_chain_capture = OptionChainCaptureService()

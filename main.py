@@ -217,6 +217,12 @@ async def lifespan(app: FastAPI):
         _restore_isolation_capture()
 
         try:
+            from services.option_chain_capture_service import ensure_option_chain_capture
+            logger.info("Startup option-chain capture: %s", ensure_option_chain_capture())
+        except Exception:
+            logger.exception("Startup option-chain capture kickoff failed")
+
+        try:
             _scheduler = start_scheduler()
             logger.info(
                 "Scheduler running. Jobs: %s",

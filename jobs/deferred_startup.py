@@ -56,6 +56,12 @@ def run_deferred_startup_sequence() -> None:
     except Exception:
         logger.exception("[STARTUP-GATE] Isolation capture restore failed.")
 
+    try:
+        from services.option_chain_capture_service import ensure_option_chain_capture
+        logger.info("[STARTUP-GATE] Option-chain capture: %s", ensure_option_chain_capture())
+    except Exception:
+        logger.exception("[STARTUP-GATE] Option-chain capture kickoff failed.")
+
     logger.warning(
         "[STARTUP-GATE] Deferred startup sequence fully complete."
     )
