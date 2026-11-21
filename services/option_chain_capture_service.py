@@ -64,8 +64,9 @@ def select_nearest_expiry_contracts(
     today: date,
     average: float,
     range_points: float,
-) -> tuple[list[dict], str | None, float, float]:
-    """Keep CE/PE contracts at the nearest valid expiry inside the inclusive range."""
+    expiry_mode: str = "nearest",
+) -> tuple[list[dict], str | None, float | None, float | None]:
+    """Select CE/PE contracts at nearest expiry or across all valid expiries."""
     # Zero or negative range captures every strike of the nearest expiry.
     lower, upper = (average - range_points, average + range_points) if range_points > 0 else (None, None)
     valid: list[dict] = []
@@ -88,9 +89,10 @@ def select_nearest_expiry_contracts(
     if not valid:
         return [], None, lower, upper
     nearest_expiry = min(row["expiry"] for row in valid)
+    use_all_expiries = str(expiry_mode).strip().lower() == "all"
     selected = [
         row for row in valid
-        if row["expiry"] == nearest_expiry
+        if (use_all_expiries or row["expiry"] == nearest_expiry)
         and (range_points <= 0 or lower <= row["strike_price"] <= upper)
     ]
     selected.sort(key=lambda row: (row["strike_price"], row["instrument_type"]))
@@ -101,6 +103,10 @@ class OptionChainCaptureService:
     def __init__(self):
         self.enabled = os.getenv("OPTION_CHAIN_CAPTURE_ENABLED", "true").strip().lower() == "true"
         self.index_keys = list(OPTION_CHAIN_INDEXES)
+        self.expiry_mode = os.getenv("OPTION_CHAIN_EXPIRY_MODE", "all").strip().lower()
+        if self.expiry_mode not in ("all", "nearest"):
+            logger.warning("Invalid OPTION_CHAIN_EXPIRY_MODE=%s; using all", self.expiry_mode)
+            self.expiry_mode = "all"
         self.root = Path(os.getenv("OPTION_CHAIN_DATA_DIR", "data/option_chain"))
         self.mode = os.getenv("OPTION_CHAIN_FEED_MODE", "full").strip().lower()
         self.windows = {
@@ -213,7 +219,7 @@ class OptionChainCaptureService:
                     response = api.get_option_contracts(instrument_key)
                     contracts = _value(response, "data", []) or []
                     selected, nearest_expiry, lower, upper = select_nearest_expiry_contracts(
-                        contracts, today, average, window
+                        contracts, today, average, window, expiry_mode=self.expiry_mode
                     )
                     if not selected:
                         # No result can be transient (provider refresh, expiry

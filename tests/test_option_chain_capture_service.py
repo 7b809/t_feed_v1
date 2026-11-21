@@ -74,3 +74,17 @@ def test_zero_range_selects_all_strikes_for_nearest_expiry():
     assert {row["instrument_key"] for row in selected} == {
         "near-low", "near-atm", "near-high"
     }
+
+
+def test_all_expiry_mode_selects_all_non_expired_expiries():
+    today = date(2026, 11, 18)
+    contracts = [
+        contract("near", "2026-11-19", 25300, "CE"),
+        contract("far", "2026-11-26", 25300, "PE"),
+        contract("expired", "2026-11-17", 25300, "CE"),
+    ]
+    selected, expiry, _, _ = select_nearest_expiry_contracts(
+        contracts, today, average=25300, range_points=0, expiry_mode="all"
+    )
+    assert expiry == "2026-11-19"
+    assert {row["instrument_key"] for row in selected} == {"near", "far"}

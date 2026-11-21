@@ -12,9 +12,10 @@ MIDCPNIFTY or SENSEX keys later without changing the service code.
 
 For each index, the service reads its OR average, requests contracts through
 Upstox `OptionsApi.get_option_contracts`, filters expired/non-option rows,
-then selects both CE and PE contracts at the nearest valid expiry. A positive
-strike-range setting limits contracts to the OR-average window; zero means
-all strikes returned for that nearest expiry. NIFTY defaults to zero.
+then selects both CE and PE contracts. `OPTION_CHAIN_EXPIRY_MODE=all` keeps
+all non-expired expiries returned by Upstox; `nearest` keeps only the nearest
+valid expiry. A positive strike-range setting limits strikes to the OR-average
+window; zero means all strikes. The default is all expiries and all NIFTY strikes.
 
 The selected instruments are subscribed in batches of 100 on the existing
 primary `MarketFeedService`; no second Upstox market-feed connection is
@@ -45,6 +46,7 @@ are rejected. `OPTION_CHAIN_FEED_MODE` must match the primary `FEED_MODE`.
 ```env
 OPTION_CHAIN_CAPTURE_ENABLED=true
 OPTION_CHAIN_INDEXES=NSE_INDEX|Nifty 50
+OPTION_CHAIN_EXPIRY_MODE=all
 OPTION_CHAIN_DATA_DIR=data/option_chain
 OPTION_CHAIN_FEED_MODE=full
 OPTION_CHAIN_WRITE_QUEUE_SIZE=20000
