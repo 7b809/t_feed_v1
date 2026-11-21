@@ -621,6 +621,30 @@ Set `TELEGRAM_GROUP_ENABLED=false` to pause only the isolation group
 announcements. Existing `TELEGRAM_CHAT_ID` runtime notifications are
 unaffected.
 
+### Test the official group using the saved isolation JSON
+
+No dummy/test instrument file is needed. After an isolation has been saved,
+run this from the project root:
+
+```bash
+python scripts/test_isolation_group_notification.py
+```
+
+The script reads `data/isolated/isolated_instrument.json` by default (or
+`ISOLATED_DATA_DIR/isolated_instrument.json` when that directory is
+configured). An alternate JSON path can be supplied as the first argument:
+
+```bash
+python scripts/test_isolation_group_notification.py /path/to/isolated_instrument.json
+```
+
+It sends the existing snapshot only to `TELEGRAM_GROUP_CHAT_ID`, with a
+prominent `TEST MESSAGE · EXISTING ISOLATION DATA` label. It does not create
+or modify isolation data, write to MongoDB, start feeds, or use the legacy
+`TELEGRAM_CHAT_ID`. The bot token, group chat ID, and group enable flag must
+be configured. A successful Telegram API response confirms the message was
+accepted by Telegram; check the group itself for visibility and permissions.
+
 ## Daily MEGA backup and data cleanup
 
 The daily backup job creates `YYYYMMDD_data.zip` from the complete configured

@@ -281,6 +281,17 @@ def notify_isolation_created(record: dict, archive_path: str | None = None) -> b
         return False
 
 
+def send_existing_isolation_test(record: dict) -> bool:
+    """Send the saved isolation snapshot as a clearly labelled group-only test."""
+    try:
+        message = _build_isolation_message(record)
+        message = "🧪 <b>TEST MESSAGE · EXISTING ISOLATION DATA</b>\n\n" + message
+        return send_group_html(message)
+    except Exception:
+        logger.exception("Could not format existing-isolation Telegram test")
+        return False
+
+
 def notify_runtime_event(title: str, detail: str, emoji: str = "ℹ️") -> bool:
     return send_html(f"{emoji} <b>{html.escape(title)}</b>\n{html.escape(detail)}")
 
