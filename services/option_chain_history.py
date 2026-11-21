@@ -65,7 +65,7 @@ def seed_option_chain_history(
 
         destination.parent.mkdir(parents=True, exist_ok=True)
         source_bytes = source.read_bytes()
-        source_is_complete = not source_bytes or source_bytes.endswith(b"\\n")
+        source_is_complete = not source_bytes or source_bytes.endswith(b"\n")
         combined = {}
         for candidate in (source, destination):
             if not candidate.is_file():
@@ -76,10 +76,31 @@ def seed_option_chain_history(
                     if not raw:
                         continue
                     try:
-                        json.loads(raw)
+                        parsed = json.loads(raw)
                     except json.JSONDecodeError:
                         logger.warning("Skipping incomplete JSONL row while seeding %s", candidate)
                         continue
+                    if candidate == source and isinstance(parsed, dict) and "payload" in parsed:
+                        if indicator == "live_feed":
+                            parsed = {
+                                "received_at_ist": parsed.get("received_at_ist"),
+                                "trade_date_ist": parsed.get("trade_date_ist") or str(trade_date),
+                                "role": str(role),
+                                "instrument_key": str(instrument_key),
+                                "trading_symbol": parsed.get("trading_symbol") or instrument_key,
+                                "payload": parsed.get("payload"),
+                            }
+                        else:
+                            parsed = {
+                                "received_at_ist": parsed.get("received_at_ist"),
+                                "indicator": "supertrend",
+                                "isolation_id": f"{trade_date}__{instrument_key}",
+                                "leg_role": str(role),
+                                "instrument_key": str(instrument_key),
+                                "trading_symbol": parsed.get("trading_symbol") or instrument_key,
+                                "payload": parsed.get("payload"),
+                            }
+                        raw = json.dumps(parsed, ensure_ascii=False, default=str)
                     combined[raw] = None
         if not combined:
             return {"state": "source_empty", "rows": 0}

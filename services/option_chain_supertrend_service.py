@@ -148,6 +148,18 @@ class OptionChainSupertrendCapture:
                                 sinks = list(self._archive_sinks.get(key, {}).values())
                                 self._status[key] = {"state": "connected", "file": str(path), "last_event": payload.get("event"), "last_frame_at": received}
                             for sink in sinks:
+                                try:
+                                    from services.option_chain_history import seed_option_chain_history
+                                    seed_result = await asyncio.to_thread(
+                                        seed_option_chain_history,
+                                        key, day, sink["role"], "supertrend", sink["path"],
+                                    )
+                                    # A newly completed seed already includes this
+                                    # frame; don't append it a second time.
+                                    if seed_result.get("state") == "seeded":
+                                        continue
+                                except Exception:
+                                    logger.exception("Could not retry Supertrend archive seed key=%s", key)
                                 archive_row = {
                                     "received_at_ist": received,
                                     "indicator": "supertrend",
