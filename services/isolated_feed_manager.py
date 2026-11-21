@@ -103,6 +103,15 @@ class IsolatedFeedManager:
         trade_date = str(record.get("trade_date_ist") or _now().date())
         isolation_id = f"{trade_date}__{record.get('instrument_key') or 'unknown'}"
         for role, key, symbol in valid:
+            if self.enabled_st:
+                try:
+                    from services.option_chain_history import seed_option_chain_history
+                    destination = self._file_path(trade_date, role, key, "supertrend")
+                    result = seed_option_chain_history(key, trade_date, role, "supertrend", destination)
+                    if result.get("state") == "seeded":
+                        logger.info("Seeded pre-isolation Supertrend history role=%s key=%s rows=%s", role, key, result.get("rows"))
+                except Exception:
+                    logger.exception("Could not seed option-chain Supertrend history role=%s key=%s", role, key)
             for indicator, enabled in (("sr", self.enabled_sr), ("supertrend", self.enabled_st)):
                 if not enabled:
                     continue
@@ -167,6 +176,12 @@ class IsolatedFeedManager:
                             "trading_symbol": symbol,
                             "payload": payload,
                         }
+                        if indicator == "supertrend":
+                            try:
+                                from services.option_chain_history import seed_option_chain_history
+                                await asyncio.to_thread(seed_option_chain_history, key, trade_date, role, "supertrend", path)
+                            except Exception:
+                                logger.exception("Could not retry Supertrend history seed key=%s", key)
                         await asyncio.to_thread(self._append_jsonl, path, row)
                         event = payload.get("event")
                         if event == "connection_ack":

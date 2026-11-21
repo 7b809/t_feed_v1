@@ -9,6 +9,7 @@ import json
 import os
 import queue
 import threading
+import re
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -78,6 +79,20 @@ class IsolatedLiveFeedCapture:
                 "trade_date_ist": trade_date,
             }
 
+        # Seed pre-isolation option-chain history before the live listener starts.
+        for meta in desired.values():
+            try:
+                destination = self._file_path(meta)
+                self._migrate_legacy_daily_files(destination)
+                from services.option_chain_history import seed_option_chain_history
+                result = seed_option_chain_history(
+                    meta["instrument_key"], trade_date, meta["role"], "live_feed", destination
+                )
+                if result.get("state") == "seeded":
+                    logger.info("Seeded pre-isolation live history role=%s key=%s rows=%s", meta["role"], meta["instrument_key"], result.get("rows"))
+            except Exception:
+                logger.exception("Could not seed option-chain live history for %s", meta.get("instrument_key"))
+
         with self.lock:
             # Preserve metadata from previous active isolation roles on same day.
             self.metadata.update(desired)
@@ -126,6 +141,40 @@ class IsolatedLiveFeedCapture:
             self.state = {"enabled": True, "state": "subscription_failed"}
         return dict(self.state)
 
+    def _file_path(self, meta: dict) -> Path:
+        return self.root / f"{meta['role']}_{_safe(meta['instrument_key'])}.jsonl"
+
+    def _migrate_legacy_daily_files(self, destination: Path) -> None:
+        """Flatten legacy live_feed/YYYYMMDD files once, preserving old rows."""
+        if destination.exists() or not self.root.exists():
+            return
+        legacy_files = []
+        for folder in sorted(self.root.iterdir(), key=lambda item: item.name):
+            if folder.is_dir() and re.fullmatch(r"\d{8}", folder.name):
+                candidate = folder / destination.name
+                if candidate.is_file():
+                    legacy_files.append(candidate)
+        if not legacy_files:
+            return
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = destination.with_suffix(destination.suffix + ".migrating")
+        seen = set()
+        try:
+            with temporary.open("w", encoding="utf-8") as output:
+                for source in legacy_files:
+                    with source.open("r", encoding="utf-8") as handle:
+                        for line in handle:
+                            if line.strip() and line not in seen:
+                                seen.add(line)
+                                output.write(line if line.endswith("\n") else line + "\n")
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, destination)
+            logger.info("Migrated %d legacy daily live-feed file(s) into %s", len(legacy_files), destination)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+
     def _ensure_writer(self):
         if self.writer and self.writer.is_alive():
             return
@@ -164,11 +213,16 @@ class IsolatedLiveFeedCapture:
             except queue.Empty:
                 continue
             try:
-                day = str(meta["trade_date_ist"]).replace("-", "")
-                folder = self.root / day
-                folder.mkdir(parents=True, exist_ok=True)
-                filename = f"{meta['role']}_{_safe(meta['instrument_key'])}.jsonl"
-                with (folder / filename).open("a", encoding="utf-8") as handle:
+                path = self._file_path(meta)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    from services.option_chain_history import seed_option_chain_history
+                    seed_option_chain_history(
+                        meta["instrument_key"], meta["trade_date_ist"], meta["role"], "live_feed", path
+                    )
+                except Exception:
+                    logger.exception("Could not retry live-feed history seed for %s", meta["instrument_key"])
+                with path.open("a", encoding="utf-8") as handle:
                     handle.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
             except Exception:
                 logger.exception("Could not write isolated live-feed record")
