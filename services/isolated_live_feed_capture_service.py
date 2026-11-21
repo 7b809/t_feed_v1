@@ -146,7 +146,7 @@ class IsolatedLiveFeedCapture:
 
     def _migrate_legacy_daily_files(self, destination: Path) -> None:
         """Flatten legacy live_feed/YYYYMMDD files once, preserving old rows."""
-        if destination.exists() or not self.root.exists():
+        if not self.root.exists():
             return
         legacy_files = []
         for folder in sorted(self.root.iterdir(), key=lambda item: item.name):
@@ -161,7 +161,8 @@ class IsolatedLiveFeedCapture:
         seen = set()
         try:
             with temporary.open("w", encoding="utf-8") as output:
-                for source in legacy_files:
+                # Preserve any already-flat file, then append old date folders.
+                for source in ([destination] if destination.is_file() else []) + legacy_files:
                     with source.open("r", encoding="utf-8") as handle:
                         for line in handle:
                             if line.strip() and line not in seen:

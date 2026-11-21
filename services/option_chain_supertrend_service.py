@@ -180,6 +180,8 @@ class OptionChainSupertrendCapture:
         future = asyncio.run_coroutine_threadsafe(cancel_all(), self._loop)
         try: future.result(timeout=5)
         except Exception: logger.exception("Error stopping option-chain Supertrend feeds")
+        with self._lock:
+            self._archive_sinks.clear()
         self._loop.call_soon_threadsafe(self._loop.stop)
 
     def status(self):
