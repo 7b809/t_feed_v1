@@ -111,7 +111,21 @@ class DailyDataBackupService:
                 "updated_at_ist": datetime.now(IST).isoformat(),
             }
 
-            if self.cleanup_enabled:
+            if self.cleanup_enabled and stats["files_skipped"] > 0:
+                result.update(
+                    status="uploaded_cleanup_failed",
+                    cleanup_status="blocked_incomplete_archive",
+                    cleanup_error=(
+                        f"{stats['files_skipped']} DATA_DIR entries were skipped "
+                        "during ZIP creation; local data was retained."
+                    ),
+                )
+                self._write_state(result)
+                logger.error(
+                    "[isolation-backup] cleanup blocked: archive skipped %d entries",
+                    stats["files_skipped"],
+                )
+            elif self.cleanup_enabled:
                 pending = dict(result, cleanup_status="pending")
                 # Never perform destructive cleanup without a durable receipt.
                 if not self._write_state(pending):
@@ -301,7 +315,9 @@ class DailyDataBackupService:
             ) as archive:
                 for root, dirs, files in os.walk(source, topdown=True, followlinks=False):
                     current = Path(root)
-                    dirs[:] = [d for d in dirs if not (current / d).is_symlink()]
+                    symlink_dirs = [d for d in dirs if (current / d).is_symlink()]
+                    skipped += len(symlink_dirs)
+                    dirs[:] = [d for d in dirs if d not in symlink_dirs]
                     for name in files:
                         path = current / name
                         if path.is_symlink() or not path.is_file() or name.endswith(".tmp"):

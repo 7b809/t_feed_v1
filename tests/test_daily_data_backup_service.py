@@ -132,3 +132,20 @@ def test_cleanup_retry_rearchives_remaining_data_before_retry(tmp_path):
     assert second["cleanup_status"] == "complete"
     assert uploads == [first["filename"], second["filename"]]
     assert list(data.iterdir()) == []
+
+
+def test_skipped_entries_block_cleanup(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "included.json").write_text("{}", encoding="utf-8")
+    (data / "unfinished.tmp").write_text("partial", encoding="utf-8")
+    service = make_service(data, tmp_path / "backups")
+    service._upload_archive = lambda archive_path, filename: "verified"
+
+    result = service._run_sync("test")
+
+    assert result["status"] == "uploaded_cleanup_failed"
+    assert result["cleanup_status"] == "blocked_incomplete_archive"
+    assert result["files_skipped"] == 1
+    assert (data / "included.json").is_file()
+    assert (data / "unfinished.tmp").is_file()
