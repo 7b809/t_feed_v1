@@ -81,8 +81,13 @@ class DailyDataBackupService:
 
         # Resume a previously verified upload if the process stopped during cleanup.
         previous = self._read_state(date_key)
-        if previous and previous.get("status") in ("uploaded", "uploaded_cleanup_failed"):
-            if self.cleanup_enabled and previous.get("cleanup_status") != "complete":
+        if (
+            previous
+            and previous.get("upload_verified") is True
+            and previous.get("cleanup_status") in ("pending", "failed")
+            and previous.get("status") in ("uploaded", "uploaded_cleanup_failed")
+        ):
+            if self.cleanup_enabled:
                 logger.warning("[isolation-backup] resuming post-upload cleanup for %s", date_key)
                 return self._complete_cleanup(previous)
             if previous.get("cleanup_status") == "complete" or not self.cleanup_enabled:
@@ -100,6 +105,7 @@ class DailyDataBackupService:
             link = self._upload_archive(archive_path, filename)
             result = {
                 "status": "uploaded",
+                "upload_verified": True,
                 "reason": reason,
                 "date": date_key,
                 "filename": filename,
@@ -401,19 +407,6 @@ class DailyDataBackupService:
         except Exception:
             logger.exception("Could not create MEGA share link for %s", filename)
         return link
-
-    def _write_state(self, result: dict[str, Any]) -> None:
-        if self.state_collection is None:
-            logger.warning("MEGA backup status collection unavailable")
-            return
-        date_key = str(result.get("date") or datetime.now(IST).strftime("%Y%m%d"))
-        document = dict(result)
-        document["_id"] = date_key
-        document["date"] = date_key
-        try:
-            self.state_collection.replace_one({"_id": date_key}, document, upsert=True)
-        except Exception:
-            logger.exception("Could not persist MEGA backup status for %s", date_key)
 
     def _notify(self, title: str, message: str) -> None:
         try:
