@@ -64,6 +64,8 @@ def seed_option_chain_history(
             return {"state": "source_missing", "rows": 0}
 
         destination.parent.mkdir(parents=True, exist_ok=True)
+        source_bytes = source.read_bytes()
+        source_is_complete = not source_bytes or source_bytes.endswith(b"\\n")
         combined = {}
         for candidate in (source, destination):
             if not candidate.is_file():
@@ -94,6 +96,10 @@ def seed_option_chain_history(
         finally:
             if temporary.exists():
                 temporary.unlink()
+
+        if not source_is_complete:
+            logger.info("Option-chain history source still has an incomplete trailing row; will retry key=%s", instrument_key)
+            return {"state": "source_partial", "rows": len(rows)}
 
         manifest[seed_id] = {
             "instrument_key": str(instrument_key),

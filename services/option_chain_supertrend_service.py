@@ -40,6 +40,7 @@ class OptionChainSupertrendCapture:
         self._thread = None
         self._tasks = {}
         self._status = {}
+        self._archive_sinks = {}
         self._lock = threading.RLock()
         self._semaphore = None
 
@@ -92,6 +93,23 @@ class OptionChainSupertrendCapture:
         logger.info("Option-chain Supertrend capture scheduled for %d contracts", len(valid))
         return self.status()
 
+    def register_archive_sink(self, instrument_key, path, isolation_id, role, symbol):
+        """Fan an existing option-chain Supertrend stream into an isolation file."""
+        day = _now().date().isoformat()
+        task = self._tasks.get((day, str(instrument_key)))
+        if task is None or task.done():
+            return False
+        sink = {
+            "path": Path(path),
+            "isolation_id": isolation_id,
+            "role": role,
+            "symbol": symbol,
+        }
+        with self._lock:
+            self._archive_sinks.setdefault(str(instrument_key), {})[str(path)] = sink
+        logger.info("Registered isolation Supertrend archive sink role=%s key=%s path=%s", role, instrument_key, path)
+        return True
+
     async def _run_feed(self, meta):
         key = str(meta["instrument_key"]); symbol = str(meta.get("trading_symbol") or key)
         day = str(meta["trade_date_ist"])
@@ -126,7 +144,20 @@ class OptionChainSupertrendCapture:
                                 "option_type": meta.get("instrument_type"), "instrument_key": key,
                                 "trading_symbol": symbol, "payload": payload}
                             await asyncio.to_thread(self._append, path, event)
-                            with self._lock: self._status[key] = {"state": "connected", "file": str(path), "last_event": payload.get("event"), "last_frame_at": received}
+                            with self._lock:
+                                sinks = list(self._archive_sinks.get(key, {}).values())
+                                self._status[key] = {"state": "connected", "file": str(path), "last_event": payload.get("event"), "last_frame_at": received}
+                            for sink in sinks:
+                                archive_row = {
+                                    "received_at_ist": received,
+                                    "indicator": "supertrend",
+                                    "isolation_id": sink["isolation_id"],
+                                    "leg_role": sink["role"],
+                                    "instrument_key": key,
+                                    "trading_symbol": sink["symbol"],
+                                    "payload": payload,
+                                }
+                                await asyncio.to_thread(self._append, sink["path"], archive_row)
             except asyncio.CancelledError:
                 with self._lock: self._status[key] = {"state": "stopped", "file": str(path)}
                 raise
@@ -161,5 +192,7 @@ class OptionChainSupertrendCapture:
 
 _manager = OptionChainSupertrendCapture()
 def start_option_chain_supertrend_capture(contracts): return _manager.start(contracts)
+def register_option_chain_supertrend_archive(instrument_key, path, isolation_id, role, symbol):
+    return _manager.register_archive_sink(instrument_key, path, isolation_id, role, symbol)
 def get_option_chain_supertrend_status(): return _manager.status()
 def stop_option_chain_supertrend_capture(): _manager.stop()

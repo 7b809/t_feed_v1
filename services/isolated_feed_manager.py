@@ -103,6 +103,7 @@ class IsolatedFeedManager:
         trade_date = str(record.get("trade_date_ist") or _now().date())
         isolation_id = f"{trade_date}__{record.get('instrument_key') or 'unknown'}"
         for role, key, symbol in valid:
+            supertrend_shared = False
             if self.enabled_st:
                 try:
                     from services.option_chain_history import seed_option_chain_history
@@ -110,10 +111,17 @@ class IsolatedFeedManager:
                     result = seed_option_chain_history(key, trade_date, role, "supertrend", destination)
                     if result.get("state") == "seeded":
                         logger.info("Seeded pre-isolation Supertrend history role=%s key=%s rows=%s", role, key, result.get("rows"))
+                    # Reuse the already-running option-chain Supertrend socket
+                    # and fan its frames into this isolation archive. Fall back
+                    # to the isolation-owned socket if no shared task is active.
+                    from services.option_chain_supertrend_service import register_option_chain_supertrend_archive
+                    supertrend_shared = register_option_chain_supertrend_archive(
+                        key, destination, isolation_id, role, symbol or key
+                    )
                 except Exception:
-                    logger.exception("Could not seed option-chain Supertrend history role=%s key=%s", role, key)
+                    logger.exception("Could not seed/register option-chain Supertrend history role=%s key=%s", role, key)
             for indicator, enabled in (("sr", self.enabled_sr), ("supertrend", self.enabled_st)):
-                if not enabled:
+                if not enabled or (indicator == "supertrend" and supertrend_shared):
                     continue
                 task_key = (isolation_id, role, indicator, key)
                 if task_key in self._tasks and not self._tasks[task_key].done():
@@ -122,7 +130,7 @@ class IsolatedFeedManager:
                 future = asyncio.run_coroutine_threadsafe(coro, self._loop)
                 self._tasks[task_key] = future
                 self._status["|".join(task_key)] = {"state": "starting", "instrument_key": key}
-        logger.info("SR/Supertrend capture scheduled isolation=%s legs=%d", isolation_id, len(valid))
+        logger.info("SR/Supertrend capture scheduled isolation=%s legs=%d shared_supertrend=%s", isolation_id, len(valid), self.enabled_st)
 
     def _file_path(self, trade_date, role, key, indicator):
         folder = self.root / indicator
