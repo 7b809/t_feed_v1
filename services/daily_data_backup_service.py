@@ -79,20 +79,11 @@ class DailyDataBackupService:
     def _run_sync(self, reason: str) -> dict[str, Any]:
         date_key = datetime.now(IST).strftime("%Y%m%d")
 
-        # Resume a previously verified upload if the process stopped during cleanup.
-        previous = self._read_state(date_key)
-        if (
-            previous
-            and previous.get("upload_verified") is True
-            and previous.get("cleanup_status") in ("pending", "failed")
-            and previous.get("status") in ("uploaded", "uploaded_cleanup_failed")
-        ):
-            if self.cleanup_enabled:
-                logger.warning("[isolation-backup] resuming post-upload cleanup for %s", date_key)
-                return self._complete_cleanup(previous)
-            if previous.get("cleanup_status") == "complete" or not self.cleanup_enabled:
-                logger.info("[isolation-backup] backup already completed for %s", date_key)
-                return previous
+        # Always build a fresh archive from the current DATA_DIR. If a prior
+        # cleanup was interrupted, this re-archives every file still present
+        # (including any new files written after restart) before another
+        # cleanup attempt. A prior same-day receipt is never permission to
+        # delete newly generated data.
 
         filename = f"{date_key}_data.zip"
         archive_path = None

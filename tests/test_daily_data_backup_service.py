@@ -106,7 +106,7 @@ def test_failed_upload_never_deletes_data(tmp_path):
     assert original.read_text(encoding="utf-8") == '{"keep": true}'
 
 
-def test_cleanup_retry_does_not_upload_a_second_archive(tmp_path):
+def test_cleanup_retry_rearchives_remaining_data_before_retry(tmp_path):
     data = tmp_path / "data"
     data.mkdir()
     (data / "ticks.jsonl").write_text('{"ltp": 100}\n', encoding="utf-8")
@@ -130,5 +130,5 @@ def test_cleanup_retry_does_not_upload_a_second_archive(tmp_path):
     second = service._run_sync("retry")
     assert second["status"] == "uploaded"
     assert second["cleanup_status"] == "complete"
-    assert uploads == [first["filename"]]
+    assert uploads == [first["filename"], second["filename"]]
     assert list(data.iterdir()) == []
