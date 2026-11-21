@@ -350,6 +350,9 @@ DAILY_DATA_BACKUP_DAYS = os.getenv("DAILY_DATA_BACKUP_DAYS", "mon-fri").strip()
 DAILY_DATA_BACKUP_COLLECTION = os.getenv(
     "DAILY_DATA_BACKUP_COLLECTION", "daily_data_backup_state"
 )
+DAILY_DATA_BACKUP_CLEANUP_ENABLED = (
+    os.getenv("DAILY_DATA_BACKUP_CLEANUP_ENABLED", "true").strip().lower() == "true"
+)
 MEGA_ENABLED = os.getenv("MEGA_ENABLED", "true").strip().lower() == "true"
 MEGA_EMAIL = os.getenv("MEGA_EMAIL", "").strip()
 MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()

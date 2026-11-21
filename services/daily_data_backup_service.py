@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import json
 import os
+import shutil
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,7 +32,8 @@ class DailyDataBackupService:
         mega_email: str,
         mega_password: str,
         mega_backup_root: str,
-        telegram_sender,
+        cleanup_enabled: bool = True,
+        telegram_sender=None,
         state_collection: Any = None,
     ) -> None:
         self.data_dir = data_dir
@@ -40,7 +43,8 @@ class DailyDataBackupService:
         self.mega_email = mega_email
         self.mega_password = mega_password
         self.mega_backup_root = mega_backup_root.strip().strip("/")
-        self.telegram_sender = telegram_sender
+        self.cleanup_enabled = bool(cleanup_enabled)
+        self.telegram_sender = telegram_sender or (lambda message: None)
         self.state_collection = state_collection
         self._lock = asyncio.Lock()
 
@@ -74,12 +78,25 @@ class DailyDataBackupService:
 
     def _run_sync(self, reason: str) -> dict[str, Any]:
         date_key = datetime.now(IST).strftime("%Y%m%d")
+
+        # Resume a previously verified upload if the process stopped during cleanup.
+        previous = self._read_state(date_key)
+        if previous and previous.get("status") in ("uploaded", "uploaded_cleanup_failed"):
+            if self.cleanup_enabled and previous.get("cleanup_status") != "complete":
+                logger.warning("[isolation-backup] resuming post-upload cleanup for %s", date_key)
+                return self._complete_cleanup(previous)
+            if previous.get("cleanup_status") == "complete" or not self.cleanup_enabled:
+                logger.info("[isolation-backup] backup already completed for %s", date_key)
+                return previous
+
         filename = f"{date_key}_data.zip"
         archive_path = None
         try:
             archive_path, stats = self._create_archive(date_key)
             size_bytes = archive_path.stat().st_size
             checksum = self._sha256(archive_path)
+
+            # This returns only after MEGA confirms remote filename and byte size.
             link = self._upload_archive(archive_path, filename)
             result = {
                 "status": "uploaded",
@@ -96,11 +113,35 @@ class DailyDataBackupService:
                 "updated_at": datetime.now(timezone.utc),
                 "updated_at_ist": datetime.now(IST).isoformat(),
             }
-            self._write_state(result)
+
+            if self.cleanup_enabled:
+                pending = dict(result, cleanup_status="pending")
+                # Never perform destructive cleanup without a durable receipt.
+                if not self._write_state(pending):
+                    blocked = dict(
+                        result,
+                        status="uploaded_cleanup_failed",
+                        cleanup_status="blocked_state_not_persisted",
+                        cleanup_error=(
+                            "MEGA upload succeeded, but no durable cleanup receipt "
+                            "could be persisted; DATA_DIR was retained."
+                        ),
+                    )
+                    logger.error(
+                        "[isolation-backup] refusing DATA_DIR cleanup: "
+                        "pending receipt could not be persisted"
+                    )
+                    self._write_state(blocked)
+                    return blocked
+                result = self._complete_cleanup(pending)
+            else:
+                result["cleanup_status"] = "disabled"
+                self._write_state(result)
+
             logger.info(
-                "[isolation-backup] uploaded %s -> %s (%s; %d files)",
-                filename, result["remote_path"], result["size_human"],
-                stats["files_added"],
+                "[isolation-backup] %s %s -> %s (%s; %d files; cleanup=%s)",
+                result.get("status"), filename, result["remote_path"],
+                result["size_human"], stats["files_added"], result.get("cleanup_status"),
             )
             return result
         except Exception as exc:
@@ -121,6 +162,128 @@ class DailyDataBackupService:
                     archive_path.unlink(missing_ok=True)
                 except OSError:
                     logger.exception("Could not remove staged backup %s", archive_path)
+
+    def _state_path(self, date_key: str) -> Path:
+        return Path(self.staging_dir).expanduser().resolve() / f".{date_key}_data_backup_state.json"
+
+    def _read_state(self, date_key: str) -> dict[str, Any] | None:
+        # Local receipt allows recovery even if MongoDB is unavailable on restart.
+        try:
+            path = self._state_path(date_key)
+            if path.is_file():
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(value, dict):
+                    return value
+        except Exception:
+            logger.exception("Could not read local MEGA backup receipt for %s", date_key)
+        if self.state_collection is not None:
+            try:
+                value = self.state_collection.find_one({"_id": date_key})
+                if isinstance(value, dict):
+                    return value
+            except Exception:
+                logger.exception("Could not read MongoDB MEGA backup state for %s", date_key)
+        return None
+
+    def _write_state(self, result: dict[str, Any]) -> bool:
+        date_key = str(result.get("date") or datetime.now(IST).strftime("%Y%m%d"))
+        document = dict(result)
+        document["_id"] = date_key
+        document["date"] = date_key
+        persisted = False
+        try:
+            path = self._state_path(date_key)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temp = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+            temp.write_text(
+                json.dumps(document, ensure_ascii=False, indent=2, default=str),
+                encoding="utf-8",
+            )
+            os.replace(temp, path)
+            persisted = True
+        except Exception:
+            logger.exception("Could not persist local MEGA backup receipt for %s", date_key)
+        if self.state_collection is not None:
+            try:
+                self.state_collection.replace_one({"_id": date_key}, document, upsert=True)
+                persisted = True
+            except Exception:
+                logger.exception("Could not persist MongoDB MEGA backup status for %s", date_key)
+        if not persisted:
+            logger.error("No durable MEGA backup state could be persisted for %s", date_key)
+        return persisted
+
+    def _complete_cleanup(self, upload_result: dict[str, Any]) -> dict[str, Any]:
+        result = dict(upload_result)
+        if not self.cleanup_enabled:
+            result.update(status="uploaded", cleanup_status="disabled")
+            self._write_state(result)
+            return result
+        try:
+            stats = self._cleanup_data_dir()
+            result.update(
+                status="uploaded",
+                cleanup_status="complete",
+                cleaned_files=stats["removed_files"],
+                cleaned_directories=stats["removed_directories"],
+                cleaned_at_ist=datetime.now(IST).isoformat(),
+            )
+            logger.info(
+                "[isolation-backup] DATA_DIR cleanup completed: files=%d directories=%d",
+                stats["removed_files"], stats["removed_directories"],
+            )
+        except Exception as exc:
+            result.update(
+                status="uploaded_cleanup_failed",
+                cleanup_status="failed",
+                cleanup_error=f"{type(exc).__name__}: {exc}",
+            )
+            logger.exception("[isolation-backup] upload succeeded but DATA_DIR cleanup failed")
+        result["updated_at"] = datetime.now(timezone.utc)
+        result["updated_at_ist"] = datetime.now(IST).isoformat()
+        self._write_state(result)
+        return result
+
+    def _cleanup_data_dir(self) -> dict[str, int]:
+        """Remove every child of DATA_DIR while retaining the DATA_DIR directory."""
+        source_arg = Path(self.data_dir).expanduser()
+        if source_arg.is_symlink():
+            raise ValueError(f"Refusing to clean symlink DATA_DIR: {source_arg}")
+        source = source_arg.resolve()
+        project_root = Path(__file__).resolve().parents[1]
+        if (
+            source == Path(source.anchor)
+            or source == project_root
+            or project_root.is_relative_to(source)
+        ):
+            raise ValueError(f"Refusing unsafe DATA_DIR cleanup target: {source}")
+
+        staging = Path(self.staging_dir).expanduser().resolve()
+        if staging == source or source in staging.parents:
+            raise ValueError("DAILY_DATA_BACKUP_DIR must be outside DATA_DIR")
+        if not source.exists() or not source.is_dir():
+            raise FileNotFoundError(f"DATA_DIR does not exist or is not a directory: {source}")
+
+        removed_files = 0
+        removed_directories = 0
+        for child in list(source.iterdir()):
+            if child.is_symlink() or not child.is_dir():
+                child.unlink()
+                removed_files += 1
+                continue
+            for _, dirs, filenames in os.walk(child, topdown=True, followlinks=False):
+                removed_directories += len(dirs)
+                removed_files += len(filenames)
+            shutil.rmtree(child)
+            removed_directories += 1
+
+        remaining = list(source.iterdir())
+        if remaining:
+            raise RuntimeError(
+                "DATA_DIR cleanup incomplete; remaining entries: "
+                + ", ".join(item.name for item in remaining[:10])
+            )
+        return {"removed_files": removed_files, "removed_directories": removed_directories}
 
     def _create_archive(self, date_key: str) -> tuple[Path, dict[str, int]]:
         source = Path(self.data_dir).expanduser().resolve()
@@ -269,9 +432,16 @@ class DailyDataBackupService:
             ("size_human", "Archive size"),
             ("mega_link", "MEGA link"),
             ("error", "Error"),
+            ("cleanup_status", "DATA_DIR cleanup"),
+            ("cleanup_error", "Cleanup error"),
         ):
             if result.get(key):
                 lines.append(f"{label}: {result[key]}")
+        if result.get("cleaned_files") is not None:
+            lines.append(
+                f"DATA_DIR removed: {result['cleaned_files']} files, "
+                f"{result.get('cleaned_directories', 0)} directories"
+            )
         if result.get("files_added") is not None:
             lines.append(
                 f"Files: {result['files_added']} (skipped: {result.get('files_skipped', 0)})"

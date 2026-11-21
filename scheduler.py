@@ -34,6 +34,7 @@ from core.config import (
     DAILY_DATA_BACKUP_ENABLED, DAILY_DATA_BACKUP_DIR,
     DAILY_DATA_BACKUP_HOUR, DAILY_DATA_BACKUP_MINUTE,
     DAILY_DATA_BACKUP_DAYS, DAILY_DATA_BACKUP_COLLECTION,
+    DAILY_DATA_BACKUP_CLEANUP_ENABLED,
     MEGA_ENABLED, MEGA_EMAIL, MEGA_PASSWORD, MEGA_BACKUP_ROOT,
 )
 from core.logger import get_logger
@@ -110,6 +111,7 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
                 mega_email=MEGA_EMAIL,
                 mega_password=MEGA_PASSWORD,
                 mega_backup_root=MEGA_BACKUP_ROOT,
+                cleanup_enabled=DAILY_DATA_BACKUP_CLEANUP_ENABLED,
                 telegram_sender=send_telegram_message,
                 state_collection=get_mongo_db()[DAILY_DATA_BACKUP_COLLECTION],
             )

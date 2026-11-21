@@ -21,7 +21,7 @@ IST = ZoneInfo("Asia/Kolkata")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 STATE_FILE = PROJECT_ROOT / ".daily_cleanup_state.json"
 
-DEFAULT_TARGETS = ("data", "logs", "logs_text")
+DEFAULT_TARGETS = ("logs", "logs_text")
 FORBIDDEN_TARGETS = {
     ".git", ".github", ".venv", "venv", "myenv", "env",
     "app", "api", "core", "jobs", "repositories", "services",
@@ -46,6 +46,15 @@ def _configured_targets() -> list[Path]:
             continue
         target = PROJECT_ROOT / name
         try:
+            configured_data = Path(os.getenv("DATA_DIR", "data")).expanduser()
+            if not configured_data.is_absolute():
+                configured_data = PROJECT_ROOT / configured_data
+            if target.resolve() == configured_data.resolve():
+                logger.warning(
+                    "Skipping startup cleanup for DATA_DIR %s; it is removed only "
+                    "after a verified daily MEGA backup", target
+                )
+                continue
             if target.resolve().parent != PROJECT_ROOT.resolve():
                 logger.error("Rejected cleanup path outside project root: %s", target)
                 continue

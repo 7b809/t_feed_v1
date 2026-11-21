@@ -595,6 +595,31 @@ sudo systemctl reload nginx
 
 The public WebSocket URL then uses `wss://feed.example.com/ws/market?...`. Ensure the firewall/security group allows inbound HTTPS and port 8001 is not unnecessarily exposed to the public internet.
 
+## Daily MEGA backup and data cleanup
+
+The daily backup job creates `YYYYMMDD_data.zip` from the complete configured
+`DATA_DIR` and uploads it to the configured MEGA backup folder. By default,
+the job runs Monday–Friday at 16:05 IST.
+
+`DAILY_DATA_BACKUP_CLEANUP_ENABLED=true` is enabled by default. The service
+removes the contents of `DATA_DIR` only after MEGA confirms the uploaded
+archive by its remote filename and byte size. The `DATA_DIR` directory itself
+is retained so the next trading session can write fresh data. A failed ZIP,
+failed upload, or unverifiable remote file never triggers cleanup.
+
+Before deletion, the service writes a durable pending-cleanup receipt under
+`DAILY_DATA_BACKUP_DIR` (outside `DATA_DIR`) and records status in MongoDB
+when available. If the process stops after upload but during cleanup, the next
+same-day backup run resumes cleanup from that receipt instead of creating a
+new archive from partially deleted data. Cleanup failures are reported as
+`uploaded_cleanup_failed` for retry.
+
+The generic startup cleanup deliberately excludes `DATA_DIR`; it only clears
+the configured log folders. This prevents startup from deleting market data
+when the previous MEGA backup did not complete. Set
+`DAILY_DATA_BACKUP_CLEANUP_ENABLED=false` only when retaining local data is
+intentional.
+
 ## Operational behaviour
 
 - The primary daily refresh validates the Upstox token and starts the primary market feed.
