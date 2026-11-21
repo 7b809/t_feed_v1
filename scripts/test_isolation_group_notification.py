@@ -10,6 +10,7 @@ start market feeds. It never targets the legacy TELEGRAM_CHAT_ID.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -17,14 +18,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.config import ISOLATED_DATA_DIR  # noqa: E402
 from services.isolation_telegram_service import (  # noqa: E402
     send_existing_isolation_test,
 )
 
 
 def main() -> int:
-    default_path = Path(ISOLATED_DATA_DIR) / "isolated_instrument.json"
+    # Match IsolatedArchiveService: env override, otherwise data/isolated.
+    isolated_data_dir = os.getenv("ISOLATED_DATA_DIR", "data/isolated").strip()
+    default_dir = Path(isolated_data_dir).expanduser()
+    if not default_dir.is_absolute():
+        default_dir = PROJECT_ROOT / default_dir
+    default_path = default_dir / "isolated_instrument.json"
     path = Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else default_path
     if not path.is_absolute():
         path = (Path.cwd() / path).resolve()
