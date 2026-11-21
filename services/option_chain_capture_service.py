@@ -233,10 +233,11 @@ class OptionChainCaptureService:
                     all_contracts.extend(selected)
                     with self._lock:
                         self._processed_indexes.add(instrument_key)
+                    range_label = "ALL_STRIKES" if lower is None else f"[{lower:.2f}, {upper:.2f}]"
                     logger.info(
-                        "Option-chain selection %s expiry=%s average=%.2f range=[%.2f, %.2f] "
+                        "Option-chain selection %s expiry=%s average=%.2f range=%s "
                         "contracts=%d strikes=%d",
-                        meta.get("canonical"), nearest_expiry, average, lower, upper,
+                        meta.get("canonical"), nearest_expiry, average, range_label,
                         len(selected), len({r["strike_price"] for r in selected}),
                     )
                 except Exception as exc:
@@ -253,6 +254,8 @@ class OptionChainCaptureService:
                 return result
 
             new_meta = {row["instrument_key"]: row for row in all_contracts}
+            for row in new_meta.values():
+                row["trade_date_ist"] = date_key
             keys = list(new_meta)
             # Register metadata before sending subscribe requests so an
             # immediate first tick is not lost while the SDK acknowledges.

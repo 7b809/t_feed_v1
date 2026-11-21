@@ -54,3 +54,23 @@ def test_expiry_today_remains_valid_for_expiry_day_session():
 
     assert expiry == "2026-11-18"
     assert selected[0]["instrument_key"] == "expiry-day"
+
+
+def test_zero_range_selects_all_strikes_for_nearest_expiry():
+    today = date(2026, 11, 18)
+    contracts = [
+        contract("near-low", "2026-11-19", 24000, "PE"),
+        contract("near-atm", "2026-11-19", 25300, "CE"),
+        contract("near-high", "2026-11-19", 27000, "CE"),
+        contract("far-expiry", "2026-11-26", 25300, "PE"),
+    ]
+
+    selected, expiry, lower, upper = select_nearest_expiry_contracts(
+        contracts, today, average=25300, range_points=0
+    )
+
+    assert expiry == "2026-11-19"
+    assert lower is None and upper is None
+    assert {row["instrument_key"] for row in selected} == {
+        "near-low", "near-atm", "near-high"
+    }
