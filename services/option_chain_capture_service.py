@@ -123,6 +123,7 @@ class OptionChainCaptureService:
         self._contract_meta: dict[str, dict] = {}
         self._pivot_contracts: dict[str, dict] = {}
         self._processed_pivot_indexes: set[str] = set()
+        self._pivot_batch_completed = False
         self._subscribed: set[str] = set()
         self._owned_subscriptions: set[str] = set()
         self._processed_indexes: set[str] = set()
@@ -259,6 +260,8 @@ class OptionChainCaptureService:
                     if any(row.get("index_instrument_key") == instrument_key for row in pivot_contracts.values()):
                         self._processed_pivot_indexes.add(instrument_key)
                     with self._lock:
+                        if not set(pivot_contracts).issubset(self._pivot_contracts):
+                            self._pivot_batch_completed = False
                         self._pivot_contracts.update(pivot_contracts)
 
                     selected, nearest_expiry, lower, upper = select_nearest_expiry_contracts(
@@ -345,6 +348,8 @@ class OptionChainCaptureService:
                         pivot_index_key,
                     )
             with self._lock:
+                if not set(pivot_contracts).issubset(self._pivot_contracts):
+                    self._pivot_batch_completed = False
                 self._pivot_contracts.update(pivot_contracts)
                 pivot_snapshot = list(self._pivot_contracts.values())
 
@@ -423,7 +428,7 @@ class OptionChainCaptureService:
         """Start one background pivot batch; later scheduler ticks retry missing files."""
         if os.getenv("OPTION_PIVOT_LEVELS_ENABLED", "true").strip().lower() != "true":
             return
-        if not contracts or not token:
+        if not contracts or not token or self._pivot_batch_completed:
             return
         with self._pivot_lock:
             if self._pivot_thread and self._pivot_thread.is_alive():
@@ -448,6 +453,13 @@ class OptionChainCaptureService:
             result = service.process_contracts(contracts, token, trade_date)
             with self._lock:
                 self._last_summary["option_pivots"] = result
+                self._pivot_batch_completed = (
+                    result.get("failed", 0) == 0
+                    and result.get("skipped", 0) == 0
+                    and result.get("computed", 0) + result.get("already_present", 0)
+                    == len(self._pivot_contracts)
+                    and result.get("total", 0) == len(self._pivot_contracts)
+                )
         except Exception:
             logger.exception(
                 "Option pivot batch failed unexpectedly; option-chain capture remains active | date=%s",
@@ -475,6 +487,7 @@ class OptionChainCaptureService:
         self._contract_meta.clear()
         self._pivot_contracts.clear()
         self._processed_pivot_indexes.clear()
+        self._pivot_batch_completed = False
         self._subscribed.clear()
         self._owned_subscriptions.clear()
         self._processed_indexes.clear()
