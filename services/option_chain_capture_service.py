@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import queue
 import re
@@ -245,7 +246,14 @@ class OptionChainCaptureService:
                             continue
                         option_type = str(pivot_row.get("instrument_type") or "").upper()
                         option_key = str(pivot_row.get("instrument_key") or "").strip()
-                        if expiry_date < today or option_type not in ("CE", "PE") or not option_key:
+                        try:
+                            strike = float(pivot_row.get("strike_price"))
+                        except (TypeError, ValueError):
+                            continue
+                        if (
+                            expiry_date < today or option_type not in ("CE", "PE")
+                            or not option_key or not math.isfinite(strike) or strike <= 0
+                        ):
                             continue
                         pivot_row.update({
                             "instrument_key": option_key,
@@ -318,7 +326,14 @@ class OptionChainCaptureService:
                             continue
                         option_type = str(pivot_row.get("instrument_type") or "").upper()
                         option_key = str(pivot_row.get("instrument_key") or "").strip()
-                        if expiry_date < today or option_type not in ("CE", "PE") or not option_key:
+                        try:
+                            strike = float(pivot_row.get("strike_price"))
+                        except (TypeError, ValueError):
+                            continue
+                        if (
+                            expiry_date < today or option_type not in ("CE", "PE")
+                            or not option_key or not math.isfinite(strike) or strike <= 0
+                        ):
                             continue
                         pivot_row.update({
                             "instrument_key": option_key,
