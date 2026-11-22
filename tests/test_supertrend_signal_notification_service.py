@@ -157,7 +157,10 @@ def test_current_minute_archive_signal_before_isolation_is_sent_with_age(monkeyp
 
     # The same event arriving again on the live socket must be deduplicated.
     assert not notifier.notify_isolated_supertrend_signal(
-        record, _signal("2026-11-23T09:21:00+05:30")
+        record, _signal("2026-11-23T09:21:00+05:30"),
+        received_at="2026-11-23T09:21:45+05:30",
+        allow_current_minute_pre_isolation=True,
+        notification_now=datetime.fromisoformat("2026-11-23T09:21:45+05:30"),
     )
     assert len(sent) == 1
 
