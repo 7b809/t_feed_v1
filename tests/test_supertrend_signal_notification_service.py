@@ -147,20 +147,20 @@ def test_current_minute_archive_signal_before_isolation_is_sent_with_age(monkeyp
     monkeypatch.setattr(option_chain_history, "_find_contract_folder", lambda key, day: contract_folder)
 
     assert notifier.notify_current_minute_supertrend_signal(
-        record, now=datetime.fromisoformat("2026-11-23T09:21:45+05:30")
+        record, now=datetime.fromisoformat("2026-11-23T09:22:05+05:30")
     )
     assert len(sent) == 1
     assert "Signal time:" in sent[0]
-    assert "Signal age: <b>45 seconds ago</b>" in sent[0]
+    assert "Signal age: <b>1 min 5 sec ago</b>" in sent[0]
     assert "Signal-to-isolation gap: <b>40 seconds before isolation</b>" in sent[0]
     assert "09:21:00 AM IST" in sent[0]
 
     # The same event arriving again on the live socket must be deduplicated.
     assert not notifier.notify_isolated_supertrend_signal(
         record, _signal("2026-11-23T09:21:00+05:30"),
-        received_at="2026-11-23T09:21:45+05:30",
+        received_at="2026-11-23T09:22:05+05:30",
         allow_current_minute_pre_isolation=True,
-        notification_now=datetime.fromisoformat("2026-11-23T09:21:45+05:30"),
+        notification_now=datetime.fromisoformat("2026-11-23T09:22:05+05:30"),
     )
     assert len(sent) == 1
 
