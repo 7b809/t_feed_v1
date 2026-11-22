@@ -470,6 +470,23 @@ class OptionChainCaptureService:
 
     def _run_option_pivot_batch(self, contracts: list[dict], token: str, trade_date: str) -> None:
         try:
+            # The 09:15-09:16 candle completes at 09:16. Wait until 09:17
+            # for provider publication; if startup is later, continue now.
+            start_hour = int(os.getenv("OPTION_PIVOT_START_HOUR", "9"))
+            start_minute = int(os.getenv("OPTION_PIVOT_START_MINUTE", "17"))
+            start_at = datetime.combine(
+                date.fromisoformat(trade_date),
+                dt_time(start_hour, start_minute),
+                tzinfo=IST,
+            )
+            wait_seconds = (start_at - datetime.now(IST)).total_seconds()
+            if wait_seconds > 0:
+                logger.info(
+                    "Option pivot worker waiting until %02d:%02d IST | seconds=%.1f | contracts=%d",
+                    start_hour, start_minute, wait_seconds, len(contracts),
+                )
+                threading.Event().wait(wait_seconds)
+
             from services.option_pivot_levels_service import OptionInstrumentPivotLevelsService
             service = OptionInstrumentPivotLevelsService(root=self.root)
             result = service.process_contracts(contracts, token, trade_date)
