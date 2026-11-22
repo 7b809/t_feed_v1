@@ -155,9 +155,8 @@ class OptionChainSupertrendCapture:
                                 # must never suppress the Telegram signal.
                                 if payload.get("event") == "supertrend_signal" and sink["role"] == "isolated" and sink.get("record"):
                                     try:
-                                        from services.supertrend_signal_notification_service import notify_isolated_supertrend_signal
-                                        await asyncio.to_thread(
-                                            notify_isolated_supertrend_signal,
+                                        from services.supertrend_signal_notification_service import dispatch_isolated_supertrend_signal
+                                        dispatch_isolated_supertrend_signal(
                                             sink["record"], payload, received, sink["role"],
                                         )
                                     except Exception:
