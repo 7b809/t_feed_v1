@@ -7,6 +7,7 @@ provenance metadata are persisted; raw candle history is not copied here.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import tempfile
@@ -125,12 +126,18 @@ class OptionInstrumentPivotLevelsService:
             try:
                 result = self._process_one(fetcher, contract, str(trade_date))
                 summary[result] += 1
-            except Exception:
+            except Exception as exc:
                 summary["failed"] += 1
-                logger.exception(
-                    "Option pivot calculation failed; continuing | progress=%d/%d | key=%s",
-                    index, len(contracts), (contract or {}).get("instrument_key"),
-                )
+                if summary["failed"] <= 3:
+                    logger.exception(
+                        "Option pivot calculation failed; continuing | progress=%d/%d | key=%s",
+                        index, len(contracts), (contract or {}).get("instrument_key"),
+                    )
+                elif summary["failed"] % 100 == 0:
+                    logger.warning(
+                        "Option pivot failures=%d | latest_key=%s | error=%s",
+                        summary["failed"], (contract or {}).get("instrument_key"), exc,
+                    )
             if index == 1 or index % 50 == 0 or index == len(contracts):
                 logger.info(
                     "Option pivot progress %d/%d | computed=%d existing=%d failed=%d",
@@ -147,6 +154,17 @@ class OptionInstrumentPivotLevelsService:
         instrument_key = str((contract or {}).get("instrument_key") or "").strip()
         if not instrument_key:
             logger.warning("Skipping option pivot: contract has no instrument_key")
+            return "skipped"
+
+        try:
+            strike = float(contract.get("strike_price"))
+            if not math.isfinite(strike) or strike <= 0:
+                raise ValueError("strike_price must be a positive finite number")
+        except (TypeError, ValueError):
+            logger.warning(
+                "Skipping option pivot with invalid strike | key=%s | strike=%s",
+                instrument_key, contract.get("strike_price"),
+            )
             return "skipped"
 
         folder = _contract_folder(self.root, contract, trade_date.replace("-", ""))
