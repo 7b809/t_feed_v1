@@ -634,17 +634,36 @@ not announced.
   signals after 09:40 are suppressed for that isolation.
 - If no signal in that window was successfully delivered, the first signal
   after 09:40 is sent as a fallback; subsequent signals are suppressed.
-- Signals timestamped before isolation are ignored.
+- On isolation, the service checks the existing Supertrend feed archive
+  for a signal generated during the **current IST minute**. The newest signal
+  in that minute is sent immediately, even if it was generated a few seconds
+  before the isolation timestamp. Signals from earlier minutes remain
+  ineligible for this catch-up.
+- The current-minute catch-up scan checks both the option-chain Supertrend
+  archive and the isolation-owned archive. It reads only a bounded tail of
+  each file (default 2 MiB; configurable with
+  `ISOLATION_SUPERTREND_CATCHUP_MAX_BYTES`) so a large historical feed does
+  not cause an unbounded startup/isolation scan.
+- The live feed and catch-up path share persistent event deduplication, so a
+  signal replayed at isolation is not sent again when the same frame arrives
+  through the live socket.
 - Successful-delivery state is persisted in
   `ISOLATED_DATA_DIR/.supertrend_signal_notifications.json` so a restart does
   not normally resend messages already accepted by Telegram.
 
 Each signal message includes the isolated trading symbol, bullish/bearish
-direction, signal time in 12-hour IST, latest available isolated and opposite
-instrument prices, and the opposite contract symbol. Prices are read from the
-primary market-feed LTP cache; if a live value is not available, the message
-uses the best available event/isolation snapshot or displays
+direction, signal time in 12-hour IST, signal age (for example, `45 seconds
+ago`), latest available isolated and opposite instrument prices, opposite
+contract symbol, instrument key, and timeframe when supplied. Prices are read
+from the primary market-feed LTP cache; if a live value is not available, the
+message uses the best available event/isolation snapshot or displays
 `Not available`.
+
+Notification work is dispatched on daemon workers rather than awaited by the
+market-data WebSocket loops. Archive inspection, price lookup, HTML formatting,
+Telegram delivery, and state persistence are best-effort; unexpected
+notification exceptions are logged and contained so they do not propagate
+into instrument-isolation or feed-processing code.
 
 The cutoff defaults to 09:40 IST and can be changed with
 `ISOLATION_SUPERTREND_SIGNAL_CUTOFF_HOUR` and
