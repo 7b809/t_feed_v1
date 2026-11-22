@@ -644,10 +644,12 @@ The opening-candle high and low are used to calculate:
 - `S3 = Low - (High - Low)`
 
 The seven values are saved in that option contract's own
-`pivot_levels.json` alongside its existing `meta.json`, `live_feed.jsonl`,
-and Supertrend archive. The file also records the instrument key, trading
-symbol, index, trade date, calculation time, and source candle timestamp.
-Raw candles are not copied into the pivot file.
+`pivot_levels.json`. For contracts also selected for live capture, this sits
+beside `meta.json`, `live_feed.jsonl`, and the Supertrend archive. Contracts
+outside the live subscription range still get their own pivot-only folder and
+file. The file records the instrument key, trading symbol, index, trade date,
+calculation time, and source candle timestamp. Raw candles are not copied into
+the pivot file.
 
 Reliability and API-load controls:
 
