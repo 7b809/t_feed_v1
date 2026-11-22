@@ -15,7 +15,7 @@ from services.isolation_telegram_service import send_group_html
 
 logger = get_logger(__file__)
 IST = ZoneInfo("Asia/Kolkata")
-_LOCK = threading.RLock()
+_LOCK = threading.RLock()\n_VOLATILE_STATE = {}
 
 
 def _parse_time(value, fallback=None):
@@ -113,8 +113,15 @@ def _load_state(path):
 
 def _save_state(path, state):
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(temporary, path)
+    try:
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _latest_prices(record, payload):
@@ -286,6 +293,17 @@ def _notify_isolated_supertrend_signal(record, payload, received_at=None, role="
         entry = state.get(isolation_id)
         if not isinstance(entry, dict):
             entry = {"sent_signal_keys": [], "initial_window_success_count": 0, "fallback_sent": False}
+        volatile_entry = _VOLATILE_STATE.get(isolation_id)
+        if isinstance(volatile_entry, dict):
+            entry["sent_signal_keys"] = list(dict.fromkeys(
+                list(entry.get("sent_signal_keys") or [])
+                + list(volatile_entry.get("sent_signal_keys") or [])
+            ))[-500:]
+            entry["initial_window_success_count"] = max(
+                int(entry.get("initial_window_success_count", 0)),
+                int(volatile_entry.get("initial_window_success_count", 0)),
+            )
+            entry["fallback_sent"] = bool(entry.get("fallback_sent") or volatile_entry.get("fallback_sent"))
         if signal_key in entry.get("sent_signal_keys", []):
             return False
 
@@ -320,7 +338,21 @@ def _notify_isolated_supertrend_signal(record, payload, received_at=None, role="
             entry["fallback_sent"] = True
         entry["last_success_at_ist"] = datetime.now(IST).isoformat()
         state[isolation_id] = entry
-        _save_state(path, state)
+        try:
+            _save_state(path, state)
+            _VOLATILE_STATE.pop(isolation_id, None)
+        except Exception:
+            # Telegram already accepted the message. Keep the successful
+            # delivery in process memory and do not fail the feed callback.
+            _VOLATILE_STATE[isolation_id] = {
+                **entry,
+                "sent_signal_keys": list(entry.get("sent_signal_keys") or []),
+            }
+            logger.exception(
+                "Telegram accepted Supertrend signal but delivery state could not be persisted; "
+                "in-process deduplication remains active | isolation=%s",
+                isolation_id,
+            )
         logger.info(
             "Supertrend Telegram signal delivered | kind=%s | direction=%s | symbol=%s | signal_time=%s",
             delivery_kind, direction, record.get("trading_symbol"), signal_time.isoformat(),
