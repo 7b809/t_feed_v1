@@ -141,3 +141,58 @@ def test_one_contract_failure_does_not_stop_remaining_contracts(monkeypatch, tmp
 
     assert result["failed"] == 1
     assert result["computed"] == 1
+
+
+def test_does_not_use_0916_when_0915_is_missing(monkeypatch, tmp_path):
+    class FakeFetcher:
+        def __init__(self, token):
+            pass
+
+        def fetch_intraday_candles(self, *args, **kwargs):
+            return [{
+                "timestamp": "2026-11-23T09:16:00+05:30",
+                "open": 100, "high": 110, "low": 90, "close": 105,
+            }]
+
+    monkeypatch.setattr(pivots, "CandleFetcher", FakeFetcher)
+    service = pivots.OptionInstrumentPivotLevelsService(
+        root=tmp_path, requests_per_second=0, max_retries=0
+    )
+    result = service.process_contracts([_contract()], "test-token", "2026-11-23")
+    assert result["failed"] == 1
+    assert list(tmp_path.rglob("pivot_levels.json")) == []
+
+
+def test_contracts_are_processed_concurrently(monkeypatch, tmp_path):
+    import threading
+    import time
+
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    class FakeFetcher:
+        def __init__(self, token):
+            pass
+
+        def fetch_intraday_candles(self, instrument_key, *args, **kwargs):
+            nonlocal active, max_active
+            with lock:
+                active += 1
+                max_active = max(max_active, active)
+            time.sleep(0.04)
+            with lock:
+                active -= 1
+            return [{
+                "timestamp": "2026-11-23T09:15:00+05:30",
+                "open": 100, "high": 110, "low": 90, "close": 105,
+            }]
+
+    monkeypatch.setattr(pivots, "CandleFetcher", FakeFetcher)
+    service = pivots.OptionInstrumentPivotLevelsService(
+        root=tmp_path, requests_per_second=0, max_retries=0, max_workers=4
+    )
+    contracts = [_contract(f"NSE_FO|{index}") for index in range(8)]
+    result = service.process_contracts(contracts, "test-token", "2026-11-23")
+    assert result["computed"] == 8
+    assert max_active > 1
