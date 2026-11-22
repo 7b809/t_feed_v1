@@ -373,8 +373,16 @@ OPTION_CHAIN_CAPTURE_ENABLED = (
 
 OPTION_CHAIN_INDEXES = [
     key.strip()
+    for key in os.getenv("OPTION_CHAIN_INDEXES", "NSE_INDEX|Nifty 50").split(",")
+    if key.strip()
+]
+
+# Pivot calculation is independent of live option-chain subscriptions.
+# By default, calculate pivots for all four supported index option universes.
+OPTION_PIVOT_INDEXES = [
+    key.strip()
     for key in os.getenv(
-        "OPTION_CHAIN_INDEXES",
+        "OPTION_PIVOT_INDEXES",
         "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|NIFTY MID SELECT,BSE_INDEX|SENSEX",
     ).split(",")
     if key.strip()
