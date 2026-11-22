@@ -625,15 +625,19 @@ unaffected.
 
 After the primary market feed is connected, the application loads the available
 option contracts for the configured pivot index keys and schedules a background
-pivot calculation for every non-expired CE/PE contract returned by Upstox.
+pivot calculation for every non-expired CE/PE contract returned by Upstox. The
+worker waits until **09:17 IST** before starting per-contract candle requests,
+allowing the 09:15-09:16 opening candle to complete and become available.
 The default pivot universe includes NIFTY, BANKNIFTY, MIDCPNIFTY, and SENSEX.
 This pivot universe is independent of the live option-chain subscription list:
 it does not require subscribing every strike to the market-data WebSocket.
 
 For every option instrument, the service calls
 `HistoryV3Api.get_intra_day_candle_data(instrument_key, "minutes", "1")`
-through the existing `CandleFetcher`. It sorts the returned candles
-chronologically and uses the earliest candle for the current IST trading date.
+through the existing `CandleFetcher`. It selects only the candle timestamped
+**09:15 IST** for the current trading date (the 09:15-09:16 one-minute candle).
+It never substitutes the 09:16 candle or any later candle. If the exact 09:15
+candle is not yet available, that contract remains pending and is retried.
 The opening-candle high and low are used to calculate:
 
 - `R1 = High`, `S1 = Low`
@@ -654,14 +658,17 @@ the pivot file.
 Reliability and API-load controls:
 
 - Pivot calculation runs in a daemon worker; it does not run inside the
-  Upstox market-data callback or delay option-chain subscription setup.
+  Upstox market-data callback or delay option-chain subscription setup. It starts
+  at 09:17 IST by default (or immediately if the application starts later).
 - The existing option-chain capture scheduler starts this worker, so keep
   `OPTION_CHAIN_CAPTURE_ENABLED=true` when using option pivots.
 - One batch runs at a time. The existing 60-second option-chain scheduler
   retries contracts whose daily pivot file is still missing or invalid.
 - A valid pivot file for the current date is not fetched or rewritten.
-- Requests are rate-limited (default 4 requests/second) and transient
-  provider/network failures receive bounded exponential retries.
+- Contracts are fetched concurrently using a bounded thread pool (default 8
+  workers), with one HistoryV3Api client per worker. A shared limiter caps aggregate
+  request starts at 4 requests/second by default; transient errors receive bounded
+  exponential retries.
 - A stale-date candle is rejected rather than labelled as today's pivot.
 - A failed illiquid/unsupported contract does not prevent other contracts
   from being processed.
@@ -671,6 +678,9 @@ Configuration:
 
 ```env
 OPTION_PIVOT_LEVELS_ENABLED=true
+OPTION_PIVOT_START_HOUR=9
+OPTION_PIVOT_START_MINUTE=17
+OPTION_PIVOT_MAX_WORKERS=8
 OPTION_PIVOT_INDEXES=NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|NIFTY MID SELECT,BSE_INDEX|SENSEX
 OPTION_PIVOT_FETCH_REQUESTS_PER_SECOND=4
 OPTION_PIVOT_FETCH_MAX_RETRIES=2
