@@ -621,6 +621,38 @@ Set `TELEGRAM_GROUP_ENABLED=false` to pause only the isolation group
 announcements. Existing `TELEGRAM_CHAT_ID` runtime notifications are
 unaffected.
 
+### Isolated-instrument Supertrend signal notifications
+
+After an instrument is isolated, the application sends Supertrend signal
+messages for the isolated option leg to the same official Telegram group.
+The opposite leg is captured for price context but its Supertrend signals are
+not announced.
+
+- Signals generated at or after the isolation timestamp and up to **09:40 IST**
+  are each sent to the group.
+- If one or more signals in that window are successfully delivered, later
+  signals after 09:40 are suppressed for that isolation.
+- If no signal in that window was successfully delivered, the first signal
+  after 09:40 is sent as a fallback; subsequent signals are suppressed.
+- Signals timestamped before isolation are ignored.
+- Successful-delivery state is persisted in
+  `ISOLATED_DATA_DIR/.supertrend_signal_notifications.json` so a restart does
+  not normally resend messages already accepted by Telegram.
+
+Each signal message includes the isolated trading symbol, bullish/bearish
+direction, signal time in 12-hour IST, latest available isolated and opposite
+instrument prices, and the opposite contract symbol. Prices are read from the
+primary market-feed LTP cache; if a live value is not available, the message
+uses the best available event/isolation snapshot or displays
+`Not available`.
+
+The cutoff defaults to 09:40 IST and can be changed with
+`ISOLATION_SUPERTREND_SIGNAL_CUTOFF_HOUR` and
+`ISOLATION_SUPERTREND_SIGNAL_CUTOFF_MINUTE`. This notification flow uses
+`TELEGRAM_GROUP_ENABLED`, `TELEGRAM_BOT_TOKEN`, and
+`TELEGRAM_GROUP_CHAT_ID`; it does not use the legacy
+`TELEGRAM_CHAT_ID`.
+
 ### Test the official group using the saved isolation JSON
 
 No dummy/test instrument file is needed. After an isolation has been saved,
