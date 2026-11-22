@@ -49,8 +49,15 @@ def _valid_existing(path: Path, key: str, trade_date: str) -> bool:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
         levels = doc.get("levels") or {}
-        return doc.get("trade_date_ist") == trade_date and doc.get("instrument_key") == key and all(
-            levels.get(level) is not None for level in LEVEL_KEYS
+        source_stamp = _as_ist(doc.get("source_candle_timestamp"))
+        return (
+            doc.get("trade_date_ist") == trade_date
+            and doc.get("instrument_key") == key
+            and source_stamp is not None
+            and source_stamp.date() == date.fromisoformat(trade_date)
+            and source_stamp.hour == 9
+            and source_stamp.minute == 15
+            and all(levels.get(level) is not None for level in LEVEL_KEYS)
         )
     except (OSError, json.JSONDecodeError, AttributeError):
         return False
