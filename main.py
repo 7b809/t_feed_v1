@@ -437,4 +437,4 @@ def api_download_log(category: str, filename: str):
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"'
         },
-    ) 
+    )
