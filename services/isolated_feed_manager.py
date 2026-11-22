@@ -225,9 +225,8 @@ class IsolatedFeedManager:
                                 indicator.upper(), role, symbol,
                             )
                         if indicator == "supertrend" and event == "supertrend_signal" and role == "isolated":
-                            from services.supertrend_signal_notification_service import notify_isolated_supertrend_signal
-                            await asyncio.to_thread(
-                                notify_isolated_supertrend_signal,
+                            from services.supertrend_signal_notification_service import dispatch_isolated_supertrend_signal
+                            dispatch_isolated_supertrend_signal(
                                 isolation_record, payload, received_at, role,
                             )
                         if event == "supertrend_signal" or (indicator == "sr" and event == "sr_update"):
