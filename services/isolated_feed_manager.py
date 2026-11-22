@@ -132,6 +132,28 @@ class IsolatedFeedManager:
                 self._status["|".join(task_key)] = {"state": "starting", "instrument_key": key}
         logger.info("SR/Supertrend capture scheduled isolation=%s legs=%d shared_supertrend=%s", isolation_id, len(valid), self.enabled_st)
 
+        # Replay a signal already written to the option-chain Supertrend feed
+        # for this same IST minute. Run outside the isolation caller so file
+        # I/O, formatting, price lookup, and Telegram latency cannot delay it.
+        if self.enabled_st and record.get("instrument_key"):
+            threading.Thread(
+                target=self._catch_up_current_minute_signal,
+                args=(dict(record),),
+                name=f"supertrend-catchup-{_safe(record.get('instrument_key'))}",
+                daemon=True,
+            ).start()
+
+    @staticmethod
+    def _catch_up_current_minute_signal(record):
+        try:
+            from services.supertrend_signal_notification_service import notify_current_minute_supertrend_signal
+            notify_current_minute_supertrend_signal(record)
+        except Exception:
+            logger.exception(
+                "Unexpected current-minute Supertrend catch-up failure; isolation continues | key=%s",
+                record.get("instrument_key"),
+            )
+
     def _file_path(self, trade_date, role, key, indicator):
         folder = self.root / indicator
         folder.mkdir(parents=True, exist_ok=True)
