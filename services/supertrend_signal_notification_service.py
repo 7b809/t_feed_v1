@@ -15,7 +15,8 @@ from services.isolation_telegram_service import send_group_html
 
 logger = get_logger(__file__)
 IST = ZoneInfo("Asia/Kolkata")
-_LOCK = threading.RLock()\n_VOLATILE_STATE = {}
+_LOCK = threading.RLock()
+_VOLATILE_STATE = {}
 
 
 def _parse_time(value, fallback=None):
