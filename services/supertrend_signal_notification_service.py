@@ -190,7 +190,12 @@ def _format_signal_isolation_gap(signal_time, record):
     if isolation_time is None:
         return "Not available"
     gap = abs((isolation_time - signal_time).total_seconds())
-    relation = "before isolation" if signal_time < isolation_time else "after isolation"
+    if signal_time < isolation_time:
+        relation = "before isolation"
+    elif signal_time > isolation_time:
+        relation = "after isolation"
+    else:
+        relation = "at isolation"
     return f"{_format_duration(gap)} {relation}"
 
 
