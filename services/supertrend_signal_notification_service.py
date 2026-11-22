@@ -320,13 +320,13 @@ def _notify_isolated_supertrend_signal(record, payload, received_at=None, role="
 
         if is_initial_window:
             should_send = True
-            delivery_kind = "initial_window"
+            delivery_kind = "current_minute_catchup" if same_minute_catchup else "initial_window"
         else:
             should_send = (
                 int(entry.get("initial_window_success_count", 0)) == 0
                 and not bool(entry.get("fallback_sent"))
             )
-            delivery_kind = "first_after_cutoff"
+            delivery_kind = "current_minute_fallback" if same_minute_catchup else "first_after_cutoff"
 
         if not should_send:
             return False
