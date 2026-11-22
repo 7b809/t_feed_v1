@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 import upstox_client
 
-from core.config import INDEX_METADATA, INSTRUMENT_KEYS, OPTION_CHAIN_INDEXES, TIMEZONE
+from core.config import INDEX_METADATA, INSTRUMENT_KEYS, OPTION_CHAIN_INDEXES, OPTION_PIVOT_INDEXES, TIMEZONE
 from core.logger import get_logger
 from core.token_service import fetch_access_token
 from jobs.daily_refresh import get_feed_service
@@ -103,6 +103,7 @@ class OptionChainCaptureService:
     def __init__(self):
         self.enabled = os.getenv("OPTION_CHAIN_CAPTURE_ENABLED", "true").strip().lower() == "true"
         self.index_keys = list(OPTION_CHAIN_INDEXES)
+        self.pivot_index_keys = list(OPTION_PIVOT_INDEXES)
         self.expiry_mode = os.getenv("OPTION_CHAIN_EXPIRY_MODE", "all").strip().lower()
         if self.expiry_mode not in ("all", "nearest"):
             logger.warning("Invalid OPTION_CHAIN_EXPIRY_MODE=%s; using all", self.expiry_mode)
@@ -121,6 +122,7 @@ class OptionChainCaptureService:
         self._active_date: str | None = None
         self._contract_meta: dict[str, dict] = {}
         self._pivot_contracts: dict[str, dict] = {}
+        self._processed_pivot_indexes: set[str] = set()
         self._subscribed: set[str] = set()
         self._owned_subscriptions: set[str] = set()
         self._processed_indexes: set[str] = set()
@@ -159,6 +161,7 @@ class OptionChainCaptureService:
                 self._active_date == date_key
                 and self._feed is feed
                 and len(self._processed_indexes) == len(self.index_keys)
+                and set(self.pivot_index_keys) <= self._processed_pivot_indexes
                 and self._contract_meta.keys() <= self._subscribed
                 and self._contract_meta.keys() <= set(feed.instrument_keys)
             ):
@@ -253,6 +256,8 @@ class OptionChainCaptureService:
                             "trade_date_ist": date_key,
                         })
                         pivot_contracts[option_key] = pivot_row
+                    if any(row.get("index_instrument_key") == instrument_key for row in pivot_contracts.values()):
+                        self._processed_pivot_indexes.add(instrument_key)
                     with self._lock:
                         self._pivot_contracts.update(pivot_contracts)
 
@@ -290,6 +295,57 @@ class OptionChainCaptureService:
                 except Exception as exc:
                     skipped.append({"index": instrument_key, "reason": f"{type(exc).__name__}: {exc}"})
                     logger.exception("Option-chain contract selection failed for %s", instrument_key)
+
+            # Fetch pivot-only index universes that are intentionally not
+            # subscribed to the live option-chain feed. This keeps pivot
+            # coverage broad without inflating websocket subscription counts.
+            for pivot_index_key in self.pivot_index_keys:
+                if pivot_index_key in self._processed_pivot_indexes:
+                    continue
+                try:
+                    response = api.get_option_contracts(pivot_index_key)
+                    raw_contracts = _value(response, "data", []) or []
+                    meta = INDEX_METADATA.get(pivot_index_key, {})
+                    added = 0
+                    for item in raw_contracts:
+                        pivot_row = _plain_contract(item)
+                        try:
+                            expiry_date = date.fromisoformat(str(pivot_row.get("expiry"))[:10])
+                        except (TypeError, ValueError):
+                            continue
+                        option_type = str(pivot_row.get("instrument_type") or "").upper()
+                        option_key = str(pivot_row.get("instrument_key") or "").strip()
+                        if expiry_date < today or option_type not in ("CE", "PE") or not option_key:
+                            continue
+                        pivot_row.update({
+                            "instrument_key": option_key,
+                            "instrument_type": option_type,
+                            "expiry": expiry_date.isoformat(),
+                            "index_instrument_key": pivot_index_key,
+                            "index_canonical": meta.get("canonical"),
+                            "index_folder": meta.get("folder"),
+                            "trade_date_ist": date_key,
+                        })
+                        pivot_contracts[option_key] = pivot_row
+                        added += 1
+                    if added:
+                        self._processed_pivot_indexes.add(pivot_index_key)
+                        logger.info(
+                            "Pivot universe loaded | index=%s | contracts=%d",
+                            pivot_index_key, added,
+                        )
+                    else:
+                        logger.warning(
+                            "Pivot universe returned no eligible option contracts; will retry | index=%s",
+                            pivot_index_key,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Could not load pivot-only option universe; will retry next scheduler cycle | index=%s",
+                        pivot_index_key,
+                    )
+            with self._lock:
+                self._pivot_contracts.update(pivot_contracts)
 
             if not all_contracts:
                 result = {
@@ -417,6 +473,7 @@ class OptionChainCaptureService:
         self._active_date = date_key
         self._contract_meta.clear()
         self._pivot_contracts.clear()
+        self._processed_pivot_indexes.clear()
         self._subscribed.clear()
         self._owned_subscriptions.clear()
         self._processed_indexes.clear()
