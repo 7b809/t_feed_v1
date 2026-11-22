@@ -366,9 +366,6 @@ class OptionChainCaptureService:
                 }
                 with self._lock:
                     self._last_summary = result
-                    pivot_snapshot = list(self._pivot_contracts.values())
-                if pivot_snapshot:
-                    self._schedule_option_pivots(pivot_snapshot, token, date_key)
                 return result
 
             new_meta = {row["instrument_key"]: row for row in all_contracts}
