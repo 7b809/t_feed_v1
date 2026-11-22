@@ -1,6 +1,7 @@
 """Policy-controlled Telegram delivery for isolated-instrument Supertrend signals."""
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import os
@@ -50,7 +51,7 @@ def _find_value(payload, names):
         value = payload.get(name)
         if value not in (None, ""):
             return value
-    for key in ("data", "result", "signal_data", "indicator", "metadata"):
+    for key in ("data", "result", "signal_data", "indicator", "metadata", "supertrend", "details", "payload"):
         nested = payload.get(key)
         if isinstance(nested, dict):
             found = _find_value(nested, names)
@@ -60,7 +61,7 @@ def _find_value(payload, names):
 
 
 def _signal_direction(payload):
-    value = _find_value(payload, ("signal", "direction", "trend", "side", "signal_type", "action"))
+    value = _find_value(payload, ("signal", "direction", "trend", "side", "signal_type", "signal_direction", "supertrend_direction", "action"))
     if isinstance(value, dict):
         value = _find_value(value, ("direction", "trend", "type", "value"))
     normalized = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
@@ -74,7 +75,7 @@ def _signal_direction(payload):
 def _signal_timestamp(payload, received_at):
     value = _find_value(
         payload,
-        ("signal_time", "signal_timestamp", "timestamp", "time", "created_at", "datetime", "ts"),
+        ("signal_time", "signal_timestamp", "signal_generated_at", "generated_at", "candle_timestamp", "bar_time", "timestamp", "time", "created_at", "datetime", "ts"),
     )
     return _parse_time(value, _parse_time(received_at, datetime.now(IST)))
 
@@ -212,9 +213,24 @@ def notify_isolated_supertrend_signal(record, payload, received_at=None, role="i
         record.get("isolation_id")
         or f"{record.get('trade_date_ist') or isolation_time.date().isoformat()}__{record.get('instrument_key') or 'unknown'}"
     )
+    # Prefer the provider's event timestamp. If it is absent, hash the
+    # stable event body so duplicate fan-out/reconnect frames do not become
+    # distinct merely because their local receive times differ.
+    provider_time = _find_value(
+        payload,
+        ("signal_time", "signal_timestamp", "signal_generated_at", "generated_at",
+         "candle_timestamp", "bar_time", "timestamp", "time", "created_at", "datetime", "ts"),
+    )
+    event_identity = (
+        signal_time.isoformat()
+        if provider_time not in (None, "")
+        else hashlib.sha256(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+        ).hexdigest()
+    )
     signal_key = "|".join((
         str(record.get("instrument_key") or ""),
-        signal_time.isoformat(),
+        event_identity,
         direction,
     ))
 
