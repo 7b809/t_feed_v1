@@ -149,6 +149,19 @@ class OptionChainSupertrendCapture:
                                 sinks = list(self._archive_sinks.get(key, {}).values())
                                 self._status[key] = {"state": "connected", "file": str(path), "last_event": payload.get("event"), "last_frame_at": received}
                             for sink in sinks:
+                                # Notify from the live event before attempting a
+                                # history seed. A successful seed may include this
+                                # frame and skip the archive append below, but it
+                                # must never suppress the Telegram signal.
+                                if payload.get("event") == "supertrend_signal" and sink["role"] == "isolated" and sink.get("record"):
+                                    try:
+                                        from services.supertrend_signal_notification_service import notify_isolated_supertrend_signal
+                                        await asyncio.to_thread(
+                                            notify_isolated_supertrend_signal,
+                                            sink["record"], payload, received, sink["role"],
+                                        )
+                                    except Exception:
+                                        logger.exception("Could not deliver isolated Supertrend signal notification key=%s", key)
                                 try:
                                     from services.option_chain_history import seed_option_chain_history
                                     seed_result = await asyncio.to_thread(
@@ -161,15 +174,6 @@ class OptionChainSupertrendCapture:
                                         continue
                                 except Exception:
                                     logger.exception("Could not retry Supertrend archive seed key=%s", key)
-                                if payload.get("event") == "supertrend_signal" and sink["role"] == "isolated" and sink.get("record"):
-                                    try:
-                                        from services.supertrend_signal_notification_service import notify_isolated_supertrend_signal
-                                        await asyncio.to_thread(
-                                            notify_isolated_supertrend_signal,
-                                            sink["record"], payload, received, sink["role"],
-                                        )
-                                    except Exception:
-                                        logger.exception("Could not deliver isolated Supertrend signal notification key=%s", key)
                                 archive_row = {
                                     "received_at_ist": received,
                                     "indicator": "supertrend",
