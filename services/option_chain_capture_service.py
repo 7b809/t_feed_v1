@@ -104,7 +104,8 @@ class OptionChainCaptureService:
     def __init__(self):
         self.enabled = os.getenv("OPTION_CHAIN_CAPTURE_ENABLED", "true").strip().lower() == "true"
         self.index_keys = list(OPTION_CHAIN_INDEXES)
-        self.pivot_index_keys = list(OPTION_PIVOT_INDEXES)
+        self.pivot_enabled = os.getenv("OPTION_PIVOT_LEVELS_ENABLED", "true").strip().lower() == "true"
+        self.pivot_index_keys = list(OPTION_PIVOT_INDEXES) if self.pivot_enabled else []
         self.expiry_mode = os.getenv("OPTION_CHAIN_EXPIRY_MODE", "all").strip().lower()
         if self.expiry_mode not in ("all", "nearest"):
             logger.warning("Invalid OPTION_CHAIN_EXPIRY_MODE=%s; using all", self.expiry_mode)
@@ -447,7 +448,7 @@ class OptionChainCaptureService:
 
     def _schedule_option_pivots(self, contracts: list[dict], token: str, trade_date: str) -> None:
         """Start one background pivot batch; later scheduler ticks retry missing files."""
-        if os.getenv("OPTION_PIVOT_LEVELS_ENABLED", "true").strip().lower() != "true":
+        if not self.pivot_enabled:
             return
         if not contracts or not token or self._pivot_batch_completed:
             return
