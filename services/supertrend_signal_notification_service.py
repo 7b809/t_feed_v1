@@ -401,25 +401,25 @@ def notify_current_minute_supertrend_signal(record, now=None):
         candidates = []
         for source in sources:
             for line in _read_recent_text_lines(source):
-                    raw = line.strip()
-                    if not raw:
-                        continue
-                    try:
-                        row = json.loads(raw)
-                    except json.JSONDecodeError:
-                        # A concurrently written trailing row is ignored and can be
-                        # picked up by the live WebSocket path if it arrives later.
-                        continue
-                    if not isinstance(row, dict):
-                        continue
-                    if row.get("instrument_key") not in (None, "", instrument_key):
-                        continue
-                    payload = row.get("payload") if isinstance(row.get("payload"), dict) else row
-                    if payload.get("event") != "supertrend_signal":
-                        continue
-                    signal_time = _signal_timestamp(payload, row.get("received_at_ist") or now.isoformat())
-                    if minute_start <= signal_time <= now and _signal_direction(payload):
-                        candidates.append((signal_time, payload))
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError:
+                    # A concurrently written trailing row is ignored and can be
+                    # picked up by the live WebSocket path if it arrives later.
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                if row.get("instrument_key") not in (None, "", instrument_key):
+                    continue
+                payload = row.get("payload") if isinstance(row.get("payload"), dict) else row
+                if payload.get("event") != "supertrend_signal":
+                    continue
+                signal_time = _signal_timestamp(payload, row.get("received_at_ist") or now.isoformat())
+                if minute_start <= signal_time <= now and _signal_direction(payload):
+                    candidates.append((signal_time, payload))
 
         if not candidates:
             logger.info("No Supertrend signal found in current minute archive | key=%s minute=%s",
