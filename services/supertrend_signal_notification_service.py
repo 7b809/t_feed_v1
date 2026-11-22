@@ -33,10 +33,16 @@ def _parse_time(value, fallback=None):
             raw = str(value).strip()
             if raw.endswith("Z"):
                 raw = raw[:-1] + "+00:00"
-            try:
-                parsed = datetime.fromisoformat(raw)
-            except ValueError:
-                parsed = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+            if raw.replace(".", "", 1).isdigit():
+                stamp = float(raw)
+                if stamp > 10_000_000_000:
+                    stamp /= 1000.0
+                parsed = datetime.fromtimestamp(stamp, tz=IST)
+            else:
+                try:
+                    parsed = datetime.fromisoformat(raw)
+                except ValueError:
+                    parsed = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=IST)
         return parsed.astimezone(IST)
@@ -145,7 +151,7 @@ def _fmt_price(value):
     try:
         return f"{float(value):,.2f}"
     except (TypeError, ValueError):
-        return str(value)
+        return html.escape(str(value), quote=True)
 
 
 def _fmt_time(value):
