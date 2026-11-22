@@ -653,7 +653,8 @@ not announced.
 
 Each signal message includes the isolated trading symbol, bullish/bearish
 direction, signal time in 12-hour IST, signal age (for example, `45 seconds
-ago`), latest available isolated and opposite instrument prices, opposite
+ago`), signal-to-isolation time gap (for example, `40 seconds before
+isolation`), latest available isolated and opposite instrument prices, opposite
 contract symbol, instrument key, and timeframe when supplied. Prices are read
 from the primary market-feed LTP cache; if a live value is not available, the
 message uses the best available event/isolation snapshot or displays
