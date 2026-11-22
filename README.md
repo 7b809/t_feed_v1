@@ -621,6 +621,64 @@ Set `TELEGRAM_GROUP_ENABLED=false` to pause only the isolation group
 announcements. Existing `TELEGRAM_CHAT_ID` runtime notifications are
 unaffected.
 
+### Per-option opening-candle pivot levels
+
+After the primary market feed is connected and the option-chain contracts are
+selected, the application schedules a background pivot calculation for each
+selected CE/PE contract across the configured index keys. The default index
+list includes NIFTY, BANKNIFTY, MIDCPNIFTY, and SENSEX.
+
+For every option instrument, the service calls
+`HistoryV3Api.get_intra_day_candle_data(instrument_key, "minutes", "1")`
+through the existing `CandleFetcher`. It sorts the returned candles
+chronologically and uses the earliest candle for the current IST trading date.
+The opening-candle high and low are used to calculate:
+
+- `R1 = High`, `S1 = Low`
+- `AVG = (High + Low) / 2`
+- `R2 = High + (High - Low) / 2`
+- `R3 = High + (High - Low)`
+- `S2 = Low - (High - Low) / 2`
+- `S3 = Low - (High - Low)`
+
+The seven values are saved in that option contract's own
+`pivot_levels.json` alongside its existing `meta.json`, `live_feed.jsonl`,
+and Supertrend archive. The file also records the instrument key, trading
+symbol, index, trade date, calculation time, and source candle timestamp.
+Raw candles are not copied into the pivot file.
+
+Reliability and API-load controls:
+
+- Pivot calculation runs in a daemon worker; it does not run inside the
+  Upstox market-data callback or delay option-chain subscription setup.
+- One batch runs at a time. The existing 60-second option-chain scheduler
+  retries contracts whose daily pivot file is still missing or invalid.
+- A valid pivot file for the current date is not fetched or rewritten.
+- Requests are rate-limited (default 4 requests/second) and transient
+  provider/network failures receive bounded exponential retries.
+- A stale-date candle is rejected rather than labelled as today's pivot.
+- A failed illiquid/unsupported contract does not prevent other contracts
+  from being processed.
+- Writes use a temporary file, flush/fsync, and atomic replacement.
+
+Configuration:
+
+```env
+OPTION_PIVOT_LEVELS_ENABLED=true
+OPTION_PIVOT_FETCH_REQUESTS_PER_SECOND=4
+OPTION_PIVOT_FETCH_MAX_RETRIES=2
+OPTION_PIVOT_FETCH_RETRY_BACKOFF_SECONDS=1
+```
+
+`OPTION_CHAIN_INDEXES` controls which index option chains are selected; its
+default and the supplied `.env.example` include all four supported indexes.
+Existing per-index strike-range settings continue to control how many option
+contracts are selected. For a full-chain run, confirm your Upstox API quota
+and feed subscription limits before widening those ranges.
+
+A contract's file path follows the existing option-chain layout:
+`data/option_chain/<index-folder>/<YYYYMMDD>/<strike>_<ce|pe>_<instrument-key>/pivot_levels.json`.
+
 ### Isolated-instrument Supertrend signal notifications
 
 After an instrument is isolated, the application sends Supertrend signal
