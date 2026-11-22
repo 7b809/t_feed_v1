@@ -1,6 +1,7 @@
 """Policy-controlled Telegram delivery for isolated-instrument Supertrend signals."""
 from __future__ import annotations
 
+import html
 import json
 import os
 import threading
@@ -152,8 +153,9 @@ def _fmt_time(value):
 
 def _message(record, direction, signal_time, prices, payload):
     opposite = record.get("opposite_leg") or {}
-    isolated_symbol = record.get("trading_symbol") or record.get("instrument_key") or "—"
-    opposite_symbol = opposite.get("trading_symbol") or opposite.get("instrument_key") or "—"
+    isolated_symbol = html.escape(str(record.get("trading_symbol") or record.get("instrument_key") or "—"), quote=True)
+    opposite_symbol = html.escape(str(opposite.get("trading_symbol") or opposite.get("instrument_key") or "—"), quote=True)
+    instrument_key = html.escape(str(record.get("instrument_key") or "—"), quote=True)
     emoji = "🟢" if direction == "BULLISH" else "🔴"
     lines = [
         f"⚡ <b>SUPERTREND SIGNAL · {emoji} {direction}</b>",
@@ -163,7 +165,7 @@ def _message(record, direction, signal_time, prices, payload):
         f"Isolated instrument price: <b>{_fmt_price(prices['isolated'])}</b>",
         f"Opposite instrument price: <b>{_fmt_price(prices['opposite'])}</b>",
         f"Opposite symbol: <code>{opposite_symbol}</code>",
-        f"Instrument key: <code>{record.get('instrument_key') or '—'}</code>",
+        f"Instrument key: <code>{instrument_key}</code>",
     ]
     timeframe = _find_value(payload, ("timeframe", "interval", "candle_interval"))
     if timeframe not in (None, ""):
@@ -172,7 +174,6 @@ def _message(record, direction, signal_time, prices, payload):
 
 
 def _safe_text(value):
-    import html
     return html.escape(str(value), quote=True)
 
 
