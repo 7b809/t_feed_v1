@@ -6,7 +6,7 @@ import html
 import json
 import os
 import threading
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -158,7 +158,19 @@ def _fmt_time(value):
     return value.strftime("%d %b %Y, %I:%M:%S %p IST")
 
 
-def _message(record, direction, signal_time, prices, payload):
+def _format_signal_age(signal_time, now=None):
+    now = _parse_time(now, datetime.now(IST))
+    elapsed = max(0, int((now - signal_time).total_seconds()))
+    if elapsed < 60:
+        return f"{elapsed} second{'s' if elapsed != 1 else ''} ago"
+    minutes, seconds = divmod(elapsed, 60)
+    if minutes < 60:
+        return f"{minutes} min {seconds} sec ago" if seconds else f"{minutes} min ago"
+    hours, remainder = divmod(minutes, 60)
+    return f"{hours} hr {remainder} min ago" if remainder else f"{hours} hr ago"
+
+
+def _message(record, direction, signal_time, prices, payload, now=None):
     opposite = record.get("opposite_leg") or {}
     isolated_symbol = html.escape(str(record.get("trading_symbol") or record.get("instrument_key") or "—"), quote=True)
     opposite_symbol = html.escape(str(opposite.get("trading_symbol") or opposite.get("instrument_key") or "—"), quote=True)
@@ -169,6 +181,7 @@ def _message(record, direction, signal_time, prices, payload):
         f"Trading symbol: <b>{isolated_symbol}</b>",
         f"Signal: <b>{direction}</b>",
         f"Signal time: <b>{_fmt_time(signal_time)}</b>",
+        f"Signal age: <b>{_safe_text(_format_signal_age(signal_time, now))}</b>",
         f"Isolated instrument price: <b>{_fmt_price(prices['isolated'])}</b>",
         f"Opposite instrument price: <b>{_fmt_price(prices['opposite'])}</b>",
         f"Opposite symbol: <code>{opposite_symbol}</code>",
@@ -184,7 +197,8 @@ def _safe_text(value):
     return html.escape(str(value), quote=True)
 
 
-def notify_isolated_supertrend_signal(record, payload, received_at=None, role="isolated"):
+def _notify_isolated_supertrend_signal(record, payload, received_at=None, role="isolated",
+                                       allow_current_minute_pre_isolation=False, notification_now=None):
     """Send signals in [isolation, 09:40]; otherwise send one first post-cutoff signal.
 
     Successful deliveries are persisted per isolation so restarts do not resend
@@ -209,7 +223,16 @@ def notify_isolated_supertrend_signal(record, payload, received_at=None, role="i
     if isolation_time is None:
         logger.warning("Skipping Supertrend Telegram signal: isolation timestamp is missing")
         return False
-    if signal_time < isolation_time:
+    now = _parse_time(notification_now, received)
+    current_minute = now.replace(second=0, microsecond=0)
+    same_minute_catchup = (
+        allow_current_minute_pre_isolation
+        and signal_time < isolation_time
+        and signal_time >= current_minute
+        and isolation_time >= current_minute
+        and signal_time <= now
+    )
+    if signal_time < isolation_time and not same_minute_catchup:
         logger.debug("Ignoring Supertrend signal generated before isolation: %s", signal_time)
         return False
 
@@ -263,7 +286,7 @@ def notify_isolated_supertrend_signal(record, payload, received_at=None, role="i
             return False
 
         prices = _latest_prices(record, payload)
-        message = _message(record, direction, signal_time, prices, payload)
+        message = _message(record, direction, signal_time, prices, payload, now=now)
         if not send_group_html(message):
             logger.error(
                 "Supertrend Telegram delivery failed | kind=%s | symbol=%s | signal_time=%s",
@@ -286,3 +309,87 @@ def notify_isolated_supertrend_signal(record, payload, received_at=None, role="i
             delivery_kind, direction, record.get("trading_symbol"), signal_time.isoformat(),
         )
         return True
+
+
+
+def notify_isolated_supertrend_signal(record, payload, received_at=None, role="isolated",
+                                      allow_current_minute_pre_isolation=False,
+                                      notification_now=None):
+    """Exception-safe public notifier; notification faults never escape to feed callers."""
+    try:
+        return _notify_isolated_supertrend_signal(
+            record, payload, received_at, role,
+            allow_current_minute_pre_isolation=allow_current_minute_pre_isolation,
+            notification_now=notification_now,
+        )
+    except Exception:
+        logger.exception(
+            "Unexpected Supertrend Telegram notification failure; feed processing will continue | key=%s",
+            (record or {}).get("instrument_key") if isinstance(record, dict) else "unknown",
+        )
+        return False
+
+
+def notify_current_minute_supertrend_signal(record, now=None):
+    """Send the newest isolated-leg signal already archived in the current IST minute.
+
+    This catches a signal emitted moments before isolation but in the same minute.
+    Archive inspection and delivery are deliberately best-effort and exception-safe.
+    """
+    try:
+        if not isinstance(record, dict):
+            return False
+        now = _parse_time(now, datetime.now(IST))
+        minute_start = now.replace(second=0, microsecond=0)
+        instrument_key = str(record.get("instrument_key") or "")
+        trade_date = str(record.get("trade_date_ist") or now.date().isoformat())
+
+        from services.option_chain_history import _find_contract_folder
+        folder = _find_contract_folder(instrument_key, trade_date)
+        if folder is None:
+            logger.info("No option-chain Supertrend archive available for catch-up | key=%s", instrument_key)
+            return False
+        source = Path(folder) / "supertrend_feed.jsonl"
+        if not source.is_file():
+            logger.info("No Supertrend feed file available for current-minute catch-up | key=%s", instrument_key)
+            return False
+
+        candidates = []
+        with source.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    row = json.loads(raw)
+                except json.JSONDecodeError:
+                    # A concurrently written trailing row is ignored and can be
+                    # picked up by the live WebSocket path if it arrives later.
+                    continue
+                if not isinstance(row, dict):
+                    continue
+                payload = row.get("payload") if isinstance(row.get("payload"), dict) else row
+                if payload.get("event") != "supertrend_signal":
+                    continue
+                signal_time = _signal_timestamp(payload, row.get("received_at_ist") or now.isoformat())
+                if minute_start <= signal_time <= now and _signal_direction(payload):
+                    candidates.append((signal_time, payload))
+
+        if not candidates:
+            logger.info("No Supertrend signal found in current minute archive | key=%s minute=%s",
+                        instrument_key, minute_start.isoformat())
+            return False
+
+        # Only the newest current-minute event is replayed. The persistent
+        # event key prevents the same signal being sent again by the live socket.
+        signal_time, payload = max(candidates, key=lambda item: item[0])
+        return notify_isolated_supertrend_signal(
+            record, payload, received_at=now.isoformat(), role="isolated",
+            allow_current_minute_pre_isolation=True, notification_now=now,
+        )
+    except Exception:
+        logger.exception(
+            "Current-minute Supertrend archive catch-up failed; isolation continues | key=%s",
+            (record or {}).get("instrument_key") if isinstance(record, dict) else "unknown",
+        )
+        return False
