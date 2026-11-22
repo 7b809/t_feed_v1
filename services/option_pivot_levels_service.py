@@ -174,16 +174,17 @@ class OptionInstrumentPivotLevelsService:
             return "already_present"
 
         candles = self._fetch_with_retry(fetcher, instrument_key)
-        first = pick_first_candle(candles)
+        # Defensively filter to the requested IST trade date before sorting.
+        # This prevents a stale provider row from masking today's first candle.
+        session_candles = [
+            candle for candle in candles
+            if _candle_date(candle.get("timestamp")) == date.fromisoformat(trade_date)
+        ]
+        first = pick_first_candle(session_candles)
         if not first:
-            logger.warning("Option pivot deferred: no intraday candle | key=%s", instrument_key)
-            return "failed"
-
-        candle_date = _candle_date(first.get("timestamp"))
-        if candle_date is None or candle_date.isoformat() != trade_date:
             logger.warning(
-                "Option pivot rejected non-today candle | key=%s | candle_time=%s | expected_date=%s",
-                instrument_key, first.get("timestamp"), trade_date,
+                "Option pivot deferred: no current-date intraday candle | key=%s | date=%s",
+                instrument_key, trade_date,
             )
             return "failed"
 
