@@ -86,6 +86,7 @@ def test_existing_today_pivot_is_not_fetched_again(monkeypatch, tmp_path):
     folder.mkdir(parents=True)
     (folder / "pivot_levels.json").write_text(
         '{"trade_date_ist":"2026-11-23","instrument_key":"NSE_FO|12345",'
+        '"source_candle_timestamp":"2026-11-23T09:15:00+05:30",'
         '"levels":{"R3":1,"R2":2,"R1":3,"AVG":4,"S1":5,"S2":6,"S3":7}}',
         encoding="utf-8",
     )
