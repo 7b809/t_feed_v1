@@ -210,7 +210,16 @@ class OptionChainCaptureService:
             configuration = upstox_client.Configuration()
             configuration.access_token = token
             api = upstox_client.OptionsApi(upstox_client.ApiClient(configuration))
-            pivot_doc = self._load_pivot_document(token)
+            try:
+                pivot_doc = self._load_pivot_document(token)
+            except Exception:
+                # Option pivot levels do not depend on the index OR document.
+                # Continue loading option universes so per-contract pivots can
+                # still be calculated even when OR levels are temporarily absent.
+                logger.exception(
+                    "Index OR levels unavailable; continuing independent option-pivot preparation"
+                )
+                pivot_doc = {}
             index_docs = pivot_doc.get("indexes") or {}
             with self._lock:
                 all_contracts: list[dict] = list(self._contract_meta.values())
