@@ -93,7 +93,7 @@ class OptionChainSupertrendCapture:
         logger.info("Option-chain Supertrend capture scheduled for %d contracts", len(valid))
         return self.status()
 
-    def register_archive_sink(self, instrument_key, path, isolation_id, role, symbol):
+    def register_archive_sink(self, instrument_key, path, isolation_id, role, symbol, record=None):
         """Fan an existing option-chain Supertrend stream into an isolation file."""
         day = _now().date().isoformat()
         task = self._tasks.get((day, str(instrument_key)))
@@ -104,6 +104,7 @@ class OptionChainSupertrendCapture:
             "isolation_id": isolation_id,
             "role": role,
             "symbol": symbol,
+            "record": dict(record or {}),
         }
         with self._lock:
             self._archive_sinks.setdefault(str(instrument_key), {})[str(path)] = sink
@@ -160,6 +161,15 @@ class OptionChainSupertrendCapture:
                                         continue
                                 except Exception:
                                     logger.exception("Could not retry Supertrend archive seed key=%s", key)
+                                if payload.get("event") == "supertrend_signal" and sink["role"] == "isolated" and sink.get("record"):
+                                    try:
+                                        from services.supertrend_signal_notification_service import notify_isolated_supertrend_signal
+                                        await asyncio.to_thread(
+                                            notify_isolated_supertrend_signal,
+                                            sink["record"], payload, received, sink["role"],
+                                        )
+                                    except Exception:
+                                        logger.exception("Could not deliver isolated Supertrend signal notification key=%s", key)
                                 archive_row = {
                                     "received_at_ist": received,
                                     "indicator": "supertrend",
@@ -206,7 +216,7 @@ class OptionChainSupertrendCapture:
 
 _manager = OptionChainSupertrendCapture()
 def start_option_chain_supertrend_capture(contracts): return _manager.start(contracts)
-def register_option_chain_supertrend_archive(instrument_key, path, isolation_id, role, symbol):
-    return _manager.register_archive_sink(instrument_key, path, isolation_id, role, symbol)
+def register_option_chain_supertrend_archive(instrument_key, path, isolation_id, role, symbol, record=None):
+    return _manager.register_archive_sink(instrument_key, path, isolation_id, role, symbol, record=record)
 def get_option_chain_supertrend_status(): return _manager.status()
 def stop_option_chain_supertrend_capture(): _manager.stop()
