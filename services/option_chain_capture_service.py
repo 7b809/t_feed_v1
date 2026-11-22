@@ -120,6 +120,7 @@ class OptionChainCaptureService:
         self._listener = None
         self._active_date: str | None = None
         self._contract_meta: dict[str, dict] = {}
+        self._pivot_contracts: dict[str, dict] = {}
         self._subscribed: set[str] = set()
         self._owned_subscriptions: set[str] = set()
         self._processed_indexes: set[str] = set()
@@ -161,7 +162,7 @@ class OptionChainCaptureService:
                 and self._contract_meta.keys() <= self._subscribed
                 and self._contract_meta.keys() <= set(feed.instrument_keys)
             ):
-                contracts_snapshot = list(self._contract_meta.values())
+                contracts_snapshot = list(self._pivot_contracts.values())
                 token_snapshot = self._pivot_access_token
                 result = self.status()
                 if token_snapshot and contracts_snapshot:
@@ -208,6 +209,7 @@ class OptionChainCaptureService:
             index_docs = pivot_doc.get("indexes") or {}
             with self._lock:
                 all_contracts: list[dict] = list(self._contract_meta.values())
+                pivot_contracts: dict[str, dict] = dict(self._pivot_contracts)
                 processed_indexes = set(self._processed_indexes)
             skipped = []
 
@@ -227,6 +229,33 @@ class OptionChainCaptureService:
                     window = self.windows.get(meta.get("canonical"), 300.0)
                     response = api.get_option_contracts(instrument_key)
                     contracts = _value(response, "data", []) or []
+
+                    # Pivot calculations cover every non-expired CE/PE contract
+                    # returned for each configured index, not only the narrower
+                    # strike window subscribed to the live option-chain feed.
+                    for item in contracts:
+                        pivot_row = _plain_contract(item)
+                        try:
+                            expiry_date = date.fromisoformat(str(pivot_row.get("expiry"))[:10])
+                        except (TypeError, ValueError):
+                            continue
+                        option_type = str(pivot_row.get("instrument_type") or "").upper()
+                        option_key = str(pivot_row.get("instrument_key") or "").strip()
+                        if expiry_date < today or option_type not in ("CE", "PE") or not option_key:
+                            continue
+                        pivot_row.update({
+                            "instrument_key": option_key,
+                            "instrument_type": option_type,
+                            "expiry": expiry_date.isoformat(),
+                            "index_instrument_key": instrument_key,
+                            "index_canonical": meta.get("canonical"),
+                            "index_folder": meta.get("folder"),
+                            "trade_date_ist": date_key,
+                        })
+                        pivot_contracts[option_key] = pivot_row
+                    with self._lock:
+                        self._pivot_contracts.update(pivot_contracts)
+
                     selected, nearest_expiry, lower, upper = select_nearest_expiry_contracts(
                         contracts, today, average, window, expiry_mode=self.expiry_mode
                     )
@@ -269,6 +298,9 @@ class OptionChainCaptureService:
                 }
                 with self._lock:
                     self._last_summary = result
+                    pivot_snapshot = list(self._pivot_contracts.values())
+                if pivot_snapshot:
+                    self._schedule_option_pivots(pivot_snapshot, token, date_key)
                 return result
 
             new_meta = {row["instrument_key"]: row for row in all_contracts}
@@ -317,7 +349,9 @@ class OptionChainCaptureService:
 
             # Historical candle requests and file writes run independently of
             # the market-data callback and scheduler's option-chain setup.
-            self._schedule_option_pivots(list(new_meta.values()), token, date_key)
+            with self._lock:
+                pivot_snapshot = list(self._pivot_contracts.values())
+            self._schedule_option_pivots(pivot_snapshot, token, date_key)
 
             logger.info(
                 "Option-chain live capture %s: selected=%d subscribed=%d",
@@ -382,6 +416,7 @@ class OptionChainCaptureService:
             logger.exception("Could not stop previous-date option-chain Supertrend feeds")
         self._active_date = date_key
         self._contract_meta.clear()
+        self._pivot_contracts.clear()
         self._subscribed.clear()
         self._owned_subscriptions.clear()
         self._processed_indexes.clear()
