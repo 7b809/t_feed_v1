@@ -249,12 +249,11 @@ def _notify_isolated_supertrend_signal(record, payload, received_at=None, role="
         logger.warning("Skipping Supertrend Telegram signal: isolation timestamp is missing")
         return False
     now = _parse_time(notification_now, received)
-    current_minute = now.replace(second=0, microsecond=0)
+    isolation_minute = isolation_time.replace(second=0, microsecond=0)
     same_minute_catchup = (
         allow_current_minute_pre_isolation
         and signal_time < isolation_time
-        and signal_time >= current_minute
-        and isolation_time >= current_minute
+        and signal_time.replace(second=0, microsecond=0) == isolation_minute
         and signal_time <= now
     )
     if signal_time < isolation_time and not same_minute_catchup:
@@ -419,7 +418,16 @@ def notify_current_minute_supertrend_signal(record, now=None):
         if not isinstance(record, dict):
             return False
         now = _parse_time(now, datetime.now(IST))
-        minute_start = now.replace(second=0, microsecond=0)
+        isolation_time = _parse_time(
+            record.get("isolation_touch_time") or record.get("isolation_created_at"),
+            None,
+        )
+        if isolation_time is None:
+            logger.warning("Cannot run current-minute Supertrend catch-up: isolation timestamp is missing")
+            return False
+        # Anchor the archive window to the isolation minute, not worker start
+        # time; a thread scheduled across a minute boundary must not miss it.
+        minute_start = isolation_time.replace(second=0, microsecond=0)
         instrument_key = str(record.get("instrument_key") or "")
         trade_date = str(record.get("trade_date_ist") or now.date().isoformat())
 
