@@ -152,6 +152,7 @@ def test_current_minute_archive_signal_before_isolation_is_sent_with_age(monkeyp
     assert len(sent) == 1
     assert "Signal time:" in sent[0]
     assert "Signal age: <b>45 seconds ago</b>" in sent[0]
+    assert "Signal-to-isolation gap: <b>40 seconds before isolation</b>" in sent[0]
     assert "09:21:00 AM IST" in sent[0]
 
     # The same event arriving again on the live socket must be deduplicated.
