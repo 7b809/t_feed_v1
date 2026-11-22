@@ -655,6 +655,8 @@ Reliability and API-load controls:
 
 - Pivot calculation runs in a daemon worker; it does not run inside the
   Upstox market-data callback or delay option-chain subscription setup.
+- The existing option-chain capture scheduler starts this worker, so keep
+  `OPTION_CHAIN_CAPTURE_ENABLED=true` when using option pivots.
 - One batch runs at a time. The existing 60-second option-chain scheduler
   retries contracts whose daily pivot file is still missing or invalid.
 - A valid pivot file for the current date is not fetched or rewritten.
