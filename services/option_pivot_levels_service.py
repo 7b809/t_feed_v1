@@ -1,6 +1,6 @@
 """Per-option-instrument opening-range pivot levels from Upstox intraday candles.
 
-Each selected option contract gets a small, atomic pivot_levels.json beside
+Each option contract in the configured pivot universe gets a small, atomic pivot_levels.json beside
 its existing option-chain files. Only the seven requested levels and minimal
 provenance metadata are persisted; raw candle history is not copied here.
 """
