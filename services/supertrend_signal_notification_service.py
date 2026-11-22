@@ -6,7 +6,7 @@ import html
 import json
 import os
 import threading
-from datetime import datetime, time as dt_time, timedelta
+from datetime import datetime, time as dt_time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -224,10 +224,10 @@ def _safe_text(value):
 
 def _notify_isolated_supertrend_signal(record, payload, received_at=None, role="isolated",
                                        allow_current_minute_pre_isolation=False, notification_now=None):
-    """Send signals in [isolation, 09:40]; otherwise send one first post-cutoff signal.
+    """Send eligible isolated-leg signals under the 09:40 IST delivery policy.
 
-    Successful deliveries are persisted per isolation so restarts do not resend
-    already delivered events. Only the isolated leg is eligible for Telegram.
+    A current-minute archive replay may include a signal timestamped just before
+    isolation. Successful deliveries are persisted per isolation for deduplication.
     """
     if role != "isolated" or not isinstance(record, dict) or not isinstance(payload, dict):
         return False
