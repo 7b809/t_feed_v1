@@ -344,36 +344,54 @@ def notify_current_minute_supertrend_signal(record, now=None):
         instrument_key = str(record.get("instrument_key") or "")
         trade_date = str(record.get("trade_date_ist") or now.date().isoformat())
 
-        from services.option_chain_history import _find_contract_folder
-        folder = _find_contract_folder(instrument_key, trade_date)
-        if folder is None:
-            logger.info("No option-chain Supertrend archive available for catch-up | key=%s", instrument_key)
-            return False
-        source = Path(folder) / "supertrend_feed.jsonl"
-        if not source.is_file():
+        sources = []
+        try:
+            from services.option_chain_history import _find_contract_folder
+            folder = _find_contract_folder(instrument_key, trade_date)
+            if folder is not None:
+                source = Path(folder) / "supertrend_feed.jsonl"
+                if source.is_file():
+                    sources.append(source)
+        except Exception:
+            logger.exception("Could not locate option-chain Supertrend archive | key=%s", instrument_key)
+
+        # Also inspect the isolation-owned archive. This covers deployments
+        # where the option-chain socket was not active when isolation began.
+        safe_key = "".join(c if c.isalnum() or c in "-_." else "_" for c in instrument_key)[:100]
+        isolated_source = (
+            Path(os.getenv("ISOLATED_DATA_DIR", "data/isolated"))
+            / "supertrend" / f"{trade_date}_isolated_{safe_key}.jsonl"
+        )
+        if isolated_source.is_file():
+            sources.append(isolated_source)
+
+        if not sources:
             logger.info("No Supertrend feed file available for current-minute catch-up | key=%s", instrument_key)
             return False
 
         candidates = []
-        with source.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                raw = line.strip()
-                if not raw:
-                    continue
-                try:
-                    row = json.loads(raw)
-                except json.JSONDecodeError:
-                    # A concurrently written trailing row is ignored and can be
-                    # picked up by the live WebSocket path if it arrives later.
-                    continue
-                if not isinstance(row, dict):
-                    continue
-                payload = row.get("payload") if isinstance(row.get("payload"), dict) else row
-                if payload.get("event") != "supertrend_signal":
-                    continue
-                signal_time = _signal_timestamp(payload, row.get("received_at_ist") or now.isoformat())
-                if minute_start <= signal_time <= now and _signal_direction(payload):
-                    candidates.append((signal_time, payload))
+        for source in sources:
+            with source.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        row = json.loads(raw)
+                    except json.JSONDecodeError:
+                        # A concurrently written trailing row is ignored and can be
+                        # picked up by the live WebSocket path if it arrives later.
+                        continue
+                    if not isinstance(row, dict):
+                        continue
+                    if row.get("instrument_key") not in (None, "", instrument_key):
+                        continue
+                    payload = row.get("payload") if isinstance(row.get("payload"), dict) else row
+                    if payload.get("event") != "supertrend_signal":
+                        continue
+                    signal_time = _signal_timestamp(payload, row.get("received_at_ist") or now.isoformat())
+                    if minute_start <= signal_time <= now and _signal_direction(payload):
+                        candidates.append((signal_time, payload))
 
         if not candidates:
             logger.info("No Supertrend signal found in current minute archive | key=%s minute=%s",
