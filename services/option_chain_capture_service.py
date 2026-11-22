@@ -130,6 +130,9 @@ class OptionChainCaptureService:
         self._writer_stop = threading.Event()
         self._writer_thread: threading.Thread | None = None
         self._dropped_rows = 0
+        self._pivot_thread: threading.Thread | None = None
+        self._pivot_lock = threading.Lock()
+        self._pivot_access_token: str | None = None
 
     def ensure_started(self) -> dict:
         if not self.enabled:
@@ -158,7 +161,12 @@ class OptionChainCaptureService:
                 and self._contract_meta.keys() <= self._subscribed
                 and self._contract_meta.keys() <= set(feed.instrument_keys)
             ):
-                return self.status()
+                contracts_snapshot = list(self._contract_meta.values())
+                token_snapshot = self._pivot_access_token
+                result = self.status()
+                if token_snapshot and contracts_snapshot:
+                    self._schedule_option_pivots(contracts_snapshot, token_snapshot, date_key)
+                return result
 
         if feed.mode != self.mode:
             logger.error(
@@ -192,6 +200,7 @@ class OptionChainCaptureService:
 
         try:
             token = fetch_access_token()
+            self._pivot_access_token = token
             configuration = upstox_client.Configuration()
             configuration.access_token = token
             api = upstox_client.OptionsApi(upstox_client.ApiClient(configuration))
@@ -306,6 +315,10 @@ class OptionChainCaptureService:
             except Exception:
                 logger.exception("Could not start option-chain Supertrend capture")
 
+            # Historical candle requests and file writes run independently of
+            # the market-data callback and scheduler's option-chain setup.
+            self._schedule_option_pivots(list(new_meta.values()), token, date_key)
+
             logger.info(
                 "Option-chain live capture %s: selected=%d subscribed=%d",
                 summary["state"], summary["selected_contracts"], summary["subscribed_contracts"],
@@ -314,6 +327,44 @@ class OptionChainCaptureService:
         except Exception:
             logger.exception("Option-chain capture startup failed")
             return {"enabled": True, "state": "error"}
+
+    def _schedule_option_pivots(self, contracts: list[dict], token: str, trade_date: str) -> None:
+        """Start one background pivot batch; later scheduler ticks retry missing files."""
+        if not os.getenv("OPTION_PIVOT_LEVELS_ENABLED", "true").strip().lower() == "true":
+            return
+        if not contracts or not token:
+            return
+        with self._pivot_lock:
+            if self._pivot_thread and self._pivot_thread.is_alive():
+                return
+            worker = threading.Thread(
+                target=self._run_option_pivot_batch,
+                args=(list(contracts), token, trade_date),
+                name="option-instrument-pivot-worker",
+                daemon=True,
+            )
+            self._pivot_thread = worker
+            worker.start()
+            logger.info(
+                "Option pivot background batch scheduled | contracts=%d | date=%s",
+                len(contracts), trade_date,
+            )
+
+    def _run_option_pivot_batch(self, contracts: list[dict], token: str, trade_date: str) -> None:
+        try:
+            from services.option_pivot_levels_service import OptionInstrumentPivotLevelsService
+            service = OptionInstrumentPivotLevelsService(root=self.root)
+            result = service.process_contracts(contracts, token, trade_date)
+            with self._lock:
+                self._last_summary["option_pivots"] = result
+        except Exception:
+            logger.exception(
+                "Option pivot batch failed unexpectedly; option-chain capture remains active | date=%s",
+                trade_date,
+            )
+        finally:
+            with self._pivot_lock:
+                self._pivot_thread = None
 
     def _roll_date(self, date_key: str, feed) -> None:
         # Only unsubscribe keys this service added. A selected contract may
