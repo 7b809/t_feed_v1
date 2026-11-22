@@ -133,13 +133,19 @@ def _latest_prices(record, payload):
     try:
         from jobs.daily_refresh import get_feed_service
         feed = get_feed_service()
-        if feed is not None:
-            if isolated_key:
-                prices["isolated"] = feed.get_ltp(isolated_key)
-            if opposite_key:
-                prices["opposite"] = feed.get_ltp(opposite_key)
     except Exception:
-        logger.exception("Could not read latest option prices for Supertrend Telegram message")
+        feed = None
+        logger.exception("Could not access market feed for Supertrend Telegram prices")
+    if feed is not None:
+        for label, instrument_key in (("isolated", isolated_key), ("opposite", opposite_key)):
+            if not instrument_key:
+                continue
+            try:
+                prices[label] = feed.get_ltp(instrument_key)
+            except Exception:
+                # One broken LTP lookup must not prevent the other leg from
+                # being displayed or the Supertrend notification from sending.
+                logger.exception("Could not read %s instrument LTP for Supertrend Telegram message", label)
 
     if prices["isolated"] is None:
         prices["isolated"] = _find_value(payload, ("isolated_ltp", "ltp", "last_price", "price"))
@@ -218,8 +224,8 @@ def _message(record, direction, signal_time, prices, payload, now=None):
         f"Instrument key: <code>{instrument_key}</code>",
     ]
     timeframe = _find_value(payload, ("timeframe", "interval", "candle_interval"))
-    if timeframe not in (None, ""):
-        lines.append(f"Supertrend timeframe: {_safe_text(timeframe)}")
+    timeframe = timeframe or record.get("supertrend_timeframe") or os.getenv("SUPERTREND_TIMEFRAME") or "Not provided"
+    lines.append(f"Supertrend timeframe: {_safe_text(timeframe)}")
     return "\n".join(lines)
 
 
