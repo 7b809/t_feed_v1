@@ -116,7 +116,7 @@ class IsolatedFeedManager:
                     # to the isolation-owned socket if no shared task is active.
                     from services.option_chain_supertrend_service import register_option_chain_supertrend_archive
                     supertrend_shared = register_option_chain_supertrend_archive(
-                        key, destination, isolation_id, role, symbol or key
+                        key, destination, isolation_id, role, symbol or key, record=record
                     )
                 except Exception:
                     logger.exception("Could not seed/register option-chain Supertrend history role=%s key=%s", role, key)
@@ -126,7 +126,7 @@ class IsolatedFeedManager:
                 task_key = (isolation_id, role, indicator, key)
                 if task_key in self._tasks and not self._tasks[task_key].done():
                     continue
-                coro = self._run_feed(isolation_id, trade_date, role, key, symbol or key, indicator)
+                coro = self._run_feed(isolation_id, trade_date, role, key, symbol or key, indicator, record)
                 future = asyncio.run_coroutine_threadsafe(coro, self._loop)
                 self._tasks[task_key] = future
                 self._status["|".join(task_key)] = {"state": "starting", "instrument_key": key}
@@ -137,7 +137,7 @@ class IsolatedFeedManager:
         folder.mkdir(parents=True, exist_ok=True)
         return folder / f"{trade_date}_{role}_{_safe(key)}.jsonl"
 
-    async def _run_feed(self, isolation_id, trade_date, role, key, symbol, indicator):
+    async def _run_feed(self, isolation_id, trade_date, role, key, symbol, indicator, isolation_record):
         encoded = quote(key, safe="")
         if indicator == "sr":
             url = f"{self.base_url}/ws/sr/{encoded}?config={self.sr_config}"
@@ -201,6 +201,12 @@ class IsolatedFeedManager:
                             logger.debug(
                                 "%s WS initial snapshot received | role=%s | instrument=%s",
                                 indicator.upper(), role, symbol,
+                            )
+                        if indicator == "supertrend" and event == "supertrend_signal" and role == "isolated":
+                            from services.supertrend_signal_notification_service import notify_isolated_supertrend_signal
+                            await asyncio.to_thread(
+                                notify_isolated_supertrend_signal,
+                                isolation_record, payload, received_at, role,
                             )
                         if event == "supertrend_signal" or (indicator == "sr" and event == "sr_update"):
                             from services.isolation_telegram_service import notify_indicator_event
