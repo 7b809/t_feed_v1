@@ -330,6 +330,19 @@ def notify_isolated_supertrend_signal(record, payload, received_at=None, role="i
         return False
 
 
+def _read_recent_text_lines(path, max_bytes=None):
+    """Read a bounded tail of an append-only feed file, never its full history."""
+    limit = max_bytes or max(64 * 1024, int(os.getenv("ISOLATION_SUPERTREND_CATCHUP_MAX_BYTES", str(2 * 1024 * 1024))))
+    with Path(path).open("rb") as handle:
+        handle.seek(0, os.SEEK_END)
+        size = handle.tell()
+        handle.seek(max(0, size - limit))
+        if size > limit:
+            handle.readline()  # discard a possibly partial first line
+        data = handle.read()
+    return data.decode("utf-8", errors="replace").splitlines()
+
+
 def notify_current_minute_supertrend_signal(record, now=None):
     """Send the newest isolated-leg signal already archived in the current IST minute.
 
@@ -371,8 +384,7 @@ def notify_current_minute_supertrend_signal(record, now=None):
 
         candidates = []
         for source in sources:
-            with source.open("r", encoding="utf-8") as handle:
-                for line in handle:
+            for line in _read_recent_text_lines(source):
                     raw = line.strip()
                     if not raw:
                         continue
