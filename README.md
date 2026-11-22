@@ -623,10 +623,12 @@ unaffected.
 
 ### Per-option opening-candle pivot levels
 
-After the primary market feed is connected and the option-chain contracts are
-selected, the application schedules a background pivot calculation for each
-selected CE/PE contract across the configured index keys. The default index
-list includes NIFTY, BANKNIFTY, MIDCPNIFTY, and SENSEX.
+After the primary market feed is connected, the application loads the available
+option contracts for the configured pivot index keys and schedules a background
+pivot calculation for every non-expired CE/PE contract returned by Upstox.
+The default pivot universe includes NIFTY, BANKNIFTY, MIDCPNIFTY, and SENSEX.
+This pivot universe is independent of the live option-chain subscription list:
+it does not require subscribing every strike to the market-data WebSocket.
 
 For every option instrument, the service calls
 `HistoryV3Api.get_intra_day_candle_data(instrument_key, "minutes", "1")`
@@ -665,16 +667,18 @@ Configuration:
 
 ```env
 OPTION_PIVOT_LEVELS_ENABLED=true
+OPTION_PIVOT_INDEXES=NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|NIFTY MID SELECT,BSE_INDEX|SENSEX
 OPTION_PIVOT_FETCH_REQUESTS_PER_SECOND=4
 OPTION_PIVOT_FETCH_MAX_RETRIES=2
 OPTION_PIVOT_FETCH_RETRY_BACKOFF_SECONDS=1
 ```
 
-`OPTION_CHAIN_INDEXES` controls which index option chains are selected; its
-default and the supplied `.env.example` include all four supported indexes.
-Existing per-index strike-range settings continue to control how many option
-contracts are selected. For a full-chain run, confirm your Upstox API quota
-and feed subscription limits before widening those ranges.
+`OPTION_PIVOT_INDEXES` controls the index universes used for pivot calculation
+and defaults to all four supported indexes. `OPTION_CHAIN_INDEXES` continues
+to control live option-chain subscriptions separately (NIFTY 50 by default),
+and existing per-index strike-range settings continue to control those live
+subscriptions. This separation allows pivots for all returned option contracts
+without adding every contract to the live feed.
 
 A contract's file path follows the existing option-chain layout:
 `data/option_chain/<index-folder>/<YYYYMMDD>/<strike>_<ce|pe>_<instrument-key>/pivot_levels.json`.
