@@ -330,7 +330,7 @@ class OptionChainCaptureService:
 
     def _schedule_option_pivots(self, contracts: list[dict], token: str, trade_date: str) -> None:
         """Start one background pivot batch; later scheduler ticks retry missing files."""
-        if not os.getenv("OPTION_PIVOT_LEVELS_ENABLED", "true").strip().lower() == "true":
+        if os.getenv("OPTION_PIVOT_LEVELS_ENABLED", "true").strip().lower() != "true":
             return
         if not contracts or not token:
             return
@@ -563,6 +563,10 @@ class OptionChainCaptureService:
     def status(self) -> dict:
         with self._lock:
             result = dict(self._last_summary)
+        with self._pivot_lock:
+            result["option_pivots_running"] = bool(
+                self._pivot_thread and self._pivot_thread.is_alive()
+            )
         try:
             from services.option_chain_supertrend_service import get_option_chain_supertrend_status
             result['supertrend'] = get_option_chain_supertrend_status()
