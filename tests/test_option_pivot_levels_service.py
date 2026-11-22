@@ -27,6 +27,10 @@ def test_computes_and_saves_only_seven_opening_pivot_levels(monkeypatch, tmp_pat
             # Deliberately reverse ordered: the earliest candle must be selected.
             return [
                 {
+                    "timestamp": "2026-11-22T09:15:00+05:30",
+                    "open": 99000, "high": 99999, "low": 98000, "close": 99500,
+                },
+                {
                     "timestamp": "2026-11-23T09:16:00+05:30",
                     "open": 22010, "high": 22020, "low": 21980, "close": 22000,
                 },
