@@ -158,16 +158,32 @@ def _fmt_time(value):
     return value.strftime("%d %b %Y, %I:%M:%S %p IST")
 
 
+def _format_duration(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds} second{'s' if seconds != 1 else ''}"
+    minutes, remainder = divmod(seconds, 60)
+    if minutes < 60:
+        return f"{minutes} min {remainder} sec" if remainder else f"{minutes} min"
+    hours, remainder_minutes = divmod(minutes, 60)
+    return f"{hours} hr {remainder_minutes} min" if remainder_minutes else f"{hours} hr"
+
+
 def _format_signal_age(signal_time, now=None):
     now = _parse_time(now, datetime.now(IST))
-    elapsed = max(0, int((now - signal_time).total_seconds()))
-    if elapsed < 60:
-        return f"{elapsed} second{'s' if elapsed != 1 else ''} ago"
-    minutes, seconds = divmod(elapsed, 60)
-    if minutes < 60:
-        return f"{minutes} min {seconds} sec ago" if seconds else f"{minutes} min ago"
-    hours, remainder = divmod(minutes, 60)
-    return f"{hours} hr {remainder} min ago" if remainder else f"{hours} hr ago"
+    return _format_duration((now - signal_time).total_seconds()) + " ago"
+
+
+def _format_signal_isolation_gap(signal_time, record):
+    isolation_time = _parse_time(
+        record.get("isolation_touch_time") or record.get("isolation_created_at"),
+        None,
+    )
+    if isolation_time is None:
+        return "Not available"
+    gap = abs((isolation_time - signal_time).total_seconds())
+    relation = "before isolation" if signal_time < isolation_time else "after isolation"
+    return f"{_format_duration(gap)} {relation}"
 
 
 def _message(record, direction, signal_time, prices, payload, now=None):
@@ -182,6 +198,7 @@ def _message(record, direction, signal_time, prices, payload, now=None):
         f"Signal: <b>{direction}</b>",
         f"Signal time: <b>{_fmt_time(signal_time)}</b>",
         f"Signal age: <b>{_safe_text(_format_signal_age(signal_time, now))}</b>",
+        f"Signal-to-isolation gap: <b>{_safe_text(_format_signal_isolation_gap(signal_time, record))}</b>",
         f"Isolated instrument price: <b>{_fmt_price(prices['isolated'])}</b>",
         f"Opposite instrument price: <b>{_fmt_price(prices['opposite'])}</b>",
         f"Opposite symbol: <code>{opposite_symbol}</code>",
