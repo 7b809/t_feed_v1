@@ -346,6 +346,13 @@ class OptionChainCaptureService:
                     )
             with self._lock:
                 self._pivot_contracts.update(pivot_contracts)
+                pivot_snapshot = list(self._pivot_contracts.values())
+
+            # Start pivot work before any optional websocket subscription
+            # or Supertrend setup. A feed subscription failure must not block
+            # the independent historical-candle pivot calculation.
+            if pivot_snapshot:
+                self._schedule_option_pivots(pivot_snapshot, token, date_key)
 
             if not all_contracts:
                 result = {
@@ -402,12 +409,6 @@ class OptionChainCaptureService:
                 start_option_chain_supertrend_capture(list(new_meta.values()))
             except Exception:
                 logger.exception("Could not start option-chain Supertrend capture")
-
-            # Historical candle requests and file writes run independently of
-            # the market-data callback and scheduler's option-chain setup.
-            with self._lock:
-                pivot_snapshot = list(self._pivot_contracts.values())
-            self._schedule_option_pivots(pivot_snapshot, token, date_key)
 
             logger.info(
                 "Option-chain live capture %s: selected=%d subscribed=%d",
