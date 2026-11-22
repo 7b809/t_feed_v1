@@ -330,6 +330,22 @@ def notify_isolated_supertrend_signal(record, payload, received_at=None, role="i
         return False
 
 
+
+def dispatch_isolated_supertrend_signal(record, payload, received_at=None, role="isolated"):
+    """Queue one best-effort notification on a daemon thread; never wait in feed loops."""
+    try:
+        worker = threading.Thread(
+            target=notify_isolated_supertrend_signal,
+            args=(dict(record or {}), dict(payload or {}), received_at, role),
+            name="isolated-supertrend-telegram",
+            daemon=True,
+        )
+        worker.start()
+        return True
+    except Exception:
+        logger.exception("Could not schedule isolated Supertrend Telegram notification")
+        return False
+
 def _read_recent_text_lines(path, max_bytes=None):
     """Read a bounded tail of an append-only feed file, never its full history."""
     limit = max_bytes or max(64 * 1024, int(os.getenv("ISOLATION_SUPERTREND_CATCHUP_MAX_BYTES", str(2 * 1024 * 1024))))
