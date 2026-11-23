@@ -117,13 +117,16 @@ def latest_completed_candle_start(
     elapsed = (effective_now - session_start).total_seconds()
     interval_seconds = int(interval_minutes) * 60
     completed_count = math.floor(elapsed / interval_seconds)
+    # Do not treat a shortened final session fragment as a full interval bar.
+    max_full_bars = math.floor((session_end - session_start).total_seconds() / interval_seconds)
+    completed_count = min(completed_count, max_full_bars)
     if completed_count <= 0:
         return None
     return session_start + timedelta(seconds=(completed_count - 1) * interval_seconds)
 
 
 def _interval_path(folder: Path, interval: int) -> Path:
-    return folder / ("pivot_levels.json" if interval == 1 else f"pivot_levels_{interval}m.json")
+    return folder / f"pivot_levels_{interval}m.json"
 
 
 def _valid_existing(
@@ -268,6 +271,27 @@ class OptionInstrumentPivotLevelsService:
             if stamp == target_stamp:
                 match = candle
                 break
+        # Preserve the original opening-minute snapshot for downstream code
+        # that historically reads pivot_levels.json. The rolling 1m series is
+        # stored separately in pivot_levels_1m.json.
+        if interval == 1:
+            opening_stamp = datetime.combine(
+                date.fromisoformat(trade_date), SESSION_OPEN, tzinfo=IST
+            )
+            opening_path = folder / "pivot_levels.json"
+            if not _valid_existing(opening_path, key, trade_date, 1, opening_stamp):
+                opening_match = next(
+                    (
+                        candle for candle in candles
+                        if _as_ist(candle.get("timestamp")) == opening_stamp
+                    ),
+                    None,
+                )
+                if opening_match is not None:
+                    self._save_candle_levels(
+                        opening_path, contract, key, trade_date, 1, opening_stamp, opening_match
+                    )
+
         if match is None:
             logger.debug(
                 "Option pivot deferred: completed candle not yet published | interval=%dm key=%s target=%s",
@@ -275,7 +299,14 @@ class OptionInstrumentPivotLevelsService:
             )
             return "failed"
 
-        values = compute_or_levels(match)
+        self._save_candle_levels(target, contract, key, trade_date, interval, target_stamp, match)
+        return "computed"
+
+    def _save_candle_levels(
+        self, path: Path, contract: dict, key: str, trade_date: str,
+        interval: int, candle_stamp: datetime, candle: dict,
+    ) -> None:
+        values = compute_or_levels(candle)
         levels = {
             "R3": values["R3"], "R2": values["R2"], "R1": values["R1"],
             "AVG": values.get("A", values.get("avg")),
@@ -283,7 +314,7 @@ class OptionInstrumentPivotLevelsService:
         }
         if any(levels.get(name) is None or not math.isfinite(float(levels[name])) for name in LEVEL_KEYS):
             raise ValueError(f"Invalid pivot values returned for {key} interval={interval}m")
-        candle_end = target_stamp + timedelta(minutes=interval)
+        candle_end = candle_stamp + timedelta(minutes=interval)
         document = {
             "schema_version": 2,
             "trade_date_ist": trade_date,
@@ -295,12 +326,11 @@ class OptionInstrumentPivotLevelsService:
             "interval_minutes": interval,
             "interval_label": f"{interval}m",
             "source": "Upstox HistoryV3Api.get_intra_day_candle_data",
-            "source_candle_timestamp": match.get("timestamp"),
+            "source_candle_timestamp": candle.get("timestamp"),
             "source_candle_end_timestamp": candle_end.isoformat(),
             "levels": levels,
         }
-        self._save_atomic(target, document)
-        return "computed"
+        self._save_atomic(path, document)
 
     def _fetch_with_retry(self, fetcher, key: str, interval: int) -> list[dict]:
         attempts = max(0, self.max_retries) + 1
