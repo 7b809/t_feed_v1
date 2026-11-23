@@ -450,7 +450,7 @@ class OptionChainCaptureService:
         """Start one background pivot batch; later scheduler ticks retry missing files."""
         if not self.pivot_enabled:
             return
-        if not contracts or not token or self._pivot_batch_completed:
+        if not contracts or not token:
             return
         with self._pivot_lock:
             if self._pivot_thread and self._pivot_thread.is_alive():
@@ -492,13 +492,9 @@ class OptionChainCaptureService:
             result = service.process_contracts(contracts, token, trade_date)
             with self._lock:
                 self._last_summary["option_pivots"] = result
-                self._pivot_batch_completed = (
-                    result.get("failed", 0) == 0
-                    and result.get("skipped", 0) == 0
-                    and result.get("computed", 0) + result.get("already_present", 0)
-                    == len(self._pivot_contracts)
-                    and result.get("total", 0) == len(self._pivot_contracts)
-                )
+                # Keep the recurring refresh enabled. The interval service is
+                # idempotent per completed-candle timestamp and skips files
+                # already written, then picks up the next completed candle.
         except Exception:
             logger.exception(
                 "Option pivot batch failed unexpectedly; option-chain capture remains active | date=%s",
