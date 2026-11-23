@@ -122,6 +122,9 @@ ORDER_LEDGER_COLLECTION = _str("ORDER_LEDGER_COLLECTION")
 UPSTOX_TOKEN_DOC_ID = _str("UPSTOX_TOKEN_DOC_ID", "upstox_access_token")
 UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES = max(1, _int("UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES", 30))
 
+# Anonymous, read-only chart access. Guests may search and view one chart.
+GUEST_MODE_ENABLED = _bool("GUEST_MODE_ENABLED", True)
+
 # ---------------------------------------------------------------------------
 # Read-only daily performance viewer (upstream project owns all writes)
 # ---------------------------------------------------------------------------
