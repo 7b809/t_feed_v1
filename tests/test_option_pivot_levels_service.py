@@ -1,6 +1,10 @@
+import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from services import option_pivot_levels_service as pivots
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def _contract(key="NSE_FO|12345"):
@@ -15,58 +19,106 @@ def _contract(key="NSE_FO|12345"):
     }
 
 
-def test_computes_and_saves_only_seven_opening_pivot_levels(monkeypatch, tmp_path):
+def _candle(timestamp, high=22000, low=21900):
+    return {
+        "timestamp": timestamp,
+        "open": low + 60,
+        "high": high,
+        "low": low,
+        "close": low + 80,
+    }
+
+
+def test_default_intervals_are_one_and_fifteen_minutes(monkeypatch):
+    monkeypatch.delenv("OPTION_PIVOT_INTERVALS", raising=False)
+    assert pivots.parse_intervals() == [1, 15]
+
+
+def test_interval_parser_validates_deduplicates_and_sorts():
+    assert pivots.parse_intervals("15,1,5m,15,99,abc") == [1, 5, 15]
+
+
+def test_completed_candle_alignment_uses_0915_session_anchor():
+    now = datetime(2026, 11, 23, 9, 30, 5, tzinfo=IST)
+    assert pivots.latest_completed_candle_start("2026-11-23", 15, now) == datetime(
+        2026, 11, 23, 9, 15, tzinfo=IST
+    )
+    assert pivots.latest_completed_candle_start("2026-11-23", 1, now) == datetime(
+        2026, 11, 23, 9, 29, tzinfo=IST
+    )
+
+
+def test_no_interval_is_due_before_first_candle_closes():
+    now = datetime(2026, 11, 23, 9, 15, 3, tzinfo=IST)
+    assert pivots.latest_completed_candle_start("2026-11-23", 1, now) is None
+    assert pivots.latest_completed_candle_start("2026-11-23", 15, now) is None
+
+
+def test_computes_one_and_fifteen_minute_files_independently(monkeypatch, tmp_path):
+    calls = []
+
     class FakeFetcher:
         def __init__(self, token):
             assert token == "test-token"
 
         def fetch_intraday_candles(self, instrument_key, unit, interval):
-            assert instrument_key == "NSE_FO|12345"
-            assert unit == "minutes"
-            assert interval == "1"
-            # Deliberately reverse ordered: the earliest candle must be selected.
+            calls.append((instrument_key, unit, interval))
+            if interval == "1":
+                return [
+                    _candle("2026-11-23T09:29:00+05:30", 22020, 21980),
+                    _candle("2026-11-23T09:15:00+05:30", 22000, 21900),
+                ]
+            assert interval == "15"
             return [
-                {
-                    "timestamp": "2026-11-22T09:15:00+05:30",
-                    "open": 99000, "high": 99999, "low": 98000, "close": 99500,
-                },
-                {
-                    "timestamp": "2026-11-23T09:16:00+05:30",
-                    "open": 22010, "high": 22020, "low": 21980, "close": 22000,
-                },
-                {
-                    "timestamp": "2026-11-23T09:15:00+05:30",
-                    "open": 21960, "high": 22000, "low": 21900, "close": 21980,
-                },
+                _candle("2026-11-23T09:15:00+05:30", 22100, 21800),
             ]
 
     monkeypatch.setattr(pivots, "CandleFetcher", FakeFetcher)
     service = pivots.OptionInstrumentPivotLevelsService(
-        root=tmp_path, requests_per_second=0, max_retries=0
+        root=tmp_path, requests_per_second=0, max_retries=0, intervals=[1, 15]
     )
-    result = service.process_contracts([_contract()], "test-token", "2026-11-23")
+    now = datetime(2026, 11, 23, 9, 30, 5, tzinfo=IST)
+    result = service.process_contracts(
+        [_contract()], "test-token", "2026-11-23", now=now
+    )
 
-    assert result["computed"] == 1
-    assert result["failed"] == 0
-    path = next(tmp_path.rglob("pivot_levels.json"))
-    import json
-    saved = json.loads(path.read_text(encoding="utf-8"))
+    one = json.loads(next(tmp_path.rglob("pivot_levels.json")).read_text(encoding="utf-8"))
+    fifteen_path = next(tmp_path.rglob("pivot_levels_15m.json"))
+    fifteen = json.loads(fifteen_path.read_text(encoding="utf-8"))
 
-    assert saved["source_candle_timestamp"] == "2026-11-23T09:15:00+05:30"
-    assert saved["levels"] == {
-        "R3": 22100.0,
-        "R2": 22050.0,
-        "R1": 22000.0,
-        "AVG": 21950.0,
-        "S1": 21900.0,
-        "S2": 21850.0,
-        "S3": 21800.0,
-    }
-    assert set(saved["levels"]) == set(pivots.LEVEL_KEYS)
-    assert "candles" not in saved
+    assert result["intervals"]["1m"]["computed"] == 1
+    assert result["intervals"]["15m"]["computed"] == 1
+    assert one["interval_minutes"] == 1
+    assert one["source_candle_timestamp"] == "2026-11-23T09:29:00+05:30"
+    assert fifteen["interval_minutes"] == 15
+    assert fifteen["source_candle_timestamp"] == "2026-11-23T09:15:00+05:30"
+    assert set(one["levels"]) == set(pivots.LEVEL_KEYS)
+    assert set(fifteen["levels"]) == set(pivots.LEVEL_KEYS)
+    assert {call[2] for call in calls} == {"1", "15"}
 
 
-def test_existing_today_pivot_is_not_fetched_again(monkeypatch, tmp_path):
+def test_does_not_replace_levels_with_an_incomplete_or_missing_candle(monkeypatch, tmp_path):
+    class FakeFetcher:
+        def __init__(self, token):
+            pass
+
+        def fetch_intraday_candles(self, instrument_key, unit, interval):
+            # Target is 09:30 for a 15m interval; only an older candle exists.
+            return [_candle("2026-11-23T09:15:00+05:30")]
+
+    monkeypatch.setattr(pivots, "CandleFetcher", FakeFetcher)
+    service = pivots.OptionInstrumentPivotLevelsService(
+        root=tmp_path, requests_per_second=0, max_retries=0, intervals=[15]
+    )
+    now = datetime(2026, 11, 23, 9, 46, 0, tzinfo=IST)
+    result = service.process_contracts(
+        [_contract()], "test-token", "2026-11-23", now=now
+    )
+    assert result["intervals"]["15m"]["failed"] == 1
+    assert list(tmp_path.rglob("pivot_levels_15m.json")) == []
+
+
+def test_existing_interval_timestamp_is_not_fetched_again(monkeypatch, tmp_path):
     calls = []
 
     class FakeFetcher:
@@ -75,46 +127,31 @@ def test_existing_today_pivot_is_not_fetched_again(monkeypatch, tmp_path):
 
         def fetch_intraday_candles(self, *args, **kwargs):
             calls.append(args)
-            raise AssertionError("existing pivot should be skipped")
+            raise AssertionError("existing interval file should be skipped")
 
     monkeypatch.setattr(pivots, "CandleFetcher", FakeFetcher)
-    service = pivots.OptionInstrumentPivotLevelsService(
-        root=tmp_path, requests_per_second=0, max_retries=0
-    )
     contract = _contract()
     folder = pivots._contract_folder(tmp_path, contract, "20261123")
     folder.mkdir(parents=True)
-    (folder / "pivot_levels.json").write_text(
-        '{"trade_date_ist":"2026-11-23","instrument_key":"NSE_FO|12345",'
-        '"source_candle_timestamp":"2026-11-23T09:15:00+05:30",'
-        '"levels":{"R3":1,"R2":2,"R1":3,"AVG":4,"S1":5,"S2":6,"S3":7}}',
-        encoding="utf-8",
-    )
+    target = datetime(2026, 11, 23, 9, 15, tzinfo=IST)
+    doc = {
+        "trade_date_ist": "2026-11-23",
+        "instrument_key": "NSE_FO|12345",
+        "interval_minutes": 15,
+        "source_candle_timestamp": target.isoformat(),
+        "levels": {name: 1 for name in pivots.LEVEL_KEYS},
+    }
+    (folder / "pivot_levels_15m.json").write_text(json.dumps(doc), encoding="utf-8")
 
-    result = service.process_contracts([contract], "test-token", "2026-11-23")
-    assert result["already_present"] == 1
-    assert calls == []
-
-
-def test_rejects_yesterdays_candle_for_today_file(monkeypatch, tmp_path):
-    class FakeFetcher:
-        def __init__(self, token):
-            pass
-
-        def fetch_intraday_candles(self, *args, **kwargs):
-            return [{
-                "timestamp": "2026-11-20T09:15:00+05:30",
-                "open": 100, "high": 110, "low": 90, "close": 105,
-            }]
-
-    monkeypatch.setattr(pivots, "CandleFetcher", FakeFetcher)
     service = pivots.OptionInstrumentPivotLevelsService(
-        root=tmp_path, requests_per_second=0, max_retries=0
+        root=tmp_path, requests_per_second=0, max_retries=0, intervals=[15]
     )
-    result = service.process_contracts([_contract()], "test-token", "2026-11-23")
-
-    assert result["failed"] == 1
-    assert list(tmp_path.rglob("pivot_levels.json")) == []
+    now = datetime(2026, 11, 23, 9, 30, 5, tzinfo=IST)
+    result = service.process_contracts(
+        [contract], "test-token", "2026-11-23", now=now
+    )
+    assert result["intervals"]["15m"]["already_present"] == 1
+    assert calls == []
 
 
 def test_one_contract_failure_does_not_stop_remaining_contracts(monkeypatch, tmp_path):
@@ -125,43 +162,19 @@ def test_one_contract_failure_does_not_stop_remaining_contracts(monkeypatch, tmp
         def fetch_intraday_candles(self, instrument_key, *args, **kwargs):
             if instrument_key == "NSE_FO|bad":
                 raise pivots.CandleFetchError("provider returned no candles")
-            return [{
-                "timestamp": "2026-11-23T09:15:00+05:30",
-                "open": 100, "high": 110, "low": 90, "close": 105,
-            }]
+            return [_candle("2026-11-23T09:15:00+05:30")]
 
     monkeypatch.setattr(pivots, "CandleFetcher", FakeFetcher)
     service = pivots.OptionInstrumentPivotLevelsService(
-        root=tmp_path, requests_per_second=0, max_retries=0
+        root=tmp_path, requests_per_second=0, max_retries=0, intervals=[15]
     )
+    now = datetime(2026, 11, 23, 9, 30, 5, tzinfo=IST)
     result = service.process_contracts(
         [_contract("NSE_FO|bad"), _contract("NSE_FO|good")],
-        "test-token",
-        "2026-11-23",
+        "test-token", "2026-11-23", now=now,
     )
-
-    assert result["failed"] == 1
-    assert result["computed"] == 1
-
-
-def test_does_not_use_0916_when_0915_is_missing(monkeypatch, tmp_path):
-    class FakeFetcher:
-        def __init__(self, token):
-            pass
-
-        def fetch_intraday_candles(self, *args, **kwargs):
-            return [{
-                "timestamp": "2026-11-23T09:16:00+05:30",
-                "open": 100, "high": 110, "low": 90, "close": 105,
-            }]
-
-    monkeypatch.setattr(pivots, "CandleFetcher", FakeFetcher)
-    service = pivots.OptionInstrumentPivotLevelsService(
-        root=tmp_path, requests_per_second=0, max_retries=0
-    )
-    result = service.process_contracts([_contract()], "test-token", "2026-11-23")
-    assert result["failed"] == 1
-    assert list(tmp_path.rglob("pivot_levels.json")) == []
+    assert result["intervals"]["15m"]["failed"] == 1
+    assert result["intervals"]["15m"]["computed"] == 1
 
 
 def test_contracts_are_processed_concurrently(monkeypatch, tmp_path):
@@ -184,16 +197,17 @@ def test_contracts_are_processed_concurrently(monkeypatch, tmp_path):
             time.sleep(0.04)
             with lock:
                 active -= 1
-            return [{
-                "timestamp": "2026-11-23T09:15:00+05:30",
-                "open": 100, "high": 110, "low": 90, "close": 105,
-            }]
+            return [_candle("2026-11-23T09:15:00+05:30")]
 
     monkeypatch.setattr(pivots, "CandleFetcher", FakeFetcher)
     service = pivots.OptionInstrumentPivotLevelsService(
-        root=tmp_path, requests_per_second=0, max_retries=0, max_workers=4
+        root=tmp_path, requests_per_second=0, max_retries=0,
+        max_workers=4, intervals=[15],
     )
     contracts = [_contract(f"NSE_FO|{index}") for index in range(8)]
-    result = service.process_contracts(contracts, "test-token", "2026-11-23")
-    assert result["computed"] == 8
+    now = datetime(2026, 11, 23, 9, 30, 5, tzinfo=IST)
+    result = service.process_contracts(
+        contracts, "test-token", "2026-11-23", now=now
+    )
+    assert result["intervals"]["15m"]["computed"] == 8
     assert max_active > 1
