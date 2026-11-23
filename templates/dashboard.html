@@ -2,44 +2,203 @@
 {% block title %}Orders dashboard{% endblock %}
 {% block page_heading %}Orders dashboard{% endblock %}
 {% block content %}
+
+<style>
+  /* --- New portfolio cards --- */
+  .portfolio-pnl-grid.is-quad { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .portfolio-pnl-card .status-value { font-size: 1.35rem; letter-spacing: 0.04em; font-weight: 600; }
+  .guard-progress {
+    margin-top: 10px; height: 6px; border-radius: 3px; overflow: hidden;
+    background: rgba(255,255,255,0.12);
+  }
+  .guard-progress > span {
+    display: block; height: 100%; width: 0%;
+    background: linear-gradient(90deg, #54d8a0, #3ba57d);
+    transition: width 0.35s ease, background 0.35s ease;
+  }
+  .guard-progress.is-negative > span {
+    background: linear-gradient(90deg, #ff6b6b, #c94a4a);
+  }
+  .portfolio-table td small {
+    display: block; color: var(--muted, #9aa4b2); font-size: 0.72rem; margin-top: 2px;
+  }
+  .cell-pnl.pos { color: #54d8a0; }
+  .cell-pnl.neg { color: #ff6b6b; }
+  .count-chip-tight { font-size: 0.75rem; }
+</style>
+
 <section class="welcome-row">
-  <div><div class="eyebrow">LIVE BROKER + PROJECT ACTIVITY</div><h1>Trading dashboard</h1><p>Positions and holdings are fetched directly from Upstox. The order ledger remains the project's local audit history.</p></div>
+  <div>
+    <div class="eyebrow">LIVE BROKER + PROJECT ACTIVITY</div>
+    <h1>Trading dashboard</h1>
+    <p>Positions and holdings are fetched directly from Upstox. The order ledger remains the project's local audit history.</p>
+  </div>
   <a href="/buy" class="btn btn-primary btn-lg"><i class="bi bi-plus-lg me-2"></i>Place buy order</a>
 </section>
+
 <section class="portfolio-overview">
   <div class="portfolio-heading">
-    <div><h2>Broker portfolio</h2><p id="portfolioStatus">Loading live Upstox positions and holdings…</p></div>
-    <button class="btn btn-light btn-sm" id="refreshPortfolio"><i class="bi bi-arrow-clockwise me-1"></i>Refresh portfolio</button>
+    <div>
+      <h2>Broker portfolio</h2>
+      <p id="portfolioStatus">Loading live Upstox positions, holdings and P&amp;L…</p>
+    </div>
+    <button class="btn btn-light btn-sm" id="refreshPortfolio">
+      <i class="bi bi-arrow-clockwise me-1"></i>Refresh portfolio
+    </button>
   </div>
-  <div class="portfolio-pnl-grid">
-    <div class="portfolio-pnl-card"><div class="metric-label">Today's P&amp;L · Short-term positions</div><div class="portfolio-pnl-value" id="todayPnl">—</div><div class="metric-foot" id="realisedPnl">Realised — · Unrealised —</div></div>
-    <div class="portfolio-pnl-card"><div class="metric-label">Total P&amp;L · Positions + holdings</div><div class="portfolio-pnl-value" id="totalPnl">—</div><div class="metric-foot" id="holdingsPnl">Long-term holdings P&amp;L —</div></div>
+
+  <!-- ==== Four cards: P&L / Target / Guard / Exposure ==== -->
+  <div class="portfolio-pnl-grid is-quad">
+    <div class="portfolio-pnl-card">
+      <div class="metric-label">Today's total P&amp;L</div>
+      <div class="portfolio-pnl-value" id="todayPnl">—</div>
+      <div class="metric-foot" id="realisedPnl">Realised — · Unrealised —</div>
+    </div>
+
+    <div class="portfolio-pnl-card">
+      <div class="metric-label">Daily profit target</div>
+      <div class="portfolio-pnl-value" id="profitTarget">—</div>
+      <div class="metric-foot" id="guardPnl">Guard P&amp;L —</div>
+      <div class="guard-progress" id="targetProgressWrap">
+        <span id="targetProgress"></span>
+      </div>
+    </div>
+
+    <div class="portfolio-pnl-card">
+      <div class="metric-label">Guard / entry status</div>
+      <div class="portfolio-pnl-value status-value" id="guardState">—</div>
+      <div class="metric-foot" id="guardDetail">Loading…</div>
+    </div>
+
+    <div class="portfolio-pnl-card">
+      <div class="metric-label">Account exposure</div>
+      <div class="portfolio-pnl-value" id="positionsCountCard">—</div>
+      <div class="metric-foot" id="holdingsCountCard">Holdings —</div>
+    </div>
   </div>
+
+  <!-- ==== Positions + holdings tables ==== -->
   <div class="portfolio-grid">
     <section class="panel-card portfolio-table-card">
-      <div class="panel-header"><div><h2>Current positions <span class="count-chip" id="positionsCount">—</span></h2><p>All Upstox short-term positions, including orders placed outside this project</p></div></div>
-      <div class="orders-table-wrap"><table class="orders-table portfolio-table"><thead><tr><th>Instrument</th><th>Product</th><th>Net qty</th><th>Avg price</th><th>LTP</th><th>Realised P&amp;L</th><th>Unrealised P&amp;L</th></tr></thead><tbody id="positionsBody"><tr><td colspan="7" class="table-empty">Loading positions…</td></tr></tbody></table></div>
+      <div class="panel-header">
+        <div>
+          <h2>Current positions <span class="count-chip count-chip-tight" id="positionsCount">—</span></h2>
+          <p>All Upstox short-term positions, including orders placed outside this project</p>
+        </div>
+      </div>
+      <div class="orders-table-wrap">
+        <table class="orders-table portfolio-table">
+          <thead>
+            <tr>
+              <th>Instrument</th>
+              <th>Product</th>
+              <th>Net qty</th>
+              <th>Day buy / sell</th>
+              <th>Avg / LTP</th>
+              <th>Realised</th>
+              <th>Unrealised</th>
+              <th>Total P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody id="positionsBody">
+            <tr><td colspan="8" class="table-empty">Loading positions…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
+
     <section class="panel-card portfolio-table-card">
-      <div class="panel-header"><div><h2>Long-term holdings <span class="count-chip" id="holdingsCount">—</span></h2><p>Demat holdings from Upstox, including positions carried forward overnight</p></div></div>
-      <div class="orders-table-wrap"><table class="orders-table portfolio-table"><thead><tr><th>Instrument</th><th>Exchange</th><th>Product</th><th>Qty</th><th>Avg price</th><th>LTP</th><th>Holding P&amp;L</th></tr></thead><tbody id="holdingsBody"><tr><td colspan="7" class="table-empty">Loading holdings…</td></tr></tbody></table></div>
+      <div class="panel-header">
+        <div>
+          <h2>Long-term holdings <span class="count-chip count-chip-tight" id="holdingsCount">—</span></h2>
+          <p>Demat holdings from Upstox, including positions carried forward overnight</p>
+        </div>
+      </div>
+      <div class="orders-table-wrap">
+        <table class="orders-table portfolio-table">
+          <thead>
+            <tr>
+              <th>Instrument</th>
+              <th>Exchange</th>
+              <th>Product</th>
+              <th>Qty</th>
+              <th>Avg price</th>
+              <th>LTP</th>
+              <th>Holding P&amp;L</th>
+            </tr>
+          </thead>
+          <tbody id="holdingsBody">
+            <tr><td colspan="7" class="table-empty">Loading holdings…</td></tr>
+          </tbody>
+        </table>
+      </div>
     </section>
   </div>
-  <p class="portfolio-note" id="portfolioUpdated">Broker P&amp;L is calculated from Upstox response fields. Total P&amp;L is today's positions P&amp;L plus long-term holdings P&amp;L; it is not a lifetime realised-profit statement.</p>
+
+  <p class="portfolio-note" id="portfolioUpdated">
+    Broker P&amp;L is calculated from Upstox response fields. Guard P&amp;L may include unrealised P&amp;L when enabled.
+  </p>
 </section>
 
 <div class="metric-grid">
-  <div class="metric-card"><div class="metric-label">Today's project orders</div><div class="metric-value" id="metricTotal">—</div><div class="metric-foot">Local project ledger</div></div>
-  <div class="metric-card"><div class="metric-label">Open project orders</div><div class="metric-value" id="metricOpen">—</div><div class="metric-foot">Local tracked orders</div></div>
-  <div class="metric-card"><div class="metric-label">Order history</div><div class="metric-value" id="metricDays">—</div><div class="metric-foot">Available local dates</div></div>
-  <div class="metric-card metric-card-dark"><div class="metric-label">Execution status</div><div class="metric-value status-value" id="tradingState">Checking…</div><div class="metric-foot" id="environmentState">Safety configuration</div></div>
+  <div class="metric-card">
+    <div class="metric-label">Today's project orders</div>
+    <div class="metric-value" id="metricTotal">—</div>
+    <div class="metric-foot">Local project ledger</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Open project orders</div>
+    <div class="metric-value" id="metricOpen">—</div>
+    <div class="metric-foot">Local tracked orders</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Order history</div>
+    <div class="metric-value" id="metricDays">—</div>
+    <div class="metric-foot">Available local dates</div>
+  </div>
+  <div class="metric-card metric-card-dark">
+    <div class="metric-label">Execution status</div>
+    <div class="metric-value status-value" id="tradingState">Checking…</div>
+    <div class="metric-foot" id="environmentState">Safety configuration</div>
+  </div>
 </div>
 
 <section class="panel-card">
-  <div class="panel-header flex-wrap gap-3"><div><h2>Project order ledger</h2><p>Local audit history for orders and GTTs placed or tracked by this service</p></div><div class="d-flex align-items-center gap-2"><label class="small muted" for="historyDate">Trading date</label><select id="historyDate" class="form-select form-select-sm date-select"><option value="today">Today</option></select><button class="btn btn-light btn-sm" id="refreshOrders"><i class="bi bi-arrow-clockwise"></i></button></div></div>
-  <div class="filter-tabs"><button class="filter-tab active" data-filter="all">All activity</button><button class="filter-tab" data-filter="ORDER">Placed orders</button><button class="filter-tab" data-filter="GTT">GTT orders</button><button class="filter-tab" data-filter="EXIT">Exit actions</button><button class="filter-tab" data-filter="EXCEPTION">Blocked / errors</button></div>
-  <div id="ordersContainer"><div class="empty-state"><div class="spinner-border spinner-border-sm"></div><span>Loading project order ledger…</span></div></div>
+  <div class="panel-header flex-wrap gap-3">
+    <div>
+      <h2>Project order ledger</h2>
+      <p>Local audit history for orders and GTTs placed or tracked by this service</p>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+      <label class="small muted" for="historyDate">Trading date</label>
+      <select id="historyDate" class="form-select form-select-sm date-select">
+        <option value="today">Today</option>
+      </select>
+      <button class="btn btn-light btn-sm" id="refreshOrders"><i class="bi bi-arrow-clockwise"></i></button>
+    </div>
+  </div>
+  <div class="filter-tabs">
+    <button class="filter-tab active" data-filter="all">All activity</button>
+    <button class="filter-tab" data-filter="ORDER">Placed orders</button>
+    <button class="filter-tab" data-filter="GTT">GTT orders</button>
+    <button class="filter-tab" data-filter="EXIT">Exit actions</button>
+    <button class="filter-tab" data-filter="EXCEPTION">Blocked / errors</button>
+  </div>
+  <div id="ordersContainer">
+    <div class="empty-state">
+      <div class="spinner-border spinner-border-sm"></div>
+      <span>Loading project order ledger…</span>
+    </div>
+  </div>
 </section>
-<section class="danger-panel"><div><div class="danger-title"><i class="bi bi-exclamation-triangle me-2"></i>Exit all open positions</div><p>Uses Upstox's position square-off endpoint and may affect every eligible position in the selected account, including positions opened outside this project.</p></div><button id="exitAllBtn" class="btn btn-outline-danger"><i class="bi bi-power me-2"></i>Exit all positions</button></section>
+
+<section class="danger-panel">
+  <div>
+    <div class="danger-title"><i class="bi bi-exclamation-triangle me-2"></i>Exit all open positions</div>
+    <p>Uses Upstox's position square-off endpoint and may affect every eligible position in the selected account, including positions opened outside this project.</p>
+  </div>
+  <button id="exitAllBtn" class="btn btn-outline-danger"><i class="bi bi-power me-2"></i>Exit all positions</button>
+</section>
+
 {% endblock %}
 {% block scripts %}<script src="/static/dashboard.js"></script>{% endblock %}
