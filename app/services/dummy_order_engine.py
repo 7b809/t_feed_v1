@@ -1566,6 +1566,12 @@ class DummyOrderEngine:
                 return
             if (order.get("target_instrument_key") or order.get("instrument_key")) != instrument_key:
                 return
+            # A duplicate delivery of the exact tick that booked the first lot
+            # must not immediately book the runner at its still-active target.
+            partial = order.get("partial_exit") if isinstance(order.get("partial_exit"), dict) else {}
+            partial_stamp = _dt(partial.get("exit_time_ist"))
+            if order.get("partial_exit_done") and partial_stamp and tick_time <= partial_stamp:
+                return
             stamp = tick_time.isoformat()
             changed = False
             high, low = order.get("high_price"), order.get("low_price")

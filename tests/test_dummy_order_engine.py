@@ -389,6 +389,11 @@ def test_two_lot_target_takes_one_lot_and_moves_runner_stop(tmp_path):
         assert order["stop_loss_price"] == 148.45
         assert order["target_price"] == 173.45
 
+        # Duplicate delivery of the exact target tick must not immediately
+        # close the runner against its still-active target.
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 173.45}}, stamp)
+        assert store.load(isolation_id)["orders"]["supertrend"]["status"] == "DUMMY_PLACED"
+
         # A later touch of the runner stop closes the remaining lot and
         # combines its P&L with the already-realized first-lot profit.
         stamp2 = (datetime.fromisoformat(stamp) + timedelta(seconds=60)).isoformat()
