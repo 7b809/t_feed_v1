@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 
 from api.routes.orders import _raise_http, _service
 from core.external_api_auth import require_external_api_auth
@@ -17,6 +18,7 @@ from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderReque
 from services.gtt_service import GTTServiceError, cancel_gtt_order, cancel_gtt_orders, place_gtt_order
 from services.daily_profit_guard_service import DailyProfitGuardError, get_today_pnl_status
 from services.orderflow_cleanup_service import OrderflowCleanupError, OrderflowCleanupService
+from services.upstox_order_api import UpstoxOrderAPIError, get_order_book
 
 logger = get_logger(__file__)
 _cleanup_service = OrderflowCleanupService()
@@ -72,7 +74,10 @@ def external_exit_orders(body: OrderIdsRequest):
 @router.post("/orders/exit-all")
 def external_exit_all(body: ExitAllRequest = ExitAllRequest()):
     try:
-        return _service.exit_all_positions(tag=body.tag, segment=body.segment)
+        result = _service.exit_all_positions(tag=body.tag, segment=body.segment)
+        if result.get("status") == "exit_all_partial_success":
+            return JSONResponse(status_code=207, content=result)
+        return result
     except Exception as exc:
         _raise_http(exc, action="exit")
 
@@ -169,3 +174,21 @@ def external_cancel_gtt_bulk(body: GTTOrderIDsRequest):
     except Exception:
         logger.exception("Unexpected external bulk GTT cancellation failure")
         raise HTTPException(status_code=500, detail={"error": "Unexpected bulk GTT cancellation error."}) from None
+
+
+@router.post("/orders/order-book")
+def external_broker_order_book(body: dict[str, Any]):
+    """Fetch current-day Upstox orders; router dependency validates body.api_token."""
+    try:
+        return get_order_book()
+    except UpstoxOrderAPIError as exc:
+        detail = {"error": str(exc)}
+        if exc.payload:
+            detail["broker_error"] = exc.payload
+        raise HTTPException(status_code=exc.status_code, detail=detail) from None
+    except Exception:
+        logger.exception("Could not retrieve the external Upstox broker order book")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "The Upstox broker order book is temporarily unavailable."},
+        ) from None

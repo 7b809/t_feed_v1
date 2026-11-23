@@ -7,6 +7,7 @@ from typing import Any
 
 import upstox_client
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from core.config import (
     DEFAULT_ORDER_QUANTITY,
@@ -32,6 +33,7 @@ from services.order_service import (
     _exception_text,
     _parse_api_exception,
 )
+from services.upstox_order_api import UpstoxOrderAPIError, get_order_book
 
 logger = get_logger(__file__)
 router = APIRouter(prefix="/api/v1", tags=["orders"])
@@ -101,6 +103,12 @@ def _raise_http(exc: Exception, *, action: str | None = None):
     4. Anything else                       -> 502 (with traceback in the log)
     """
     resolved_action = action or _infer_action_from_exc(exc)
+
+    if isinstance(exc, UpstoxOrderAPIError):
+        detail = {"error": str(exc)}
+        if exc.payload:
+            detail["broker_error"] = exc.payload
+        raise HTTPException(status_code=exc.status_code, detail=detail) from exc
 
     if isinstance(exc, DailyProfitGuardError):
         raise HTTPException(
@@ -333,7 +341,10 @@ def exit_orders_by_ids(body: OrderIdsRequest):
 @router.post("/orders/exit-all")
 def exit_all_positions(body: ExitAllRequest = ExitAllRequest()):
     try:
-        return _service.exit_all_positions(tag=body.tag, segment=body.segment)
+        result = _service.exit_all_positions(tag=body.tag, segment=body.segment)
+        if result.get("status") == "exit_all_partial_success":
+            return JSONResponse(status_code=207, content=result)
+        return result
     except Exception as exc:
         _raise_http(exc, action="exit")
 
@@ -352,6 +363,24 @@ def exit_single_order(order_id: str):
         return _service.exit_order(order_id)
     except Exception as exc:
         _raise_http(exc, action="exit")
+
+
+@router.get("/orders/order-book")
+def broker_order_book():
+    """Fetch the current trading-day order book directly from Upstox."""
+    try:
+        return get_order_book()
+    except UpstoxOrderAPIError as exc:
+        detail = {"error": str(exc)}
+        if exc.payload:
+            detail["broker_error"] = exc.payload
+        raise HTTPException(status_code=exc.status_code, detail=detail) from None
+    except Exception:
+        logger.exception("Could not retrieve the Upstox broker order book")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "The Upstox broker order book is temporarily unavailable."},
+        ) from None
 
 
 @router.get("/orders/{order_id}")

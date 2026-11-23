@@ -232,6 +232,53 @@
     }
   };
 
+  /* ===================== LIVE BROKER ORDER BOOK ===================== */
+
+  const renderBrokerOrderBook = data => {
+    const orders = Array.isArray(data?.data) ? data.data : [];
+    $("brokerOrderCount").textContent = data?.count ?? orders.length;
+    if (!orders.length) {
+      $("brokerOrdersBody").innerHTML =
+        '<tr><td colspan="9" class="table-empty">No orders returned by Upstox for the current trading day.</td></tr>';
+      return;
+    }
+    $("brokerOrdersBody").innerHTML = orders.map(order => {
+      const symbol = order.trading_symbol || order.tradingsymbol || order.instrument_token || "—";
+      const message = order.status_message || order.status_message_raw || "";
+      const filledPending = qty(order.filled_quantity) + " / " + qty(order.pending_quantity);
+      return '<tr>' +
+        '<td><strong>' + esc(symbol) + '</strong><small>' + esc(order.instrument_token || "") + '</small></td>' +
+        '<td><strong>' + esc(order.order_id || "—") + '</strong><small>' + esc(order.exchange_order_id || "") + '</small></td>' +
+        '<td>' + esc(order.transaction_type || "—") + '</td>' +
+        '<td>' + esc(qty(order.quantity)) + '</td>' +
+        '<td>' + esc(filledPending) + '</td>' +
+        '<td>' + esc(order.product || "—") + ' · ' + esc(order.order_type || "—") + '</td>' +
+        '<td>' + esc(money(order.average_price ?? order.price)) + '</td>' +
+        '<td><span class="status-pill ' + statusClass(order.status) + '">' + esc(order.status || "UNKNOWN") + '</span>' +
+          (message ? '<small>' + esc(message) + '</small>' : '') + '</td>' +
+        '<td>' + esc(fmt(order.order_timestamp || order.exchange_timestamp)) + '</td>' +
+        '</tr>';
+    }).join("");
+  };
+
+  const loadBrokerOrderBook = async () => {
+    $("brokerOrderBookStatus").textContent = "Fetching current-day orders directly from Upstox…";
+    $("brokerOrderBookStatus").classList.remove("text-danger");
+    try {
+      const data = await safeApi("/api/v1/orders/order-book");
+      renderBrokerOrderBook(data);
+      $("brokerOrderBookStatus").textContent =
+        "Upstox broker order book · " + (data.scope || "current trading day") +
+        " · refreshed " + new Date().toLocaleTimeString("en-IN");
+    } catch (error) {
+      $("brokerOrderBookStatus").textContent = "Broker order book unavailable: " + error.message;
+      $("brokerOrderBookStatus").classList.add("text-danger");
+      $("brokerOrdersBody").innerHTML =
+        '<tr><td colspan="9" class="table-empty">Unable to load current-day Upstox orders.</td></tr>';
+      toast("Could not refresh Upstox order book: " + error.message, "error");
+    }
+  };
+
   /* ===================== LEDGER ===================== */
 
   const render = () => {
@@ -312,6 +359,7 @@
 
   const init = async () => {
     loadPortfolio();
+    loadBrokerOrderBook();
 
     const [datesR, defaultsR, todayR] = await Promise.allSettled([
       safeApi("/api/v1/orders/dates"),
@@ -358,6 +406,7 @@
   dateSelect.addEventListener("change", () => loadDate(dateSelect.value));
   $("refreshOrders").addEventListener("click", () => loadDate(dateSelect.value));
   $("refreshPortfolio").addEventListener("click", loadPortfolio);
+  $("refreshBrokerOrders").addEventListener("click", loadBrokerOrderBook);
 
   document.querySelectorAll(".filter-tab").forEach(button =>
     button.addEventListener("click", () => {
@@ -402,12 +451,29 @@
   });
 
   $("exitAllBtn").addEventListener("click", async () => {
-    if (!confirm("This submits an exit-all-positions request to Upstox. Continue?")) return;
+    const tag = $("exitTag").value.trim();
+    const segment = $("exitSegment").value;
+    const filters = {};
+    if (tag) filters.tag = tag;
+    if (segment) filters.segment = segment;
+    const scope = [tag ? "tag=" + tag : null, segment ? "segment=" + segment : null].filter(Boolean).join(", ") || "all eligible account positions";
+    if (!confirm("Submit the official Upstox Exit All Positions request for " + scope +
+      "? This places opposite-side MARKET orders and may affect positions opened outside this project.")) return;
     $("exitAllBtn").disabled = true;
     try {
-      const result = await safeApi("/api/v1/orders/exit-all", { method:"POST", body: JSON.stringify({}) });
-      toast("Exit-all submitted.", "success");
+      const result = await safeApi("/api/v1/orders/exit-all", {
+        method:"POST",
+        body: JSON.stringify(filters)
+      });
+      const summary = result.summary || {};
+      if (result.status === "exit_all_partial_success" || Number(summary.error || 0) > 0) {
+        toast("Exit-all partially accepted: " + (summary.success ?? result.order_ids?.length ?? 0) +
+          " successful, " + (summary.error ?? result.errors?.length ?? 0) + " failed. Review broker response.", "error");
+      } else {
+        toast("Exit-all request submitted. Verify filled quantities in the refreshed order book and positions.", "success");
+      }
       console.info("[dashboard] exit-all response", result);
+      await loadBrokerOrderBook();
       await loadDate(dateSelect.value);
       await loadPortfolio();
     } catch (error) {

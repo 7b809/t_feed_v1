@@ -192,12 +192,29 @@
   </div>
 </section>
 
-<section class="danger-panel">
-  <div>
-    <div class="danger-title"><i class="bi bi-exclamation-triangle me-2"></i>Exit all open positions</div>
-    <p>Uses Upstox's position square-off endpoint and may affect every eligible position in the selected account, including positions opened outside this project.</p>
+<section class="danger-panel exit-all-panel">
+  <div class="exit-all-copy">
+    <div class="danger-title"><i class="bi bi-exclamation-triangle me-2"></i>Exit Upstox open positions</div>
+    <p>Uses the official Upstox REST Exit All Positions API. It can affect positions opened outside this project. Leave both filters blank to request an account-wide exit.</p>
+    <p class="exit-all-warning">Upstox limits this API to 10 positions per request. Delivery orders in the EQ segment are not supported. Tag filtering applies to intraday positions, not carry-forward positions. Execution is subject to market hours.</p>
   </div>
-  <button id="exitAllBtn" class="btn btn-outline-danger"><i class="bi bi-power me-2"></i>Exit all positions</button>
+  <div class="exit-all-controls">
+    <label class="small muted" for="exitSegment">Optional segment</label>
+    <select id="exitSegment" class="form-select form-select-sm">
+      <option value="">All segments</option>
+      <option value="NSE_EQ">NSE_EQ</option>
+      <option value="BSE_EQ">BSE_EQ</option>
+      <option value="NSE_FO">NSE_FO</option>
+      <option value="BSE_FO">BSE_FO</option>
+      <option value="MCX_FO">MCX_FO</option>
+      <option value="NCD_FO">NCD_FO</option>
+      <option value="BCD_FO">BCD_FO</option>
+      <option value="NSE_COM">NSE_COM</option>
+    </select>
+    <label class="small muted" for="exitTag">Optional intraday tag</label>
+    <input id="exitTag" class="form-control form-control-sm" maxlength="40" placeholder="Leave blank for all tags">
+    <button id="exitAllBtn" class="btn btn-outline-danger"><i class="bi bi-power me-2"></i>Exit positions</button>
+  </div>
 </section>
 
 {% endblock %}

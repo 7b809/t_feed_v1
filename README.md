@@ -95,7 +95,9 @@ History is read from `data/orders/YYYY-MM-DD.json` first, then MongoDB when no l
 - `POST /api/v1/orders/place` — BUY-only order placement
 - `POST /api/v1/orders/{order_id}/cancel` and `POST /api/v1/orders/cancel/bulk`
 - `POST /api/v1/orders/{order_id}/exit` and `POST /api/v1/orders/exit-by-ids`
-- `POST /api/v1/orders/exit-all` — broker-native position square-off without order IDs
+- `POST /api/v1/orders/exit-all` — direct official Upstox REST position square-off without order IDs; accepts optional `tag` and `segment` in the JSON body.
+- `GET /api/v1/orders/order-book` — live current-trading-day order book fetched directly from Upstox, including orders placed outside this project.
+- `POST /api/external/v1/orders/order-book` — authenticated external order-book read; body requires `api_token`.
 
 The dashboard asks for confirmation before submitting exit or cancel requests. An exit request is an opposite-side MARKET order for the filled quantity remaining after prior exits; it is not a cancellation. Exit-all uses Upstox's native position exit API and may affect every eligible position in the selected account.
 
@@ -293,3 +295,29 @@ Authenticated external routes:
 Upstox exposes a single-GTT DELETE operation, not an atomic bulk endpoint. Bulk cancellation therefore sends one broker request per ID and returns per-ID results with success/failure counts; partial success is possible.
 
 GTT cancellation has an independent `GTT_CANCEL_ENABLED=true` setting (default true) and no longer depends on `ORDERFLOW_CLEANUP_ENABLED`. Live GTT cancellation requires `UPSTOX_SANDBOX=false` and a valid live access token. `ORDERFLOW_CLEANUP_ENABLED` continues to gate only Orderflow lifecycle cleanup.
+
+
+## Official Upstox order book and Exit All REST APIs
+
+The server now calls the official Upstox REST APIs directly with `requests`; the Exit All route no longer calls the Upstox Python SDK's `OrderApi.exit_positions()` method.
+
+**Order book**
+
+- Upstox request: `GET https://api.upstox.com/v2/order/retrieve-all`.
+- Internal route: `GET /api/v1/orders/order-book`.
+- Authenticated external route: `POST /api/external/v1/orders/order-book`, with `{"api_token":"<32-character-secret>"}`.
+- Returns the broker's current trading-day orders, including orders submitted from Upstox mobile/web and orders not present in the project's local audit ledger.
+- The Upstox order book is a current-day view; it is not lifetime order history.
+
+**Exit All Positions**
+
+- Upstox request: `POST https://api.upstox.com/v2/order/positions/exit`.
+- No JSON request body is sent to Upstox. Optional `tag` and `segment` are sent as query parameters.
+- Project routes: `POST /api/v1/orders/exit-all` and authenticated `POST /api/external/v1/orders/exit-all`.
+- Example body: `{"segment":"NSE_FO","tag":"strategy-a"}`; use `{}` to request all eligible positions.
+- The response preserves `data.order_ids`, per-position `errors`, `summary` counts, and the original broker response. HTTP 207 / `partial_success` responses are returned as `exit_all_partial_success` instead of being described as a full success.
+- The operation is still gated by `TRADING_ENABLED=true`, requires `UPSTOX_SANDBOX=false`, and records an audit entry before sending the broker request.
+
+Important Upstox constraints: Exit All places opposite-side MARKET orders and applies Market Price Protection. It is available during the relevant segment's market hours, does not support Delivery orders in the EQ segment, and the request is limited to at most 10 positions. Upstox executes BUY positions before SELL positions and automatically slices orders where required. Tag filtering is for intraday positions; do not use a tag filter for carry-forward positions. A successful API acknowledgement means exit orders were submitted, not that every exit order has filled. Refresh the order book and positions to verify final quantities.
+
+Dashboard now includes a separate broker order-book panel. It is not merged into the project's local daily order ledger; the ledger remains the project's own persisted audit history.

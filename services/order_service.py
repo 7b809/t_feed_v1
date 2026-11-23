@@ -27,6 +27,7 @@ from core.telegram_notifier import notify_event
 from models.order_models import PlaceOrderRequest
 from repositories.order_repository import OrderRepository, now_iso
 from services.daily_profit_guard_service import DailyProfitGuardError, assert_new_entries_allowed
+from services.upstox_order_api import UpstoxOrderAPIError, submit_exit_positions
 
 logger = get_logger(__file__)
 
@@ -1400,6 +1401,42 @@ class OrderService:
                 "Exit all positions blocked — trading disabled",
                 [f"Reason: {blocked_msg}"],
                 "WARNING",
+            )
+            raise
+        except UpstoxOrderAPIError as exc:
+            err_resp = {
+                "http_status": exc.status_code,
+                "status": "error",
+                "message": str(exc),
+                **exc.payload,
+            }
+            summary_err = str(exc)
+            try:
+                self._append_event(
+                    entry["local_id"],
+                    self._new_event(
+                        "EXIT_ALL_EXCEPTION",
+                        error=summary_err,
+                        broker_error=err_resp,
+                    ),
+                    status="EXIT_ALL_EXCEPTION",
+                    require_mongo=False,
+                )
+                self.repository.update_entry(
+                    entry["local_id"],
+                    {
+                        "error": summary_err,
+                        "broker_error": err_resp,
+                        "last_modified_time": now_iso(),
+                    },
+                    require_mongo=False,
+                )
+            except Exception:
+                logger.exception("Could not save Upstox Exit All API exception")
+            notify_event(
+                "Exit all positions failed",
+                [f"Error: {summary_err}"],
+                "ERROR",
             )
             raise
         except Exception as exc:

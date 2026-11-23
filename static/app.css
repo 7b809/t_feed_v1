@@ -42,3 +42,18 @@
   .portfolio-pnl-card{padding:14px 15px}
   .portfolio-pnl-value{font-size:24px}
 }
+
+
+/* Broker order-book and filtered Exit All controls */
+.broker-order-book-card{margin:0 0 20px}
+.broker-orders-table{min-width:1120px}
+.broker-orders-table td small{display:block;margin-top:4px;color:#929eae;font-size:9px;max-width:250px;white-space:normal;overflow-wrap:anywhere}
+.exit-all-panel{align-items:flex-start}
+.exit-all-copy{min-width:0;flex:1}
+.exit-all-warning{font-size:10px!important;color:#aa777b!important;margin-top:8px!important}
+.exit-all-controls{display:grid;grid-template-columns:minmax(130px,180px) minmax(160px,220px) auto;align-items:end;gap:8px;min-width:min(100%,520px)}
+.exit-all-controls label{grid-column:auto;margin:0 0 -4px}
+.exit-all-controls .form-select,.exit-all-controls .form-control{height:34px;font-size:11px}
+.exit-all-controls button{height:34px;white-space:nowrap}
+@media(max-width:800px){.exit-all-panel{flex-direction:column}.exit-all-controls{width:100%;min-width:0;grid-template-columns:1fr 1fr}.exit-all-controls button{grid-column:1/-1;width:100%}}
+@media(max-width:700px){.broker-order-book-card .panel-header{flex-direction:column}.broker-orders-table{min-width:1100px}}
