@@ -889,6 +889,11 @@ class DummyOrderEngine:
             # Enforce the entry cap before considering another entry. A rejected
             # later signal must never close or modify an existing position.
             if order_count >= order_limit:
+                if (
+                    isinstance(existing_order, dict)
+                    and str(existing_order.get("status") or "").upper().startswith("COMPLETED")
+                ):
+                    self._archive_supertrend_order(state, existing_order)
                 state["supertrend_order_count"] = order_count
                 state["supertrend_order_limit"] = order_limit
                 state["supertrend_entry_window_mode"] = entry_window_mode
