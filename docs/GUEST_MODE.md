@@ -9,7 +9,7 @@ GUEST_MODE_ENABLED=true
 UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES=30
 ```
 
-Set `GUEST_MODE_ENABLED=false` to require authentication for chart and search pages again. Restart the application after changing this setting.
+Set `GUEST_MODE_ENABLED=false` to require authentication for chart and search pages again. Restart the application after changing this setting. Keep `PROD_MODE=true` in Railway. The existing application intentionally disables its authentication middleware when `PROD_MODE=false` for local development; do not expose that mode publicly.
 
 ## Guest allow-list
 
