@@ -35,6 +35,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, Response
 from fastapi.templating import Jinja2Templates
 from core import config  # (likely already imported; add if missing)
+from core.auth import is_authenticated
 
 from services.instrument_registry import instrument_registry
 from routes.upstox_routes import lookup_instrument
@@ -188,6 +189,7 @@ def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
         name="chart.html",
         context={
             "app_name": "NG7",
+            "is_guest": not bool(getattr(request.state, "member", None)) and not is_authenticated(request),
             "instrument_key": instrument_key,
             "instrument_name": instrument_name,
             "instrument": instrument,
