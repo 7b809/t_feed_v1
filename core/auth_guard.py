@@ -44,7 +44,6 @@ PUBLIC_PREFIXES = (
     "/docs",
     "/openapi.json",
     "/redoc",
-    "/api/isolation",
 )
 
 
@@ -84,6 +83,12 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
         path = request.url.path
 
         if _is_public(path):
+            return await call_next(request)
+
+        # The isolation sender webhook remains public at this exact POST path;
+        # its router independently verifies X-Isolation-Key. Read/list routes
+        # under /api/isolation/* must remain authenticated.
+        if path == "/api/isolation" and request.method == "POST":
             return await call_next(request)
 
         member = get_user_session(request)
