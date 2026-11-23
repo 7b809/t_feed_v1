@@ -82,12 +82,15 @@ def test_computes_one_and_fifteen_minute_files_independently(monkeypatch, tmp_pa
         [_contract()], "test-token", "2026-11-23", now=now
     )
 
-    one = json.loads(next(tmp_path.rglob("pivot_levels.json")).read_text(encoding="utf-8"))
+    opening = json.loads(next(tmp_path.rglob("pivot_levels.json")).read_text(encoding="utf-8"))
+    one = json.loads(next(tmp_path.rglob("pivot_levels_1m.json")).read_text(encoding="utf-8"))
     fifteen_path = next(tmp_path.rglob("pivot_levels_15m.json"))
     fifteen = json.loads(fifteen_path.read_text(encoding="utf-8"))
 
     assert result["intervals"]["1m"]["computed"] == 1
     assert result["intervals"]["15m"]["computed"] == 1
+    # The original opening-candle file remains stable for compatibility.
+    assert opening["source_candle_timestamp"] == "2026-11-23T09:15:00+05:30"
     assert one["interval_minutes"] == 1
     assert one["source_candle_timestamp"] == "2026-11-23T09:29:00+05:30"
     assert fifteen["interval_minutes"] == 15
