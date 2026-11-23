@@ -881,8 +881,8 @@ class DummyOrderEngine:
                     isolation_id, eligibility.get("reason"), signal.get("time"),
                 )
                 return
-            # Enforce the entry cap before reversal logic. A rejected later
-            # signal must never close or modify the existing target/SL-managed order.
+            # Enforce the entry cap before considering another entry. A rejected
+            # later signal must never close or modify an existing position.
             if order_count >= order_limit:
                 state["supertrend_order_count"] = order_count
                 state["supertrend_order_limit"] = order_limit
@@ -964,7 +964,7 @@ class DummyOrderEngine:
                     )
                     return
 
-            # Completed orders can be followed by another confirmed signal,            # Completed orders can be followed by another confirmed signal,
+            # Completed orders can be followed by another confirmed signal,
             # but the per-isolation entry cap remains authoritative.
             if isinstance(existing_order, dict) and str(existing_order.get("status") or "").startswith("COMPLETED"):
                 self._archive_supertrend_order(state, existing_order)
