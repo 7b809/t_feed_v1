@@ -32,6 +32,25 @@ LEVEL_KEYS = ("R3", "R2", "R1", "AVG", "S1", "S2", "S3")
 SUPPORTED_INTERVALS = {1, 2, 3, 5, 10, 15, 30}
 
 
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s; using default %s", name, default)
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+        if not math.isfinite(value):
+            raise ValueError("non-finite value")
+        return value
+    except (TypeError, ValueError):
+        logger.warning("Invalid %s; using default %s", name, default)
+        return default
+
+
 def _safe(value: Any) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or "unknown")).strip("._") or "unknown"
 
@@ -93,10 +112,7 @@ def latest_completed_candle_start(
     current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
     session_start = datetime.combine(date.fromisoformat(trade_date), SESSION_OPEN, tzinfo=IST)
     session_end = datetime.combine(date.fromisoformat(trade_date), SESSION_CLOSE, tzinfo=IST)
-    grace = float(
-        os.getenv("OPTION_PIVOT_CANDLE_CLOSE_GRACE_SECONDS", "5")
-        if grace_seconds is None else grace_seconds
-    )
+    grace = _env_float("OPTION_PIVOT_CANDLE_CLOSE_GRACE_SECONDS", 5.0) if grace_seconds is None else max(0.0, float(grace_seconds))
     effective_now = min(current - timedelta(seconds=max(0.0, grace)), session_end)
     elapsed = (effective_now - session_start).total_seconds()
     interval_seconds = int(interval_minutes) * 60
@@ -138,12 +154,12 @@ class OptionInstrumentPivotLevelsService:
         intervals=None, close_grace_seconds=None,
     ):
         self.root = Path(root)
-        self.requests_per_second = float(os.getenv("OPTION_PIVOT_FETCH_REQUESTS_PER_SECOND", "4")) if requests_per_second is None else float(requests_per_second)
-        self.max_retries = int(os.getenv("OPTION_PIVOT_FETCH_MAX_RETRIES", "2")) if max_retries is None else int(max_retries)
-        self.retry_backoff_seconds = float(os.getenv("OPTION_PIVOT_FETCH_RETRY_BACKOFF_SECONDS", "1")) if retry_backoff_seconds is None else float(retry_backoff_seconds)
-        self.max_workers = max(1, int(os.getenv("OPTION_PIVOT_MAX_WORKERS", "8")) if max_workers is None else int(max_workers))
+        self.requests_per_second = _env_float("OPTION_PIVOT_FETCH_REQUESTS_PER_SECOND", 4.0) if requests_per_second is None else float(requests_per_second)
+        self.max_retries = max(0, _env_int("OPTION_PIVOT_FETCH_MAX_RETRIES", 2)) if max_retries is None else max(0, int(max_retries))
+        self.retry_backoff_seconds = max(0.0, _env_float("OPTION_PIVOT_FETCH_RETRY_BACKOFF_SECONDS", 1.0)) if retry_backoff_seconds is None else max(0.0, float(retry_backoff_seconds))
+        self.max_workers = max(1, _env_int("OPTION_PIVOT_MAX_WORKERS", 8) if max_workers is None else int(max_workers))
         self.intervals = parse_intervals() if intervals is None else parse_intervals(",".join(str(x) for x in intervals))
-        self.close_grace_seconds = float(os.getenv("OPTION_PIVOT_CANDLE_CLOSE_GRACE_SECONDS", "5")) if close_grace_seconds is None else float(close_grace_seconds)
+        self.close_grace_seconds = max(0.0, _env_float("OPTION_PIVOT_CANDLE_CLOSE_GRACE_SECONDS", 5.0)) if close_grace_seconds is None else max(0.0, float(close_grace_seconds))
         self._last_request_at = 0.0
         self._rate_lock = threading.Lock()
         self._thread_local = threading.local()
