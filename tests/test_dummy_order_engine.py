@@ -239,7 +239,8 @@ def test_supertrend_does_not_reverse_when_existing_target_is_already_met(tmp_pat
         state = store.load(isolation_id)
         assert state["orders"]["supertrend"]["status"] == "COMPLETED_TARGET"
         assert state["orders"]["supertrend"]["target_instrument_key"] == "PE"
-        assert len(state.get("order_history", [])) == 1
+        assert state["supertrend_order_count"] == 1
+        assert state.get("order_history", []) == []
 
     asyncio.run(run())
 
