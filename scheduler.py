@@ -166,9 +166,11 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
     if OPTION_CHAIN_CAPTURE_ENABLED:
         scheduler.add_job(
             _run_option_chain_capture_job,
-            IntervalTrigger(seconds=60),
+            # Recheck frequently enough to notice completed 1m/15m candles.
+            # The pivot worker is independently guarded and rate limited.
+            IntervalTrigger(seconds=max(15, int(os.getenv("OPTION_PIVOT_SCHEDULER_INTERVAL_SECONDS", "30")))),
             id="option_chain_capture",
-            name="Live Option Chain Capture",
+            name="Live Option Chain + Multi-Interval Pivot Capture",
             replace_existing=True,
             max_instances=1,
             coalesce=True,
