@@ -799,6 +799,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 
 <div class="content-scroll" id="contentScroll">
 
+  {% if not is_guest %}
   <div class="subscribe-banner" id="subscribeBanner">
     <div>
       <i class="bi bi-info-circle me-1"></i>
@@ -808,6 +809,7 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
       <i class="bi bi-plus-circle me-1"></i> Subscribe to live feed
     </button>
   </div>
+  {% endif %}
 
   <!-- ============================================================
        TIMEFRAME / INTERVAL SELECTOR (TradingView-style)
