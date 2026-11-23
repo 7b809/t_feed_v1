@@ -393,6 +393,10 @@ def cancel_gtt_orders(gtt_order_ids: list[str]) -> dict[str, Any]:
     ids = list(dict.fromkeys(str(value).strip() for value in gtt_order_ids if str(value).strip()))
     if not ids or len(ids) > 20:
         raise GTTServiceError("Provide between 1 and 20 GTT order IDs.", status_code=400)
+    if not GTT_CANCEL_ENABLED:
+        raise GTTServiceError("GTT cancellation is disabled. Set GTT_CANCEL_ENABLED=true.", status_code=403)
+    if UPSTOX_SANDBOX:
+        raise GTTServiceError("GTT cancellation requires the live Upstox account.", status_code=409)
 
     results: list[dict[str, Any]] = []
     for gtt_order_id in ids:
