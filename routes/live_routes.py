@@ -1004,6 +1004,9 @@ async def _authorize_chart_websocket(ws: WebSocket, *, allow_guest: bool = True)
     mode = _websocket_access_mode(ws)
     if mode == "admin":
         return True
+    if not allow_guest:
+        await ws.close(code=1008, reason="Administrator access required")
+        return False
     allowed = _guest_single_chart_requested(ws)
     if mode == "guest":
         allowed = allowed and allow_guest and config.GUEST_MODE_ENABLED
