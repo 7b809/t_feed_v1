@@ -270,7 +270,7 @@ def test_startup_recovery_replays_two_entries_stop_then_target(tmp_path):
         await engine._recover_supertrend_history(isolation_id, {
             "event": "snapshot", "signals": [
                 {"signal": "BEARISH", "confirmed_time": "2026-11-12T09:22:00+05:30"},
-                {"signal": "BULLISH", "confirmed_time": "2026-11-12T09:25:30+05:30"},
+                {"signal": "BULLISH", "confirmed_time": "2026-11-12T09:23:30+05:30"},
             ]
         })
         state = store.load(isolation_id)
