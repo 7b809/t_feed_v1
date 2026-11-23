@@ -81,10 +81,14 @@ def filter_records(
     if tag:
         result = [item for item in result if _text(item, "tag") == tag.lower()]
     if segment:
+        wanted = segment.lower()
         result = [
             item for item in result
-            if _text(item, "exchange", "segment", "instrument_token", "instrument_key")
-            .startswith(segment.lower())
+            if any(
+                str(item.get(key, "")).strip().lower().startswith(wanted)
+                for key in ("exchange", "segment", "instrument_token", "instrument_key")
+                if item.get(key) is not None
+            )
         ]
     return result
 
