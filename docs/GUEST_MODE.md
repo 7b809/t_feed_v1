@@ -27,7 +27,7 @@ Guest WebSocket connections cannot request all instruments, multiple keys, selec
 
 ## Not available to guests
 
-All other endpoints remain behind the existing authentication guard. This includes admin and account management, member-only pages, order and position APIs, sandbox/broker execution, isolation controls, POST subscription changes, multi-instrument candle endpoints, token details, and operational diagnostics.
+All other endpoints remain behind the existing authentication guard. This includes admin and account management, member-only pages, order and position APIs, sandbox/broker execution, isolation controls, POST subscription changes, multi-instrument candle endpoints, token details, and operational diagnostics. The external isolation sender's exact `POST /api/isolation` webhook remains reachable because it independently validates `X-Isolation-Key`; its GET read/list endpoints are authenticated.
 
 ## Token cache refresh
 
