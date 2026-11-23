@@ -41,14 +41,14 @@ def test_scheduled_gtt_is_cancelled_without_account_exit(monkeypatch):
     calls = []
     monkeypatch.setattr(
         cleanup_module, "cancel_gtt_order",
-        lambda gtt_id: calls.append(gtt_id) or {"success": True, "status": "CANCEL_SUBMITTED"},
+        lambda gtt_id, cleanup=False: calls.append((gtt_id, cleanup)) or {"success": True, "status": "CANCEL_SUBMITTED"},
     )
     repo = FakeRepository()
     service = cleanup_module.OrderflowCleanupService(repository=repo)
     result = service.cleanup(["GTT-1"], isolation_id="iso-1", source_order_id="DUMMY-1")
     assert result["cleanup_complete"] is True
     assert result["results"][0]["status"] == "CANCELLED_UNTRIGGERED"
-    assert calls == ["GTT-1"]
+    assert calls == [("GTT-1", True)]
     assert repo.entries[0]["status"] == "CANCELLED_UNTRIGGERED"
 
 

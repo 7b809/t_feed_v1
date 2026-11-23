@@ -250,7 +250,7 @@ class OrderflowCleanupService:
                         # A successful DELETE response is the broker's explicit
                         # cancellation acknowledgement. A triggered GTT is rejected
                         # by Upstox and therefore falls through to the fail-closed path.
-                        cancelled = cancel_gtt_order(gtt_id)
+                        cancelled = cancel_gtt_order(gtt_id, cleanup=True)
                         self._update_audit(audit, status="CANCELLED_UNTRIGGERED",
                                            last_gtt_response=cancelled, last_gtt_details=details)
                         results.append({"gtt_order_id": gtt_id, "status": "CANCELLED_UNTRIGGERED"})

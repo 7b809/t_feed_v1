@@ -48,6 +48,8 @@ UPSTOX_SANDBOX = env_bool("UPSTOX_SANDBOX", False)
 TRADING_ENABLED = env_bool("TRADING_ENABLED", False)
 # GTT has its own switch so enabling live GTT does not enable regular orders.
 GTT_ENABLED = env_bool("GTT_ENABLED", True)
+# Independent permission for normal GTT cancellation (not the Orderflow square-off cleanup).
+GTT_CANCEL_ENABLED = env_bool("GTT_CANCEL_ENABLED", True)
 DEFAULT_ORDER_QUANTITY = int(os.getenv("DEFAULT_ORDER_QUANTITY", "65"))
 DEFAULT_TRANSACTION_TYPE = os.getenv("DEFAULT_TRANSACTION_TYPE", "BUY").upper()
 DEFAULT_PRODUCT = os.getenv("DEFAULT_PRODUCT", "I").upper()

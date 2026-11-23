@@ -12,9 +12,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.routes.orders import _raise_http, _service
 from core.external_api_auth import require_external_api_auth
 from core.logger import get_logger
-from models.gtt_models import CancelGTTRequest, CleanupGTTRequest, PlaceGTTRequest
+from models.gtt_models import CancelGTTRequest, CleanupGTTRequest, GTTOrderIDsRequest, PlaceGTTRequest
 from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderRequest
-from services.gtt_service import GTTServiceError, cancel_gtt_order, place_gtt_order
+from services.gtt_service import GTTServiceError, cancel_gtt_order, cancel_gtt_orders, place_gtt_order
 from services.daily_profit_guard_service import DailyProfitGuardError, get_today_pnl_status
 from services.orderflow_cleanup_service import OrderflowCleanupError, OrderflowCleanupService
 
@@ -155,3 +155,17 @@ def external_cleanup_gtt(body: CleanupGTTRequest):
     except Exception:
         logger.exception("Unexpected Orderflow broker cleanup failure")
         raise HTTPException(status_code=502, detail={"error": "Unexpected broker cleanup error."}) from None
+
+
+@router.post("/gtt/cancel/bulk")
+def external_cancel_gtt_bulk(body: GTTOrderIDsRequest):
+    try:
+        return cancel_gtt_orders(body.gtt_order_ids)
+    except GTTServiceError as exc:
+        detail = {"error": str(exc)}
+        if exc.payload:
+            detail["broker_error"] = exc.payload
+        raise HTTPException(status_code=exc.status_code, detail=detail) from None
+    except Exception:
+        logger.exception("Unexpected external bulk GTT cancellation failure")
+        raise HTTPException(status_code=500, detail={"error": "Unexpected bulk GTT cancellation error."}) from None

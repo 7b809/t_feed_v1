@@ -254,3 +254,42 @@ does not independently subtract brokerage, taxes or other charges.
 The lockout does not cancel GTTs submitted before the target was reached.
 Those broker-side GTTs may still trigger and must be managed through the
 existing GTT lifecycle/cleanup operations.
+
+
+## Live broker portfolio dashboard
+
+The dashboard now presents two separate sources of truth:
+
+- **Project order ledger:** local MongoDB/JSON audit history for activity placed or tracked by this service.
+- **Broker portfolio:** live Upstox short-term positions and long-term Demat holdings, including trades placed through Upstox mobile or website even when the project did not create the order.
+
+Broker portfolio APIs (the access token is loaded server-side from MongoDB):
+
+- `GET /api/v1/portfolio/overview` — combined dashboard snapshot.
+- `GET /api/v1/portfolio/positions` — proxies Upstox `GET /v2/portfolio/short-term-positions`.
+- `GET /api/v1/portfolio/holdings` — proxies Upstox `GET /v2/portfolio/long-term-holdings`.
+- Existing `GET /api/v1/portfolio/today-pnl` continues to return the daily-profit-guard snapshot.
+
+P&L definitions:
+- **Today's P&L** = sum of Upstox short-term positions' `realised` + `unrealised`, including zero-net-quantity rows.
+- **Total P&L** in the dashboard = today's short-term positions P&L + Upstox-reported long-term holdings `pnl`.
+- Holdings P&L is also shown separately. This combined figure is a current broker snapshot, not a lifetime realised-profit ledger.
+
+The overview response can report partial availability using `status=partial` and an `errors` object when one portfolio endpoint fails. It does not silently replace missing broker data with zero.
+
+## GTT cancellation APIs
+
+GTT cancellation uses the official Upstox REST `DELETE https://api.upstox.com/v3/order/gtt/cancel` endpoint through `requests.delete`, not the SDK cancellation method. The API cancels an untriggered GTT and all its associated legs. A triggered GTT requires lifecycle reconciliation; cancelling a GTT is not equivalent to squaring off an already-created position.
+
+Dashboard routes:
+- `POST /api/v1/gtt/cancel` — one GTT, body `{"gtt_order_id":"GTT-..."}`.
+- `POST /api/v1/gtt/cancel/bulk` — 1–20 GTT IDs, body `{"gtt_order_ids":["GTT-...","GTT-..."]}`.
+
+Authenticated external routes:
+- `POST /api/external/v1/gtt/cancel` — one GTT.
+- `POST /api/external/v1/gtt/cancel/bulk` — 1–20 GTT IDs.
+- Existing `POST /api/external/v1/gtt/cleanup` remains the Orderflow lifecycle reconciliation and square-off workflow.
+
+Upstox exposes a single-GTT DELETE operation, not an atomic bulk endpoint. Bulk cancellation therefore sends one broker request per ID and returns per-ID results with success/failure counts; partial success is possible.
+
+GTT cancellation has an independent `GTT_CANCEL_ENABLED=true` setting (default true) and no longer depends on `ORDERFLOW_CLEANUP_ENABLED`. Live GTT cancellation requires `UPSTOX_SANDBOX=false` and a valid live access token. `ORDERFLOW_CLEANUP_ENABLED` continues to gate only Orderflow lifecycle cleanup.

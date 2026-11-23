@@ -9,7 +9,7 @@ from typing import Any
 
 import requests
 
-from core.config import GTT_ENABLED, ORDERFLOW_CLEANUP_ENABLED, UPSTOX_SANDBOX, UPSTOX_HTTP_TIMEOUT_SECONDS
+from core.config import GTT_ENABLED, GTT_CANCEL_ENABLED, ORDERFLOW_CLEANUP_ENABLED, UPSTOX_SANDBOX, UPSTOX_HTTP_TIMEOUT_SECONDS
 from core.logger import get_logger
 from core.token_service import fetch_access_token
 from repositories.order_repository import OrderRepository, now_iso
@@ -332,10 +332,13 @@ def get_gtt_order_details(gtt_order_id: str) -> dict[str, Any]:
     return payload
 
 
-def cancel_gtt_order(gtt_order_id: str) -> dict[str, Any]:
+def cancel_gtt_order(gtt_order_id: str, *, cleanup: bool = False) -> dict[str, Any]:
     """Cancel one untriggered GTT. Never infer success from a transport timeout."""
-    if not ORDERFLOW_CLEANUP_ENABLED:
+    if cleanup and not ORDERFLOW_CLEANUP_ENABLED:
         raise GTTServiceError("Orderflow GTT cleanup is disabled. Set ORDERFLOW_CLEANUP_ENABLED=true.",
+                              status_code=403)
+    if not cleanup and not GTT_CANCEL_ENABLED:
+        raise GTTServiceError("GTT cancellation is disabled. Set GTT_CANCEL_ENABLED=true.",
                               status_code=403)
     if UPSTOX_SANDBOX:
         raise GTTServiceError("GTT cancellation requires the live Upstox account.", status_code=409)
