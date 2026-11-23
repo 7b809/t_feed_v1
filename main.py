@@ -289,6 +289,7 @@ from routes.expired_chart_routes import router as expired_chart_router
 
 from services.config_validation import validate_config
 from services.live_feed_service import live_feed_service
+from services.token_service import token_service
 from services.market_holiday_service import market_holiday_service
 from services.scheduler_service import scheduler_service
 from services.telegram_service import telegram_service
@@ -677,6 +678,20 @@ def _register_and_reconcile_sandbox(
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
+    token_refresh_task: asyncio.Task | None = None
+
+    async def _periodic_token_refresh() -> None:
+        interval_seconds = max(60, int(config.UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES) * 60)
+        while True:
+            await asyncio.sleep(interval_seconds)
+            changed = await asyncio.to_thread(token_service.refresh_tokens)
+            if changed:
+                logger.info("[token-refresh] MongoDB token changed; reconnecting Upstox live feed")
+                try:
+                    await asyncio.to_thread(live_feed_service.restart, skip_sr_backfill=True)
+                except Exception:
+                    logger.exception("[token-refresh] live-feed reconnect failed; worker will retry")
+
 
     # The V5 performance viewer is a consumer of upstream daily snapshots.
     # In this mode do not run the local cleanup/backfill/isolation/dummy-order
@@ -695,6 +710,12 @@ async def app_lifespan(app: FastAPI):
         config.READINESS_PREFLIGHT_ENABLED = False
 
     try:
+        # Prime the in-process cache before the first feed connection.
+        await asyncio.to_thread(token_service.refresh_tokens)
+        token_refresh_task = asyncio.create_task(
+            _periodic_token_refresh(), name="upstox-token-cache-refresh"
+        )
+
         if not config.PERFORMANCE_VIEWER_MODE:
             # Full strategy/market-engine startup remains available only
             # when explicitly opting out of read-only viewer mode.
@@ -975,6 +996,12 @@ async def app_lifespan(app: FastAPI):
         yield
 
     finally:
+        if token_refresh_task is not None:
+            token_refresh_task.cancel()
+            try:
+                await token_refresh_task
+            except asyncio.CancelledError:
+                pass
         # ---- Shutdown handling ----------------------------------------- #
         telegram_service.send_message(
             "Application Stopping",
