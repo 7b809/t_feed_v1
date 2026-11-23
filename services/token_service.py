@@ -21,22 +21,36 @@ class TokenService:
             self._collection = self._client[config.UPSTOX_TOKEN_MONGO_DB][config.TOKENS_COLLECTION]
         return self._collection
 
-    def refresh_tokens(self) -> None:
+    def refresh_tokens(self) -> bool:
+        """Refresh the in-process token snapshot from MongoDB.
+
+        Returns True only when a new non-empty token replaces the cached
+        token. Transient DB failures and empty documents retain the last
+        known-good token so the live feed is not blanked accidentally.
+        """
         try:
-            logger.info("Fetching token document from MongoDB...")
-
             doc = self._get_collection().find_one({"_id": config.UPSTOX_TOKEN_DOC_ID})
-
-            if doc:
-                with self._lock:
-                    self._cache = doc
-
-                logger.info("Token cache refreshed successfully.")
+            if not isinstance(doc, dict):
+                logger.warning("Configured Upstox token document was not found; retaining cached token.")
+                return False
+            new_token = str(doc.get("access_token") or "").strip()
+            if not new_token:
+                logger.warning("Upstox token document has no access_token; retaining cached token.")
+                return False
+            with self._lock:
+                old_token = str(self._cache.get("access_token") or "").strip()
+                self._cache = dict(doc)
+            changed = bool(old_token and old_token != new_token)
+            if not old_token:
+                logger.info("Upstox token cache initialized from MongoDB.")
+            elif changed:
+                logger.info("Upstox access token changed in MongoDB; in-process cache updated.")
             else:
-                logger.warning("Configured token document was not found.")
-
+                logger.debug("Upstox token cache is already current.")
+            return changed
         except Exception as exc:
-            logger.error("Error refreshing tokens from MongoDB (%s).", type(exc).__name__)
+            logger.error("Error refreshing tokens from MongoDB (%s); retaining cached token.", type(exc).__name__)
+            return False
 
     def get_access_token(self) -> str | None:
         with self._lock:
