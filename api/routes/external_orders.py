@@ -5,6 +5,8 @@ server-to-server credentials never need to be exposed to browser JavaScript.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from api.routes.orders import _raise_http, _service
@@ -13,6 +15,7 @@ from core.logger import get_logger
 from models.gtt_models import CancelGTTRequest, CleanupGTTRequest, PlaceGTTRequest
 from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderRequest
 from services.gtt_service import GTTServiceError, cancel_gtt_order, place_gtt_order
+from services.daily_profit_guard_service import DailyProfitGuardError, get_today_pnl_status
 from services.orderflow_cleanup_service import OrderflowCleanupError, OrderflowCleanupService
 
 logger = get_logger(__file__)
@@ -22,6 +25,24 @@ router = APIRouter(
     tags=["external-orders"],
     dependencies=[Depends(require_external_api_auth)],
 )
+
+
+@router.post("/portfolio/today-pnl")
+def external_today_portfolio_pnl(body: dict[str, Any]):
+    # Router-level dependency validates body.api_token when external auth is enabled.
+    try:
+        return get_today_pnl_status()
+    except DailyProfitGuardError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"error": str(exc), "code": exc.code, **exc.details},
+        ) from None
+    except Exception:
+        logger.exception("Could not calculate external today's portfolio P&L")
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "Today's portfolio P&L is temporarily unavailable."},
+        ) from None
 
 
 @router.post("/orders/place")
@@ -88,6 +109,11 @@ def external_place_gtt(body: PlaceGTTRequest):
             source_order_id=body.source_order_id,
             isolation_id=body.isolation_id,
         )
+    except DailyProfitGuardError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"error": str(exc), "code": exc.code, **exc.details},
+        ) from None
     except GTTServiceError as exc:
         detail = {"error": str(exc)}
         if exc.payload:

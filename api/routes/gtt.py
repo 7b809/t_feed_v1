@@ -5,6 +5,7 @@ from core.logger import get_logger
 from models.gtt_models import PlaceGTTRequest
 from core.config import GTT_ENABLED, ORDERFLOW_CLEANUP_ENABLED, UPSTOX_SANDBOX
 from services.gtt_service import GTTServiceError, LOT_SIZE_MAP, place_gtt_order
+from services.daily_profit_guard_service import DailyProfitGuardError
 
 logger = get_logger(__file__)
 router = APIRouter(prefix="/api/v1/gtt", tags=["gtt"])
@@ -40,6 +41,11 @@ def place_gtt(request: PlaceGTTRequest):
             product=request.product,
             transaction_type=request.transaction_type,
         )
+    except DailyProfitGuardError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"error": str(exc), "code": exc.code, **exc.details},
+        ) from None
     except GTTServiceError as exc:
         detail = {"error": str(exc)}
         if exc.payload:

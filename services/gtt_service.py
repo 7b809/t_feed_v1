@@ -13,6 +13,7 @@ from core.config import GTT_ENABLED, ORDERFLOW_CLEANUP_ENABLED, UPSTOX_SANDBOX, 
 from core.logger import get_logger
 from core.token_service import fetch_access_token
 from repositories.order_repository import OrderRepository, now_iso
+from services.daily_profit_guard_service import assert_new_entries_allowed
 
 logger = get_logger(__file__)
 GTT_PLACE_URL = "https://api.upstox.com/v3/order/gtt/place"
@@ -188,6 +189,10 @@ def place_gtt_order(
         raise GTTServiceError("lot must be at least 1.")
     if transaction_type != "BUY":
         raise GTTServiceError("This application currently supports BUY-entry GTT orders only.")
+
+    # Check account-wide P&L before creating a new broker-side GTT.
+    # This does not cancel or alter GTTs which were already submitted.
+    assert_new_entries_allowed()
 
     # Deliberately do not square off existing positions. The GTT manages
     # only its own broker-side entry, target and stop-loss legs.

@@ -26,6 +26,7 @@ from core.token_service import fetch_access_token
 from core.telegram_notifier import notify_event
 from models.order_models import PlaceOrderRequest
 from repositories.order_repository import OrderRepository, now_iso
+from services.daily_profit_guard_service import DailyProfitGuardError, assert_new_entries_allowed
 
 logger = get_logger(__file__)
 
@@ -723,6 +724,32 @@ class OrderService:
                 "WARNING",
             )
             raise TradingDisabledError(blocked_msg)
+
+        # Shared daily P&L gate applies to new entry orders only. Exit and
+        # cancellation service methods deliberately do not call this guard.
+        try:
+            assert_new_entries_allowed()
+        except DailyProfitGuardError as exc:
+            self._append_event(
+                entry["local_id"],
+                self._new_event(
+                    "DAILY_PROFIT_GUARD_BLOCKED",
+                    reason=exc.code,
+                    error=str(exc),
+                    daily_pnl=exc.details,
+                ),
+                status="BLOCKED_DAILY_PROFIT",
+                require_mongo=False,
+            )
+            notify_event(
+                "Order blocked — daily profit guard",
+                [
+                    f"Instrument: {request.trading_symbol or request.instrument_token}",
+                    f"Reason: {str(exc)}",
+                ],
+                "WARNING",
+            )
+            raise
 
         try:
             order_v3, _ = self._clients()

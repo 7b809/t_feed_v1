@@ -20,6 +20,7 @@ from core.config import (
 from core.logger import get_logger
 from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderRequest
 from repositories.order_repository import OrderRepository
+from services.daily_profit_guard_service import DailyProfitGuardError
 from services.instrument_search_service import (
     InstrumentSearchError,
     search_upstox_instruments,
@@ -100,6 +101,12 @@ def _raise_http(exc: Exception, *, action: str | None = None):
     4. Anything else                       -> 502 (with traceback in the log)
     """
     resolved_action = action or _infer_action_from_exc(exc)
+
+    if isinstance(exc, DailyProfitGuardError):
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"error": str(exc), "code": exc.code, **exc.details},
+        ) from exc
 
     if isinstance(exc, TradingDisabledError):
         raise HTTPException(

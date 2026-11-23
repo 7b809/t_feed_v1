@@ -208,3 +208,49 @@ Cleanup behavior:
 5. Block replacement if a triggered GTT has an active TARGET/STOPLOSS rule without an order ID, if a broker state cannot be reconciled, or if cancellation/square-off is not confirmed.
 
 Upstox does not provide details for completed GTTs. Such IDs cannot be reconstructed from the GTT details API alone; cleanup therefore fails closed and requires manual reconciliation rather than assuming that exposure is gone. The existing account-wide Exit All endpoint remains separate and is not used by this manager.
+
+
+## Daily portfolio P&L and profit-target lockout
+
+The service reads the current Upstox portfolio from
+`GET https://api.upstox.com/v2/portfolio/short-term-positions`.
+It aggregates every returned position row, including rows whose net quantity
+is zero because they may contain realised P&L from trades already closed today.
+
+- `realised_pnl`: sum of every position's `realised` field.
+- `unrealised_pnl`: sum of every position's `unrealised` field.
+- `total_pnl`: realised P&L plus unrealised P&L.
+- `guard_pnl`: total P&L when `DAILY_PROFIT_INCLUDE_UNREALISED=true`; otherwise realised P&L only.
+
+Dashboard endpoint:
+- `GET /api/v1/portfolio/today-pnl`
+
+Authenticated external endpoint (send `api_token` in the JSON body):
+- `POST /api/external/v1/portfolio/today-pnl`
+
+The guard is checked before every new BUY order and every new GTT placement.
+Once `guard_pnl` reaches `DAILY_PROFIT_TARGET`, new entries are blocked until
+the next Asia/Kolkata calendar date. The lock is stored in MongoDB collection
+`daily_profit_guard`, keyed by `YYYY-MM-DD`, and survives restarts and
+subsequent drops in unrealised P&L. Position exits, cancellations and cleanup
+operations are not blocked by this entry guard.
+
+Default environment settings:
+
+```env
+DAILY_PROFIT_GUARD_ENABLED=true
+DAILY_PROFIT_TARGET=2000
+DAILY_PROFIT_INCLUDE_UNREALISED=true
+DAILY_PROFIT_GUARD_FAIL_CLOSED=true
+DAILY_PROFIT_LOCKOUT_UNTIL_NEXT_DAY=true
+DAILY_PROFIT_GUARD_COLLECTION=daily_profit_guard
+```
+
+The default target is INR 2,000 and is configurable. If the Upstox positions
+response or persisted lock cannot be verified, the default fail-closed behavior
+blocks new entries. The guard uses broker-reported realised/unrealised P&L and
+does not independently subtract brokerage, taxes or other charges.
+
+The lockout does not cancel GTTs submitted before the target was reached.
+Those broker-side GTTs may still trigger and must be managed through the
+existing GTT lifecycle/cleanup operations.

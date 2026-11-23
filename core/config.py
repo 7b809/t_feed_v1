@@ -121,3 +121,16 @@ EXTERNAL_API_SOURCE_TOKEN = os.getenv("EXTERNAL_API_SOURCE_TOKEN", "").strip()
 # Separate permission for authenticated Orderflow cleanup operations. This does
 # not enable normal dashboard order placement and never enables account-wide exit-all.
 ORDERFLOW_CLEANUP_ENABLED = env_bool("ORDERFLOW_CLEANUP_ENABLED", False)
+
+
+# Daily account P&L guard. Target and lock date use the configured Asia/Kolkata timezone.
+DAILY_PROFIT_GUARD_ENABLED = env_bool("DAILY_PROFIT_GUARD_ENABLED", True)
+DAILY_PROFIT_TARGET = float(os.getenv("DAILY_PROFIT_TARGET", "2000"))
+if DAILY_PROFIT_TARGET <= 0:
+    raise ValueError("DAILY_PROFIT_TARGET must be greater than zero")
+DAILY_PROFIT_INCLUDE_UNREALISED = env_bool("DAILY_PROFIT_INCLUDE_UNREALISED", True)
+DAILY_PROFIT_GUARD_FAIL_CLOSED = env_bool("DAILY_PROFIT_GUARD_FAIL_CLOSED", True)
+DAILY_PROFIT_LOCKOUT_UNTIL_NEXT_DAY = env_bool("DAILY_PROFIT_LOCKOUT_UNTIL_NEXT_DAY", True)
+DAILY_PROFIT_GUARD_COLLECTION = os.getenv(
+    "DAILY_PROFIT_GUARD_COLLECTION", "daily_profit_guard"
+).strip() or "daily_profit_guard"
