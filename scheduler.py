@@ -51,6 +51,16 @@ from core.config import OPTION_CHAIN_CAPTURE_ENABLED
 logger = get_logger(__file__)
 
 
+def _option_pivot_scheduler_interval() -> int:
+    """Return a safe polling cadence for completed option candles."""
+    try:
+        configured = int(os.getenv("OPTION_PIVOT_SCHEDULER_INTERVAL_SECONDS", "30"))
+    except (TypeError, ValueError):
+        logger.warning("Invalid OPTION_PIVOT_SCHEDULER_INTERVAL_SECONDS; using 30")
+        configured = 30
+    return max(15, configured)
+
+
 def _run_option_chain_capture_job() -> None:
     """Run the lowest-priority option capture behind a hard exception boundary."""
     try:
@@ -168,7 +178,7 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
             _run_option_chain_capture_job,
             # Recheck frequently enough to notice completed 1m/15m candles.
             # The pivot worker is independently guarded and rate limited.
-            IntervalTrigger(seconds=max(15, int(os.getenv("OPTION_PIVOT_SCHEDULER_INTERVAL_SECONDS", "30")))),
+            IntervalTrigger(seconds=_option_pivot_scheduler_interval()),
             id="option_chain_capture",
             name="Live Option Chain + Multi-Interval Pivot Capture",
             replace_existing=True,
