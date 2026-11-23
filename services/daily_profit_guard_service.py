@@ -132,9 +132,13 @@ class DailyProfitGuardService:
 
     @staticmethod
     def _pnl_value(position: dict[str, Any], field: str, index: int) -> float:
-        value = position.get(field)
-        if value is None:
-            return 0.0
+        if field not in position or position[field] is None:
+            raise DailyProfitGuardError(
+                f"Upstox omitted the required {field} value for position {index}.",
+                status_code=502,
+                details={"position_index": index, "field": field},
+            )
+        value = position[field]
         try:
             number = float(value)
         except (TypeError, ValueError):
