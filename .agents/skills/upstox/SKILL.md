@@ -253,7 +253,7 @@ print(resp.data)
 | Topic | When to load | File |
 |-------|-------------|------|
 | Orders (place/modify/cancel/multi/exit) | Any order operation | `references/orders.md` |
-| GTT orders (single & multi-leg) | Conditional / good-till-triggered orders | `references/gtt-orders.md` |
+| GTT orders (single & multi-leg) | Conditional / good-till-triggered orders | `references/gtt-orders.md` |\n| Modify existing GTT ENTRY / STOPLOSS / TARGET | Change one trigger while retaining other rules; requires explicit confirmation | `.agents/skills/upstox-gtt-modify/SKILL.md` |
 | Portfolio (holdings, positions, convert, P&L) | View/manage portfolio | `references/portfolio.md` |
 | Market data (LTP, OHLC, quotes, candles, status) | Prices & historical data | `references/market-data.md` |
 | Option chain (greeks, OI, PCR, max pain) | Options analysis | `references/option-chain.md` |
