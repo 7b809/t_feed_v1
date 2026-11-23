@@ -114,10 +114,13 @@ def summarize_orders(orders: list[dict[str, Any]]) -> dict[str, Any]:
         if str(order.get("status") or "").upper().startswith("COMPLETED")
     ]
     pnl_values: list[float] = []
-    for order in completed:
+    for order in orders:
         try:
             value = order.get("pnl_net")
-            if value is not None:
+            if value is not None and (
+                str(order.get("status") or "").upper().startswith("COMPLETED")
+                or order.get("partial_exit_done")
+            ):
                 pnl_values.append(float(value))
         except (TypeError, ValueError):
             continue
@@ -126,7 +129,10 @@ def summarize_orders(orders: list[dict[str, Any]]) -> dict[str, Any]:
         "total_orders": len(orders),
         "open_orders": sum(order.get("status") == "DUMMY_PLACED" for order in orders),
         "completed_orders": len(completed),
-        "target_hits": sum(order.get("exit_reason") == "TARGET" for order in completed),
+        "target_hits": sum(
+            order.get("exit_reason") == "TARGET" or order.get("first_target_reached")
+            for order in orders
+        ),
         "stop_losses": sum(order.get("exit_reason") == "STOP_LOSS" for order in completed),
         "realized_pnl": round(sum(pnl_values), 2) if pnl_values else None,
     }

@@ -32,9 +32,9 @@ def build(tmp_path, **overrides):
     fixed_now = datetime(2026, 11, 12, 10, 30, tzinfo=ZoneInfo("Asia/Kolkata"))
     engine_module._now = lambda: fixed_now
     values = dict(
-        gtt_max_signal_age_seconds=7200,
-        gtt_max_quote_age_seconds=7200,
-        gtt_live_frame_max_age_seconds=5,
+        live_signal_max_age_seconds=7200,
+        live_quote_max_age_seconds=7200,
+        live_frame_max_age_seconds=5,
         dummy_orders_enabled=True,
         dummy_supertrend_orders_enabled=True, dummy_order_quantity=1,
         dummy_order_state_dir=str(tmp_path), dummy_order_stop_loss_percent=30,
@@ -182,6 +182,10 @@ def test_supertrend_opposite_signal_closes_and_replaces_open_order(tmp_path):
         assert first["status"] == "DUMMY_PLACED"
 
         # A later support signal is bullish and routes to the isolated leg.
+        await engine.on_market_tick(
+            "PE", {"ltpc": {"ltp": 200.0}},
+            (datetime.fromisoformat(first["started_at_ist"]) + timedelta(seconds=60)).isoformat(),
+        )
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "SUPPORT",
             "confirmed_time": "2026-11-12T09:24:00+05:30", "price": 123.45,
@@ -217,6 +221,9 @@ def test_supertrend_does_not_reverse_when_existing_target_is_already_met(tmp_pat
                         "data": {"ltpc": {"ltp": price}}}
 
         config = SimpleNamespace(
+            live_signal_max_age_seconds=7200,
+            live_quote_max_age_seconds=7200,
+            live_frame_max_age_seconds=5,
             dummy_orders_enabled=True,
             dummy_supertrend_orders_enabled=True, dummy_order_quantity=1,
             dummy_order_state_dir=str(tmp_path), dummy_order_stop_loss_percent=30,
@@ -233,6 +240,9 @@ def test_supertrend_does_not_reverse_when_existing_target_is_already_met(tmp_pat
             "event": "supertrend_signal", "signal": "RESISTANCE",
             "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
+        first = store.load(isolation_id)["orders"]["supertrend"]
+        target_tick = (datetime.fromisoformat(first["started_at_ist"]) + timedelta(seconds=60)).isoformat()
+        await engine.on_market_tick("PE", {"ltpc": {"ltp": 200.0}}, target_tick)
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "SUPPORT",
             "confirmed_time": "2026-11-12T09:24:00+05:30", "price": 123.45,
@@ -327,7 +337,8 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
 
         # A target closes entry 1; a later signal may still create entry 2.
         first_tick = (datetime.fromisoformat(first["started_at_ist"]) + timedelta(seconds=60)).isoformat()
-        await engine.on_market_tick("CE", {"ltpc": {"ltp": 173.45}}, first_tick)
+        # A confirmed stop-loss (not a target win) unlocks the second entry.
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 80.0}}, first_tick)
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "BEARISH",
             "confirmed_time": "2026-11-12T09:24:00+05:30", "price": 123.45,
@@ -335,7 +346,7 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
         second = store.load(isolation_id)["orders"]["supertrend"]
         assert second["order_sequence"] == 2
         assert second["target_instrument_key"] == "PE"
-        assert store.load(isolation_id)["order_history"][0]["exit_reason"] == "TARGET"
+        assert store.load(isolation_id)["order_history"][0]["exit_reason"] == "STOP_LOSS"
 
         # Close entry 2. A third confirmed signal must not create another order.
         second_tick = (datetime.fromisoformat(second["started_at_ist"]) + timedelta(seconds=60)).isoformat()
@@ -360,6 +371,71 @@ def test_supertrend_allows_only_two_entries_per_isolation(tmp_path):
         assert [item["order_sequence"] for item in state["order_history"]] == [1, 2]
 
     asyncio.run(run())
+
+def test_two_lot_target_takes_one_lot_and_moves_runner_stop(tmp_path):
+    async def run():
+        engine, store = build(tmp_path, dummy_order_quantity=2)
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(isolation_id, isolation_payload(),
+                                        {"isolated": "CE", "opposite": "PE"})
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BULLISH",
+            "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        order = store.load(isolation_id)["orders"]["supertrend"]
+        assert order["quantity"] == 2
+        assert order["quantity_units"] == 2
+        assert order["status"] == "DUMMY_PLACED"
+
+        stamp = (datetime.fromisoformat(order["started_at_ist"]) + timedelta(seconds=60)).isoformat()
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 173.45}}, stamp)
+        order = store.load(isolation_id)["orders"]["supertrend"]
+        assert order["status"] == "DUMMY_PLACED"
+        assert order["partial_exit_done"] is True
+        assert order["first_target_reached"] is True
+        assert order["quantity"] == 1
+        assert order["quantity_units"] == 1
+        assert order["partial_exit"]["exit_price"] == 173.45
+        assert order["partial_exit"]["pnl_net"] == 50.0
+        assert order["stop_loss_price"] == 148.45
+        assert order["target_price"] == 173.45
+
+        # A later touch of the runner stop closes the remaining lot and
+        # combines its P&L with the already-realized first-lot profit.
+        stamp2 = (datetime.fromisoformat(stamp) + timedelta(seconds=60)).isoformat()
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 148.45}}, stamp2)
+        order = store.load(isolation_id)["orders"]["supertrend"]
+        assert order["status"] == "COMPLETED_STOP_LOSS"
+        assert order["pnl_gross"] == 75.0
+        assert order["pnl_net"] == 75.0
+
+    asyncio.run(run())
+
+
+def test_first_order_target_blocks_second_entry_even_inside_window(tmp_path):
+    async def run():
+        engine, store = build(tmp_path, dummy_order_quantity=1)
+        isolation_id = "2026-11-12__CE"
+        await engine.register_isolation(isolation_id, isolation_payload(),
+                                        {"isolated": "CE", "opposite": "PE"})
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BULLISH",
+            "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        first = store.load(isolation_id)["orders"]["supertrend"]
+        stamp = (datetime.fromisoformat(first["started_at_ist"]) + timedelta(seconds=60)).isoformat()
+        await engine.on_market_tick("CE", {"ltpc": {"ltp": 173.45}}, stamp)
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BEARISH",
+            "confirmed_time": "2026-11-12T09:24:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        state = store.load(isolation_id)
+        assert state["orders"]["supertrend"]["order_id"] == first["order_id"]
+        assert state["supertrend_order_count"] == 1
+        assert state["supertrend_second_entry_decision"]["status"] == "BLOCKED_FIRST_ORDER_PROFIT"
+
+    asyncio.run(run())
+
 
 def test_late_first_signal_allows_only_one_entry_and_preserves_it(tmp_path):
     async def run():
@@ -449,27 +525,27 @@ def test_live_execution_gate_rejects_stale_confirmation_and_quote(tmp_path):
         dummy_order_stop_loss_percent=30, dummy_target_upper_threshold=200,
         dummy_target_lower_threshold=100, dummy_target_points_above_upper=60,
         dummy_target_points_middle=50, dummy_target_points_below_lower=40,
-        gtt_max_signal_age_seconds=60, gtt_max_quote_age_seconds=10,
-        gtt_live_frame_max_age_seconds=5,
+        live_signal_max_age_seconds=60, live_quote_max_age_seconds=10,
+        live_frame_max_age_seconds=5,
     )
     engine = DummyOrderEngine(config, DummyOrderStore(config), Feed(fixed_now.isoformat()))
     state = {"trade_date_ist": fixed_now.date().isoformat()}
     payload = {"event": "supertrend_signal"}
     signal = {"dt": fixed_now - timedelta(seconds=15), "time": "fresh"}
-    accepted = engine._live_execution_eligibility(
+    accepted = engine._live_entry_eligibility(
         payload, signal, "NSE_FO|TEST", state, "live_websocket", fixed_now.isoformat()
     )
     assert accepted["eligible"] is True
     assert accepted["stop_loss_price"] < accepted["entry"] < accepted["target_price"]
 
     stale_signal = dict(signal, dt=fixed_now - timedelta(seconds=61))
-    rejected_signal = engine._live_execution_eligibility(
+    rejected_signal = engine._live_entry_eligibility(
         payload, stale_signal, "NSE_FO|TEST", state, "live_websocket", fixed_now.isoformat()
     )
     assert rejected_signal["reason"] == "CONFIRMATION_TIME_STALE_OR_FUTURE"
 
     engine._live_feed = Feed((fixed_now - timedelta(seconds=11)).isoformat())
-    rejected_quote = engine._live_execution_eligibility(
+    rejected_quote = engine._live_entry_eligibility(
         payload, signal, "NSE_FO|TEST", state, "live_websocket", fixed_now.isoformat()
     )
     assert rejected_quote["reason"] == "LIVE_QUOTE_STALE"
@@ -487,12 +563,12 @@ def test_live_execution_gate_rejects_missing_websocket_provenance(tmp_path):
         dummy_order_stop_loss_percent=30, dummy_target_upper_threshold=200,
         dummy_target_lower_threshold=100, dummy_target_points_above_upper=60,
         dummy_target_points_middle=50, dummy_target_points_below_lower=40,
-        gtt_max_signal_age_seconds=60, gtt_max_quote_age_seconds=10,
-        gtt_live_frame_max_age_seconds=5,
+        live_signal_max_age_seconds=60, live_quote_max_age_seconds=10,
+        live_frame_max_age_seconds=5,
     )
     engine = DummyOrderEngine(config, DummyOrderStore(config), Feed())
     signal = {"dt": fixed_now - timedelta(seconds=5), "time": "fresh"}
-    result = engine._live_execution_eligibility(
+    result = engine._live_entry_eligibility(
         {"event": "supertrend_signal"}, signal, "NSE_FO|TEST",
         {"trade_date_ist": fixed_now.date().isoformat()}, None, fixed_now.isoformat()
     )

@@ -104,6 +104,10 @@ async def dashboard_home(request: Request) -> dict:
     orders = _today_orders(_flatten_orders(await request.app.state.dummy_order_engine.get_orders()))
     session = market_session_status(request.app.state.config)
     completed = [order for order in orders if str(order.get("status", "")).startswith("COMPLETED")]
+    realized_orders = [
+        order for order in orders
+        if str(order.get("status", "")).startswith("COMPLETED") or order.get("partial_exit_done")
+    ]
     return {"market_session": session, "summary": {
         "active_isolations": len(isolations),
         "subscribed_instruments": len(live.get("desired_instrument_keys") or []),
@@ -111,7 +115,7 @@ async def dashboard_home(request: Request) -> dict:
         "today_orders": len(orders),
         "open_orders": sum(1 for order in orders if order.get("status") == "DUMMY_PLACED"),
         "completed_orders": len(completed),
-        "realized_pnl": round(sum(float(order.get("pnl_net") or 0) for order in completed), 2),
+        "realized_pnl": round(sum(float(order.get("pnl_net") or 0) for order in realized_orders), 2),
     }, "live_feed": live, "instruments": instruments}
 
 @router.get("/dashboard/isolations")
@@ -128,12 +132,16 @@ async def dashboard_session(request: Request) -> dict:
 async def dashboard_orders(request: Request) -> dict:
     orders = _today_orders(_flatten_orders(await request.app.state.dummy_order_engine.get_orders()))
     completed = [x for x in orders if str(x.get("status", "")).startswith("COMPLETED")]
-    pnl_values = [float(x["pnl_net"]) for x in completed if isinstance(x.get("pnl_net"), (int, float))]
+    realized_orders = [
+        x for x in orders
+        if str(x.get("status", "")).startswith("COMPLETED") or x.get("partial_exit_done")
+    ]
+    pnl_values = [float(x["pnl_net"]) for x in realized_orders if isinstance(x.get("pnl_net"), (int, float))]
     return {"summary": {
         "total_orders": len(orders),
         "open_orders": sum(1 for x in orders if x.get("status") == "DUMMY_PLACED"),
         "completed_orders": len(completed),
-        "target_hits": sum(1 for x in completed if x.get("exit_reason") == "TARGET"),
+        "target_hits": sum(1 for x in orders if x.get("exit_reason") == "TARGET" or x.get("first_target_reached")),
         "stop_losses": sum(1 for x in completed if x.get("exit_reason") == "STOP_LOSS"),
         "realized_pnl": round(sum(pnl_values), 2) if pnl_values else None,
     }, "orders": orders}

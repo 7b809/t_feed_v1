@@ -10,11 +10,11 @@ from typing import Any
 from zoneinfo import ZoneInfo
 from ..config import Settings
 from .dummy_order_store import DummyOrderStore
-from .gtt_order_client import GTTOrderSubmissionError, cleanup_gtt_orders, submit_gtt_order
 from .live_feed_state_store import LiveFeedStateStore
 from .pivot_levels_service import PivotLevelsService
 from .telegram_message_formatter import (
     format_order_completion_notification,
+    format_order_partial_exit_notification,
     format_order_entry_notification,
     format_recovery_notification,
 )
@@ -411,11 +411,78 @@ class DummyOrderEngine:
             return float(getattr(self._config, "dummy_target_points_middle", 30))
         return float(getattr(self._config, "dummy_target_points_below_lower", 15))
 
-    def _live_execution_eligibility(
+    @staticmethod
+    def _apply_partial_target(order: dict, stamp: datetime, target_price: float | None = None) -> bool:
+        """Exit one lot at target and move the runner stop to half the target distance."""
+        if order.get("partial_exit_done"):
+            return False
+        lots = int(order.get("quantity") or 1)
+        if lots <= 1:
+            return False
+        entry = float(order.get("entry_price") or 0)
+        target = float(target_price if target_price is not None else order.get("target_price"))
+        lot_size = max(1, int(order.get("lot_size") or 1))
+        original_units = int(order.get("original_quantity_units") or order.get("quantity_units") or lots * lot_size)
+        remaining_lots = lots - 1
+        remaining_units = max(0, int(order.get("quantity_units") or lots * lot_size) - lot_size)
+        points = round(target - entry, 4)
+        realized = round(points * lot_size, 2)
+        new_stop = round(entry + (target - entry) / 2.0, 2)
+        order.setdefault("original_quantity", lots)
+        order.setdefault("original_quantity_units", original_units)
+        order["quantity"] = remaining_lots
+        order["quantity_units"] = remaining_units
+        order["remaining_quantity_lots"] = remaining_lots
+        order["remaining_quantity_units"] = remaining_units
+        order["partial_exit_done"] = True
+        order["first_target_reached"] = True
+        order["partial_exit"] = {
+            "status": "COMPLETED_TARGET",
+            "quantity_lots": 1,
+            "quantity_units": lot_size,
+            "exit_price": round(target, 2),
+            "exit_time_ist": stamp.isoformat(),
+            "pnl_points": points,
+            "pnl_gross": realized,
+            "pnl_net": realized,
+        }
+        order["realized_pnl_gross"] = round(float(order.get("realized_pnl_gross") or 0) + realized, 2)
+        order["pnl_points"] = round(order["realized_pnl_gross"] / original_units, 4) if original_units else 0.0
+        order["pnl_gross"] = order["realized_pnl_gross"]
+        order["pnl_net"] = order["realized_pnl_gross"]
+        order["estimated_costs"] = 0.0
+        order["pnl_currency"] = "INR"
+        order["pnl_cost_model"] = "gross_only_costs_not_configured"
+        order["stop_loss_before_partial_target"] = order.get("stop_loss_price")
+        order["stop_loss_price"] = new_stop
+        order["stop_loss_adjustment"] = {
+            "reason": "FIRST_LOT_TARGET_REACHED",
+            "original_target_price": round(target, 2),
+            "target_distance_points": round(target - entry, 2),
+            "half_target_distance_points": round((target - entry) / 2.0, 2),
+            "new_stop_loss_price": new_stop,
+            "updated_at_ist": stamp.isoformat(),
+        }
+        order["updated_at_ist"] = stamp.isoformat()
+        return True
+
+    @staticmethod
+    def _total_order_pnl(order: dict, exit_price: float) -> tuple[float, float, float]:
+        entry = float(order.get("entry_price") or 0)
+        remaining_units = int(order.get("quantity_units") or order.get("quantity") or 1)
+        original_units = int(order.get("original_quantity_units") or (
+            remaining_units + int((order.get("partial_exit") or {}).get("quantity_units") or 0)
+        ))
+        realized = float(order.get("realized_pnl_gross") or 0)
+        gross = round(realized + (float(exit_price) - entry) * remaining_units, 2)
+        points = round(gross / original_units, 4) if original_units else 0.0
+        return points, gross, gross
+
+    def _live_entry_eligibility(
         self, payload: dict, signal: dict, target_key: str, state: dict,
         event_origin: str | None, live_event_received_at: str | None,
     ) -> dict:
-        """Fail-closed gate shared by live dummy-entry creation and GTT submission."""
+        """Fail-closed gate for creating a live dummy entry."""
         now = _now()
         if payload.get("event") != "supertrend_signal":
             return {"eligible": False, "reason": "NOT_A_LIVE_SIGNAL_EVENT"}
@@ -425,13 +492,13 @@ class DummyOrderEngine:
         if frame_time is None:
             return {"eligible": False, "reason": "INVALID_LIVE_FRAME_RECEIVE_TIME"}
         frame_age = (now - frame_time).total_seconds()
-        if frame_age < -2 or frame_age > int(getattr(self._config, "gtt_live_frame_max_age_seconds", 5)):
+        if frame_age < -2 or frame_age > int(getattr(self._config, "live_frame_max_age_seconds", 5)):
             return {"eligible": False, "reason": "LIVE_FRAME_RECEIVE_TIME_STALE"}
         signal_time = signal.get("dt")
         if not isinstance(signal_time, datetime) or signal_time.date() != now.date():
             return {"eligible": False, "reason": "CONFIRMATION_NOT_FROM_TODAY"}
         signal_age = (now - signal_time).total_seconds()
-        max_signal_age = int(getattr(self._config, "gtt_max_signal_age_seconds", 60))
+        max_signal_age = int(getattr(self._config, "live_signal_max_age_seconds", 60))
         if event_origin == "local_upstox":
             # Upstox timestamps identify the candle OPEN; its close is confirmed
             # one minute later. Keep a bounded allowance for that candle boundary.
@@ -446,7 +513,7 @@ class DummyOrderEngine:
         if quote_time is None or quote_time.date() != now.date():
             return {"eligible": False, "reason": "NO_CURRENT_SESSION_LIVE_QUOTE"}
         quote_age = (now - quote_time).total_seconds()
-        if quote_age < -2 or quote_age > int(getattr(self._config, "gtt_max_quote_age_seconds", 10)):
+        if quote_age < -2 or quote_age > int(getattr(self._config, "live_quote_max_age_seconds", 10)):
             return {"eligible": False, "reason": "LIVE_QUOTE_STALE"}
         entry = _market_ltp((quote or {}).get("data") or {})
         if entry is None or entry <= 0:
@@ -716,122 +783,6 @@ class DummyOrderEngine:
             logger.exception("Dummy Supertrend entry failed for %s", isolation_id)
 
 
-    async def _persist_gtt_cleanup_order(
-        self, state: dict, date_key: str, isolation_id: str,
-        order: dict, isolated_instrument: dict,
-    ) -> None:
-        """Persist current and archived cleanup metadata to their correct Mongo slots."""
-        if self._mongo_store is None:
-            return
-        current = (state.get("orders") or {}).get("supertrend")
-        if order is current:
-            await self._persist_mongo_order_update(
-                date_key, isolation_id, "supertrend", order,
-                isolated_instrument, completed=False,
-            )
-            if str(order.get("status") or "").upper().startswith("COMPLETED"):
-                updater = getattr(self._mongo_store, "update_order_history", None)
-                if callable(updater):
-                    try:
-                        await asyncio.to_thread(updater, date_key, isolation_id, order)
-                    except Exception:
-                        logger.exception("Mongo completed-order cleanup history update failed iso=%s order=%s",
-                                         isolation_id, order.get("order_id"))
-            return
-        updater = getattr(self._mongo_store, "update_order_history", None)
-        if callable(updater):
-            try:
-                await asyncio.to_thread(updater, date_key, isolation_id, order)
-            except Exception:
-                logger.exception("Mongo historical dummy-order cleanup update failed iso=%s order=%s",
-                                 isolation_id, order.get("order_id"))
-        else:
-            logger.warning("Mongo store does not support historical cleanup update iso=%s order=%s",
-                           isolation_id, order.get("order_id"))
-
-    async def _cleanup_prior_gtt_exposure(
-        self, state: dict, isolation_id: str, *, source_order_id: str | None = None
-    ) -> None:
-        """Require confirmed cleanup of every earlier Orderflow GTT before replacement."""
-        if not getattr(self._config, "gtt_orders_enabled", False):
-            return
-        records = list(state.get("order_history") or [])
-        current = (state.get("orders") or {}).get("supertrend")
-        if isinstance(current, dict):
-            records.append(current)
-        unique: dict[str, dict] = {}
-        for item in records:
-            if not isinstance(item, dict):
-                continue
-            identity = str(item.get("order_id") or item.get("started_at_ist") or id(item))
-            unique[identity] = item
-        pending_records: list[dict] = []
-        gtt_ids: list[str] = []
-        for item in unique.values():
-            submission = item.get("gtt_submission") or {}
-            status = str(submission.get("status") or "").upper()
-            cleanup_status = str((item.get("gtt_cleanup") or {}).get("status") or "").upper()
-            if status in {"UNKNOWN", "SUBMITTING"}:
-                raise GTTOrderSubmissionError(
-                    f"Previous GTT state is {status}; reconcile it manually before a replacement."
-                )
-            if cleanup_status in {"CLEANUP_SUBMITTING", "FAILED", "UNKNOWN"}:
-                raise GTTOrderSubmissionError(
-                    f"Previous broker cleanup state is {cleanup_status}; automatic retry is disabled."
-                )
-            if status != "SUBMITTED" or cleanup_status in {"CLEANUP_CONFIRMED", "CLEANED"}:
-                continue
-            ids = [str(value) for value in (submission.get("gtt_order_ids") or []) if value]
-            if not ids:
-                raise GTTOrderSubmissionError(
-                    "Previous GTT was accepted but no GTT ID was persisted; replacement is blocked."
-                )
-            pending_records.append(item)
-            gtt_ids.extend(ids)
-        gtt_ids = list(dict.fromkeys(gtt_ids))
-        if not gtt_ids:
-            return
-        requested_at = _now().isoformat()
-        for item in pending_records:
-            item["gtt_cleanup"] = {"status": "CLEANUP_SUBMITTING", "requested_at": requested_at,
-                                   "gtt_order_ids": gtt_ids}
-        state["updated_at"] = requested_at
-        await asyncio.to_thread(self._store.save, isolation_id, state)
-        for item in pending_records:
-            await self._persist_gtt_cleanup_order(
-                state, self._date_key(state, isolation_id), isolation_id,
-                item, state.get("isolated_instrument") or {})
-        try:
-            result = await asyncio.to_thread(
-                cleanup_gtt_orders, self._config, gtt_ids,
-                isolation_id=isolation_id, source_order_id=source_order_id)
-        except Exception as exc:
-            cleanup_status = "UNKNOWN" if getattr(exc, "outcome_unknown", False) else "FAILED"
-            updated_at = _now().isoformat()
-            for item in pending_records:
-                item["gtt_cleanup"] = {"status": cleanup_status, "requested_at": requested_at,
-                                       "updated_at": updated_at, "gtt_order_ids": gtt_ids,
-                                       "error": str(exc)}
-            state["updated_at"] = updated_at
-            await asyncio.to_thread(self._store.save, isolation_id, state)
-            for item in pending_records:
-                await self._persist_gtt_cleanup_order(
-                state, self._date_key(state, isolation_id), isolation_id,
-                item, state.get("isolated_instrument") or {})
-            raise GTTOrderSubmissionError(
-                f"Previous Orderflow exposure cleanup failed; replacement GTT blocked: {exc}",
-                outcome_unknown=cleanup_status == "UNKNOWN",
-                http_status=getattr(exc, "http_status", None)) from None
-        updated_at = _now().isoformat()
-        for item in pending_records:
-            item["gtt_cleanup"] = {**result, "status": "CLEANUP_CONFIRMED", "updated_at": updated_at}
-        state["updated_at"] = updated_at
-        await asyncio.to_thread(self._store.save, isolation_id, state)
-        for item in pending_records:
-            await self._persist_gtt_cleanup_order(
-                state, self._date_key(state, isolation_id), isolation_id,
-                item, state.get("isolated_instrument") or {})
-
     async def _process(
         self, payload: dict, source_key: str, source_role: str, isolation_id: str,
         *, event_origin: str | None = None,
@@ -921,7 +872,7 @@ class DummyOrderEngine:
                 + [getattr(self._config, "nifty_instrument_key", "")],
                 str(state.get("trade_date_ist") or self._date_key(state, isolation_id)),
             )
-            eligibility = self._live_execution_eligibility(
+            eligibility = self._live_entry_eligibility(
                 payload, signal, target_key, state, event_origin, live_event_received_at
             )
             if not eligibility.get("eligible"):
@@ -941,77 +892,82 @@ class DummyOrderEngine:
                 logger.info("Supertrend entry limit reached iso=%s entries=%d limit=%d signal_time=%s",
                             isolation_id, order_count, order_limit, signal["time"])
                 return
-            # A new opposite Supertrend signal reverses an open dummy order.
-            # Close at the latest same-session LTP, but never replace an order
-            # if that quote already satisfies its target or stop.
+
+            # An open first order must finish naturally. A later opposite signal
+            # cannot prematurely close it or create a replacement entry.
             if isinstance(existing_order, dict) and existing_order.get("status") == "DUMMY_PLACED":
-                old_key = existing_order.get("target_instrument_key") or existing_order.get("instrument_key")
-                if old_key == target_key:
-                    return  # duplicate/same-side signal; keep the current trade open
-                old_quote = await asyncio.to_thread(self._live_feed.latest, old_key)
-                old_quote_time = _dt((old_quote or {}).get("received_at"))
-                trade_date = state.get("trade_date_ist") or isolation_id.split("__", 1)[0]
-                old_price = (_price((old_quote or {}).get("data") or {})
-                             if old_quote_time and old_quote_time.strftime("%Y-%m-%d") == trade_date
-                             else None)
-                if old_price is None:
-                    logger.warning("Cannot reverse Supertrend order without a same-session LTP iso=%s key=%s",
-                                   isolation_id, old_key)
+                logger.info(
+                    "Supertrend second signal ignored while first order remains open iso=%s order_id=%s",
+                    isolation_id, existing_order.get("order_id"),
+                )
+                return
+
+            # The second entry is allowed only after a confirmed first-order loss.
+            # A target touch (including a partial target exit) consumes the
+            # second-entry opportunity permanently.
+            if order_count >= 1:
+                all_orders = list(state.get("order_history") or [])
+                if isinstance(existing_order, dict):
+                    all_orders.append(existing_order)
+                unique_orders = {}
+                for item in all_orders:
+                    if isinstance(item, dict):
+                        identity = str(item.get("order_id") or item.get("started_at_ist") or "")
+                        if identity:
+                            unique_orders[identity] = item
+                first_order = next(
+                    (item for item in unique_orders.values()
+                     if int(item.get("order_sequence") or 0) == 1),
+                    None,
+                )
+                if first_order is None and unique_orders:
+                    first_order = min(
+                        unique_orders.values(),
+                        key=lambda item: str(item.get("started_at_ist") or item.get("entry_time_ist") or ""),
+                    )
+                first_status = str((first_order or {}).get("status") or "").upper()
+                first_reason = str((first_order or {}).get("exit_reason") or "").upper()
+                first_pnl = None
+                try:
+                    if (first_order or {}).get("pnl_net") is not None:
+                        first_pnl = float(first_order["pnl_net"])
+                except (TypeError, ValueError):
+                    first_pnl = None
+                target_reached = bool(
+                    (first_order or {}).get("first_target_reached")
+                    or (first_order or {}).get("partial_exit_done")
+                    or first_reason == "TARGET"
+                )
+                confirmed_loss = (
+                    first_status.startswith("COMPLETED")
+                    and not target_reached
+                    and (first_reason == "STOP_LOSS" or (first_pnl is not None and first_pnl < 0))
+                )
+                if target_reached:
+                    logger.info(
+                        "Supertrend second entry blocked: first order reached target iso=%s order_id=%s",
+                        isolation_id, (first_order or {}).get("order_id"),
+                    )
+                    state["supertrend_second_entry_decision"] = {
+                        "status": "BLOCKED_FIRST_ORDER_PROFIT",
+                        "first_order_id": (first_order or {}).get("order_id"),
+                        "signal_time": signal["time"],
+                        "decided_at_ist": _now().isoformat(),
+                    }
+                    state["updated_at"] = _now().isoformat()
+                    await asyncio.to_thread(self._store.save, isolation_id, state)
                     return
-                old_stop = existing_order.get("stop_loss_price")
-                old_target = existing_order.get("target_price")
-                if old_target is not None and old_price >= float(old_target):
-                    close_reason = "TARGET"
-                elif old_stop is not None and old_price <= float(old_stop):
-                    close_reason = "STOP_LOSS"
-                else:
-                    close_reason = "SIGNAL_REVERSAL"
-                # Do not mark the local reversal complete until broker cleanup is confirmed.
-                await self._cleanup_prior_gtt_exposure(
-                    state, isolation_id, source_order_id=existing_order.get("order_id")
-                )
-                close_time = _now()
-                started = _dt(existing_order.get("started_at_ist") or existing_order.get("entry_time_ist"))
-                existing_order.update({
-                    "status": ("COMPLETED_TARGET" if close_reason == "TARGET" else
-                               "COMPLETED_STOP_LOSS" if close_reason == "STOP_LOSS" else
-                               "COMPLETED_SIGNAL_REVERSAL"),
-                    "exit_reason": close_reason,
-                    "exit_price": old_price,
-                    "completed_at_ist": close_time.isoformat(),
-                    "duration_seconds": round((close_time - started).total_seconds(), 3) if started else None,
-                    "reversed_by_signal": trigger,
-                    "replaced_by_target_instrument_key": target_key if close_reason == "SIGNAL_REVERSAL" else None,
-                })
-                units = int(existing_order.get("quantity_units") or existing_order.get("quantity") or 1)
-                pnl_points = round(old_price - float(existing_order.get("entry_price") or 0), 4)
-                existing_order.update({"pnl_points": pnl_points, "pnl_gross": round(pnl_points * units, 2),
-                                       "estimated_costs": 0.0, "pnl_net": round(pnl_points * units, 2),
-                                       "pnl_currency": "INR", "pnl_cost_model": "gross_only_costs_not_configured"})
-                state.setdefault("order_history", []).append(dict(existing_order))
-                state["updated_at"] = close_time.isoformat()
-                await asyncio.to_thread(self._store.save, isolation_id, state)
-                await self._persist_mongo_order_update(
-                    meta.get("date_key") or self._date_key(state, isolation_id),
-                    isolation_id, indicator, existing_order,
-                    meta.get("instrument_context") or {}, completed=True,
-                )
-                self._index_open_orders(isolation_id, state)
-                await self._notify_completion(state, indicator, existing_order)
-                if close_reason == "TARGET":
-                    logger.info("Supertrend target already reached before reversal signal; replacement skipped iso=%s",
-                                isolation_id)
+                if not confirmed_loss:
+                    logger.info(
+                        "Supertrend second entry blocked: first order outcome is not a confirmed loss iso=%s status=%s reason=%s",
+                        isolation_id, first_status, first_reason,
+                    )
                     return
 
-            # Completed orders can be followed by another confirmed signal,
+            # Completed orders can be followed by another confirmed signal,            # Completed orders can be followed by another confirmed signal,
             # but the per-isolation entry cap remains authoritative.
             if isinstance(existing_order, dict) and str(existing_order.get("status") or "").startswith("COMPLETED"):
                 self._archive_supertrend_order(state, existing_order)
-
-            # Also reconcile older completed entries before creating a replacement.
-            await self._cleanup_prior_gtt_exposure(
-                state, isolation_id, source_order_id=existing_order.get("order_id") if isinstance(existing_order, dict) else None
-            )
 
             order_count = self._supertrend_order_count(state)
             if order_count >= order_limit:
@@ -1052,6 +1008,13 @@ class DummyOrderEngine:
                     else None
                 ),
                 "quantity_units": int(self._config.dummy_order_quantity) * int(target_meta.get("lot_size") or 1),
+                "original_quantity": int(self._config.dummy_order_quantity),
+                "original_quantity_units": int(self._config.dummy_order_quantity) * int(target_meta.get("lot_size") or 1),
+                "remaining_quantity_lots": int(self._config.dummy_order_quantity),
+                "remaining_quantity_units": int(self._config.dummy_order_quantity) * int(target_meta.get("lot_size") or 1),
+                "partial_exit_done": False,
+                "first_target_reached": False,
+                "realized_pnl_gross": 0.0,
                 "entry_price": entry,
                 "entry_time_ist": now_ist.isoformat(),
                 "started_at_ist": now_ist.isoformat(),
@@ -1102,76 +1065,8 @@ class DummyOrderEngine:
             self._index_open_orders(isolation_id, state)
             logger.info("Dummy %s entry saved iso=%s target=%s trigger=%s",
                         indicator, isolation_id, target_key, trigger.get("confirmed_time"))
-            # Re-run the same fail-closed gate immediately before the broker
-            # side-effect. The live entry must still match the quote used for levels.
-            if getattr(self._config, "gtt_orders_enabled", False):
-                gtt_gate = self._live_execution_eligibility(
-                    payload, signal, target_key, state, event_origin, live_event_received_at
-                )
-                gate_reason = None
-                if not gtt_gate.get("eligible"):
-                    gate_reason = gtt_gate.get("reason") or "LIVE_GATE_RECHECK_FAILED"
-                elif abs(float(gtt_gate["entry"]) - float(order["entry_price"])) > 0.000001:
-                    gate_reason = "LIVE_ENTRY_CHANGED_BEFORE_GTT_SUBMISSION"
-                if gate_reason:
-                    order["gtt_submission"] = {
-                        "status": "SKIPPED_LIVE_GATE_FAILED",
-                        "reason": gate_reason,
-                        "updated_at": _now().isoformat(),
-                        "entry_sent": False,
-                    }
-                else:
-                    requested_at = _now().isoformat()
-                    order["gtt_submission"] = {
-                        "status": "SUBMITTING",
-                        "requested_at": requested_at,
-                        "endpoint": self._config.gtt_api_url,
-                        "entry_sent": False,
-                        "live_gate_rechecked": True,
-                    }
-                    await asyncio.to_thread(self._store.save, isolation_id, state)
-                    await self._persist_mongo_order_update(
-                        meta.get("date_key") or self._date_key(state, isolation_id),
-                        isolation_id, indicator, order,
-                        meta.get("instrument_context") or {}, completed=False,
-                    )
-                    try:
-                        gtt_result = await asyncio.to_thread(submit_gtt_order, self._config, order)
-                    except GTTOrderSubmissionError as exc:
-                        order["gtt_submission"] = {
-                            "status": "UNKNOWN" if exc.outcome_unknown else "FAILED",
-                            "requested_at": requested_at,
-                            "updated_at": _now().isoformat(),
-                            "http_status": exc.http_status,
-                            "error": str(exc),
-                            "entry_sent": False,
-                        }
-                        logger.error(
-                            "Live GTT submission %s for iso=%s instrument=%s: %s",
-                            order["gtt_submission"]["status"], isolation_id, target_key, str(exc),
-                        )
-                    except Exception:
-                        order["gtt_submission"] = {
-                            "status": "UNKNOWN",
-                            "requested_at": requested_at,
-                            "updated_at": _now().isoformat(),
-                            "error": "Unexpected client failure; inspect the receiving service before retrying.",
-                            "entry_sent": False,
-                        }
-                        logger.exception(
-                            "Unexpected live GTT submission failure iso=%s instrument=%s",
-                            isolation_id, target_key,
-                        )
-                    else:
-                        order["gtt_submission"] = gtt_result
-                state["updated_at"] = _now().isoformat()
-                await asyncio.to_thread(self._store.save, isolation_id, state)
-                await self._persist_mongo_order_update(
-                    meta.get("date_key") or self._date_key(state, isolation_id),
-                    isolation_id, indicator, order,
-                    meta.get("instrument_context") or {}, completed=False,
-                )
-            await self._notify_entry(state, order)
+            # OrderFlow is intentionally dummy-only: no broker or GTT call is made.
+            await self._notify_entry(state, order)            await self._notify_entry(state, order)
 
 
 
@@ -1202,6 +1097,17 @@ class DummyOrderEngine:
             if low <= stop:
                 return True, {"reason": "STOP_LOSS", "price": stop, "time": stamp}, stamp
             if high >= target:
+                if self._apply_partial_target(order, stamp, target):
+                    # OHLC cannot reveal whether the post-target stop traded
+                    # before or after target. Use the conservative outcome.
+                    if low <= float(order["stop_loss_price"]):
+                        return True, {
+                            "reason": "STOP_LOSS",
+                            "price": float(order["stop_loss_price"]),
+                            "time": stamp,
+                        }, stamp
+                    stop = float(order["stop_loss_price"])
+                    continue
                 return True, {"reason": "TARGET", "price": target, "time": stamp}, stamp
         return False, None, last_stamp
 
@@ -1224,6 +1130,10 @@ class DummyOrderEngine:
             "instrument_key": key, "target_instrument_key": key, "target_leg_role": role,
             "trading_symbol": (meta.get("instrument_meta") or {}).get(role, {}).get("trading_symbol"),
             "quantity": quantity, "lot_size": lot_size, "quantity_units": quantity * lot_size,
+            "original_quantity": quantity, "original_quantity_units": quantity * lot_size,
+            "remaining_quantity_lots": quantity, "remaining_quantity_units": quantity * lot_size,
+            "partial_exit_done": False, "first_target_reached": False,
+            "realized_pnl_gross": 0.0,
             "entry_price": entry, "entry_time_ist": entry_time.isoformat(),
             "started_at_ist": entry_time.isoformat(), "high_price": entry,
             "high_time_ist": entry_time.isoformat(), "low_price": entry,
@@ -1242,9 +1152,7 @@ class DummyOrderEngine:
     def _finish_recovery_order(self, order: dict, reason: str,
                                price: float, stamp: datetime) -> None:
         started = _dt(order.get("started_at_ist"))
-        units = int(order.get("quantity_units") or order.get("quantity") or 1)
-        points = round(float(price) - float(order["entry_price"]), 4)
-        gross = round(points * units, 2)
+        points, gross, net = self._total_order_pnl(order, price)
         order.update({
             "status": ("COMPLETED_TARGET" if reason == "TARGET" else
                        "COMPLETED_STOP_LOSS" if reason == "STOP_LOSS" else
@@ -1253,7 +1161,7 @@ class DummyOrderEngine:
             "completed_at_ist": stamp.isoformat(),
             "duration_seconds": round((stamp - started).total_seconds(), 3) if started else None,
             "pnl_points": points, "pnl_gross": gross, "estimated_costs": 0.0,
-            "pnl_net": gross, "pnl_currency": "INR",
+            "pnl_net": net, "pnl_currency": "INR",
             "pnl_cost_model": "gross_only_costs_not_configured",
         })
 
@@ -1441,9 +1349,8 @@ class DummyOrderEngine:
                 role = "isolated" if signal["direction"] == "BULLISH" else "opposite"
                 key, role_candles = keys.get(role), candles.get(role) or []
                 if active is not None:
-                    # The signal timestamp is the OPEN of the candle whose
-                    # close confirms the flip. Include that complete candle in
-                    # exit replay before applying a signal-reversal close.
+                    # A second signal never reverses an open position. Replay
+                    # through the signal candle and wait for the actual outcome.
                     signal_candle_end = signal["dt"] + timedelta(minutes=1)
                     hit, result, scanned_through = self._simulate_candles(
                         active, active_candles or [],
@@ -1453,22 +1360,15 @@ class DummyOrderEngine:
                         active["exit_reason"], active["exit_price"] = result["reason"], result["price"]
                         active["completed_at_ist"] = result["time"].isoformat()
                         await persist_closed(active)
+                        closed_reason = result["reason"]
+                        closed_target_reached = bool(active.get("first_target_reached"))
                         active = active_role = active_candles = last_processed = None
-                    elif role != active_role:
-                        prior = [bar for bar in (active_candles or [])
-                                 if (self._candle_dt(bar) or self._startup_at) <= signal["dt"]]
-                        if not prior:
-                            state["supertrend_startup_recovery"] = {
-                                "status": "WAITING_FOR_HISTORY",
-                                "message": "No completed candle exists to price a historical reversal.",
-                                "signals_found": len(signals)}
-                            await asyncio.to_thread(self._store.save, isolation_id, state)
-                            return
-                        last = prior[-1]
-                        active["exit_reason"], active["exit_price"] = "SIGNAL_REVERSAL", float(last["close"])
-                        active["completed_at_ist"] = self._candle_dt(last).isoformat()
-                        await persist_closed(active)
-                        active = active_role = active_candles = last_processed = None
+                        if closed_reason == "TARGET" or closed_target_reached:
+                            limit_reached = True
+                            break
+                        if closed_reason != "STOP_LOSS":
+                            limit_reached = True
+                            break
                     else:
                         if scanned_through is not None:
                             last_processed = scanned_through + timedelta(minutes=1)
@@ -1476,6 +1376,30 @@ class DummyOrderEngine:
                 if order_count >= order_limit:
                     limit_reached = True
                     break
+                if order_count >= 1:
+                    prior_first = next(
+                        (item for item in history if int(item.get("order_sequence") or 0) == 1),
+                        history[0] if history else None,
+                    )
+                    prior_reason = str((prior_first or {}).get("exit_reason") or "").upper()
+                    prior_pnl = (prior_first or {}).get("pnl_net")
+                    try:
+                        prior_pnl = float(prior_pnl) if prior_pnl is not None else None
+                    except (TypeError, ValueError):
+                        prior_pnl = None
+                    prior_target = bool(
+                        (prior_first or {}).get("first_target_reached")
+                        or (prior_first or {}).get("partial_exit_done")
+                        or prior_reason == "TARGET"
+                    )
+                    prior_loss = (
+                        str((prior_first or {}).get("status") or "").upper().startswith("COMPLETED")
+                        and not prior_target
+                        and (prior_reason == "STOP_LOSS" or (prior_pnl is not None and prior_pnl < 0))
+                    )
+                    if prior_target or not prior_loss:
+                        limit_reached = True
+                        continue
                 entry_candle = next((bar for bar in role_candles
                                      if self._candle_dt(bar) is not None and
                                      self._candle_dt(bar) > signal["dt"] and
@@ -1596,11 +1520,15 @@ class DummyOrderEngine:
                 order["low_price"], order["low_time_ist"] = price, stamp
                 changed = True
             reason = None
+            partial_exit = False
             stop, target = order.get("stop_loss_price"), order.get("target_price")
             if stop is not None and price <= float(stop):
                 reason = "STOP_LOSS"
             elif target is not None and price >= float(target):
-                reason = "TARGET"
+                if self._apply_partial_target(order, tick_time, float(target)):
+                    partial_exit = True
+                else:
+                    reason = "TARGET"
             if reason:
                 started = _dt(order.get("started_at_ist") or order.get("entry_time_ist"))
                 order.update({
@@ -1609,11 +1537,12 @@ class DummyOrderEngine:
                     "completed_at_ist": stamp,
                     "duration_seconds": round((tick_time - started).total_seconds(), 3) if started else None,
                 })
-                units = int(order.get("quantity_units") or order.get("quantity") or 1)
-                pnl_points = round(price - float(order.get("entry_price") or 0), 4)
-                order.update({"pnl_points": pnl_points, "pnl_gross": round(pnl_points * units, 2),
-                              "estimated_costs": 0.0, "pnl_net": round(pnl_points * units, 2),
+                pnl_points, pnl_gross, pnl_net = self._total_order_pnl(order, price)
+                order.update({"pnl_points": pnl_points, "pnl_gross": pnl_gross,
+                              "estimated_costs": 0.0, "pnl_net": pnl_net,
                               "pnl_currency": "INR", "pnl_cost_model": "gross_only_costs_not_configured"})
+                changed = True
+            if partial_exit:
                 changed = True
             if not changed:
                 return
@@ -1630,6 +1559,13 @@ class DummyOrderEngine:
                             price, order.get("high_price"), order.get("low_price"),
                             order.get("duration_seconds"))
                 await self._notify_completion(state, indicator, order)
+            elif partial_exit:
+                logger.info(
+                    "Dummy %s partial target exit iso=%s order=%s remaining_lots=%s new_sl=%s",
+                    indicator, isolation_id, order.get("order_id"),
+                    order.get("quantity"), order.get("stop_loss_price"),
+                )
+                await self._notify_partial_exit(state, order)
 
     async def _persist_mongo_order_update(self, date_key: str, isolation_id: str,
                                           indicator: str, order: dict,
@@ -1665,6 +1601,18 @@ class DummyOrderEngine:
             )
         except Exception:
             logger.exception("Dummy order entry Telegram notification failed")
+
+    async def _notify_partial_exit(self, state: dict, order: dict) -> None:
+        if self._telegram is None:
+            return
+        try:
+            await self._send_formatted_telegram(
+                format_order_partial_exit_notification(state, order),
+                "Simulated partial target",
+                "SUCCESS",
+            )
+        except Exception:
+            logger.exception("Dummy order partial-exit Telegram notification failed")
 
     async def _notify_completion(self, state: dict, indicator: str, order: dict) -> None:
         if self._telegram is None:

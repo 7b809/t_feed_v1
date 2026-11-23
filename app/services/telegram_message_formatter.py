@@ -183,16 +183,28 @@ def format_order_entry_notification(
     if (source_symbol or source_key) and not same_source:
         source_label = source_symbol or source_key
         lines.append(f"Signal source: {source_label}")
-    gtt = order.get("gtt_submission") if isinstance(order.get("gtt_submission"), dict) else {}
-    if gtt.get("status") == "SUBMITTED":
-        lines.append("🟢 LIVE GTT accepted by execution API")
-        ids = gtt.get("gtt_order_ids") or []
-        if ids:
-            lines.append("GTT ID: " + ", ".join(str(item) for item in ids))
-    elif gtt.get("status") in {"FAILED", "UNKNOWN"}:
-        lines.append("⚠️ LIVE GTT " + str(gtt.get("status")) + ": inspect order record before retry")
-    else:
-        lines.append("SIMULATION ONLY • No live order sent")
+    lines.append("SIMULATION ONLY • No live order sent")
+    return "\n".join(lines)
+
+
+def format_order_partial_exit_notification(
+    state: dict[str, Any],
+    order: dict[str, Any],
+) -> str:
+    """Notify that the first lot reached target and the runner is protected."""
+    symbol = _instrument_name(order, order.get("target_instrument_key") or order.get("instrument_key"))
+    partial = order.get("partial_exit") if isinstance(order.get("partial_exit"), dict) else {}
+    lines = [
+        "🎯 FIRST LOT TARGET HIT",
+        f"📌 {symbol}",
+        f"Entry: {_money(order.get('entry_price'))}",
+        f"First-lot exit: {_money(partial.get('exit_price'))}",
+        f"First-lot realized P&L: {_money(partial.get('pnl_net'))}",
+        f"Remaining: {order.get('quantity', 0)} lot(s) / {order.get('quantity_units', 0)} units",
+        f"Runner stop moved to: {_money(order.get('stop_loss_price'))}",
+        f"Runner target remains: {_money(order.get('target_price'))}",
+        "SIMULATION ONLY • No live order sent",
+    ]
     return "\n".join(lines)
 
 
@@ -233,11 +245,14 @@ def format_order_completion_notification(
     instrument_key = _first_text(order, "target_instrument_key", "instrument_key")
     if instrument_key:
         lines.append(f"Key: {instrument_key}")
-    gtt = order.get("gtt_submission") if isinstance(order.get("gtt_submission"), dict) else {}
-    if gtt.get("status") == "SUBMITTED":
-        lines.append("Linked live GTT was submitted separately; verify its broker lifecycle.")
-    else:
-        lines.append("SIMULATION ONLY • No live order sent")
+    if order.get("partial_exit_done"):
+        partial = order.get("partial_exit") or {}
+        lines.append(
+            f"First lot exited: {_money(partial.get('exit_price'))} • "
+            f"Remaining: {order.get('quantity', 0)} lot(s) • "
+            f"Runner SL: {_money(order.get('stop_loss_price'))}"
+        )
+    lines.append("SIMULATION ONLY • No live order sent")
     return "\n".join(lines)
 
 
@@ -363,13 +378,7 @@ def format_startup_backfill_notification(
                 lines.append(f"     P&L: {_money(order.get('pnl_net'))}")
             if order.get("exit_reason"):
                 lines.append(f"     Exit reason: {str(order.get('exit_reason')).replace('_', ' ').title()}")
-            gtt = order.get("gtt_submission") if isinstance(order.get("gtt_submission"), dict) else {}
-            if gtt:
-                ids = gtt.get("gtt_order_ids") or []
-                lines.append(
-                    f"     GTT: {gtt.get('status', '—')}"
-                    + (f" | IDs: {', '.join(map(str, ids))}" if ids else "")
-                )
+
 
         recovery = state.get("supertrend_startup_recovery") or {}
         if recovery:

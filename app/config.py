@@ -96,16 +96,10 @@ class Settings:
     log_level: str
     logs_dir: str
 
-    # Optional server-to-server live GTT placement. Disabled by default.
-    gtt_orders_enabled: bool = False
-    gtt_api_url: str = "https://sandbox.novag7.in/api/external/v1/gtt/place"
-    gtt_cleanup_url: str = "https://sandbox.novag7.in/api/external/v1/gtt/cleanup"
-    gtt_api_token: str = ""
-    gtt_product: str = "I"
-    gtt_request_timeout_seconds: int = 12
-    gtt_max_signal_age_seconds: int = 60
-    gtt_max_quote_age_seconds: int = 10
-    gtt_live_frame_max_age_seconds: int = 5
+    # Freshness limits for live dummy-entry validation only.
+    live_signal_max_age_seconds: int = 60
+    live_quote_max_age_seconds: int = 10
+    live_frame_max_age_seconds: int = 5
 
     # Local Upstox HistoryV3 Supertrend recovery and live polling.
     supertrend_history_days: int = 10
@@ -153,23 +147,12 @@ class Settings:
             raise ValueError("DAILY_DATA_BACKUP_HOUR must be 0..23")
         if not 0 <= self.daily_data_backup_minute < 60:
             raise ValueError("DAILY_DATA_BACKUP_MINUTE must be 0..59")
-        if self.gtt_orders_enabled:
-            if not self.gtt_api_url.startswith("https://"):
-                raise ValueError("GTT_API_URL must use HTTPS")
-            if not self.gtt_cleanup_url.startswith("https://"):
-                raise ValueError("GTT_CLEANUP_URL must use HTTPS")
-            if len(self.gtt_api_token) != 32:
-                raise ValueError("GTT_API_TOKEN must be configured as an exact 32-character secret when GTT_ORDERS_ENABLED=true")
-            if self.gtt_product not in {"I", "D", "MTF"}:
-                raise ValueError("GTT_PRODUCT must be I, D or MTF")
-        if self.gtt_request_timeout_seconds < 3:
-            raise ValueError("GTT_REQUEST_TIMEOUT_SECONDS must be >= 3")
-        if self.gtt_max_signal_age_seconds < 1:
-            raise ValueError("GTT_MAX_SIGNAL_AGE_SECONDS must be >= 1")
-        if self.gtt_max_quote_age_seconds < 1:
-            raise ValueError("GTT_MAX_QUOTE_AGE_SECONDS must be >= 1")
-        if self.gtt_live_frame_max_age_seconds < 1:
-            raise ValueError("GTT_LIVE_FRAME_MAX_AGE_SECONDS must be >= 1")
+        if self.live_signal_max_age_seconds < 1:
+            raise ValueError("LIVE_SIGNAL_MAX_AGE_SECONDS must be >= 1")
+        if self.live_quote_max_age_seconds < 1:
+            raise ValueError("LIVE_QUOTE_MAX_AGE_SECONDS must be >= 1")
+        if self.live_frame_max_age_seconds < 1:
+            raise ValueError("LIVE_FRAME_MAX_AGE_SECONDS must be >= 1")
         if self.supertrend_history_days < 1:
             raise ValueError("SUPERTREND_HISTORY_DAYS must be >= 1")
         if self.supertrend_atr_period < 1:
@@ -242,7 +225,7 @@ def load_settings() -> Settings:
         nifty_instrument_key=os.getenv("NIFTY_INSTRUMENT_KEY", "NSE_INDEX|Nifty 50"),
         dummy_orders_enabled=_env_bool("DUMMY_ORDERS_ENABLED", True),
         dummy_supertrend_orders_enabled=_env_bool("DUMMY_SUPERTREND_ORDERS_ENABLED", True),
-        dummy_order_quantity=_env_int("DUMMY_ORDER_QUANTITY", 1),
+        dummy_order_quantity=_env_int("DUMMY_ORDER_QUANTITY", 2),
         dummy_order_state_dir=os.getenv("DUMMY_ORDER_STATE_DIR", "./data/dummy_orders"),
         dummy_order_stop_loss_percent=float(os.getenv("DUMMY_ORDER_STOP_LOSS_PERCENT", "30")),
         dummy_target_upper_threshold=float(os.getenv("DUMMY_TARGET_UPPER_THRESHOLD", "200")),
@@ -269,15 +252,9 @@ def load_settings() -> Settings:
         telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", ""),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         logs_dir=os.getenv("LOGS_DIR", "./logs"),
-        gtt_orders_enabled=_env_bool("GTT_ORDERS_ENABLED", False),
-        gtt_api_url=os.getenv("GTT_API_URL", "https://sandbox.novag7.in/api/external/v1/gtt/place").strip(),
-        gtt_cleanup_url=os.getenv("GTT_CLEANUP_URL", "https://sandbox.novag7.in/api/external/v1/gtt/cleanup").strip(),
-        gtt_api_token=os.getenv("GTT_API_TOKEN", "").strip(),
-        gtt_product=os.getenv("GTT_PRODUCT", "I").strip().upper(),
-        gtt_request_timeout_seconds=_env_int("GTT_REQUEST_TIMEOUT_SECONDS", 12),
-        gtt_max_signal_age_seconds=_env_int("GTT_MAX_SIGNAL_AGE_SECONDS", 60),
-        gtt_max_quote_age_seconds=_env_int("GTT_MAX_QUOTE_AGE_SECONDS", 10),
-        gtt_live_frame_max_age_seconds=_env_int("GTT_LIVE_FRAME_MAX_AGE_SECONDS", 5),
+        live_signal_max_age_seconds=_env_int("LIVE_SIGNAL_MAX_AGE_SECONDS", 60),
+        live_quote_max_age_seconds=_env_int("LIVE_QUOTE_MAX_AGE_SECONDS", 10),
+        live_frame_max_age_seconds=_env_int("LIVE_FRAME_MAX_AGE_SECONDS", 5),
         supertrend_history_days=_env_int("SUPERTREND_HISTORY_DAYS", 10),
         supertrend_atr_period=_env_int("SUPERTREND_ATR_PERIOD", 10),
         supertrend_multiplier=float(os.getenv("SUPERTREND_MULTIPLIER", "3.0")),

@@ -624,37 +624,55 @@ the WebSocket frame itself must also have a fresh receive timestamp. A fresh
 same-session local market-feed LTP is mandatory. Signal payload prices and
 persisted stale quotes are never used as entry fallbacks.
 
-By default, the engine remains simulation-only. An optional server-to-server
-GTT integration can be enabled with GTT_ORDERS_ENABLED=true. For each newly
-created live Supertrend dummy entry, OrderFlow rechecks the live-event gate
-immediately before submitting the calculated target and stop-loss to the
-authenticated external GTT endpoint. The entry property is intentionally
-omitted so the receiving service uses its own live LTP. The
-request uses the dummy order lot count, verified instrument lot-size metadata
-when available, trading symbol and configured product.
+Execution is strictly dummy-only. OrderFlow does not submit broker orders,
+GTTs, or call an external order-placement/cleanup service. Each entry is
+persisted locally and in MongoDB with `mode=DUMMY_ONLY`,
+`broker_order_id=null`, and `real_order_submitted=false`. Live WebSocket
+signals and fresh market-feed quotes are still required for a live simulated
+entry; historical recovery can only reconstruct simulation records.
 
-The shared fail-closed gate requires a live WebSocket signal event, a current
-confirmation timestamp, a fresh WebSocket receive timestamp, a fresh current-
-session quote, and valid calculated entry/stop-loss/target levels. The gate is
-checked before dummy-order creation and again before GTT submission. Snapshot,
-startup historical recovery and backfill processing never submit GTT orders
-or create live dummy entries. Submission state, GTT IDs, HTTP status and errors
-are saved inside the dummy order in local and MongoDB persistence. An
-ambiguous network failure is marked UNKNOWN and is not automatically retried
-because the remote service may already have accepted the request. Existing
-dummy reversal/exit logic does not cancel or square off a previously submitted
-broker GTT; its target/stop-loss lifecycle remains broker-managed.
+### Entry window and outcome-aware second entry
+
+The first eligible signal before 09:40 IST selects the early window, which
+allows at most two entries. A first signal at or after 09:40 allows one entry.
+The second early-window entry is not unconditional:
+
+- First order reaches its target: the second entry is blocked, even if another
+  signal arrives within the window.
+- First order exits at stop-loss with a confirmed loss: a second valid signal
+  may create the second dummy order within the window.
+- First order remains open or its outcome is uncertain: the second entry is
+  blocked. Opposite signals do not reverse an open order.
+- A first order that partially exits at target is considered a winning order;
+  the second entry remains blocked even if the runner later exits at its
+  adjusted stop.
+
+### Two-lot partial-profit management
+
+The default simulated order size is two lots (`DUMMY_ORDER_QUANTITY=2`).
+When the original target is reached, one lot is recorded as exited at the
+target, and the remaining lot stays open with the original target unchanged.
+The runner stop is moved to halfway between entry and the original target.
+For example, entry ₹100 and target ₹150 moves the remaining stop to ₹125.
+The runner continues to be monitored using live market ticks and historical
+recovery candles. Partial-exit state and cumulative realized P&L are persisted
+so a restart does not repeat the first-lot exit.
+
+The OHLC recovery simulator uses a conservative stop-first rule when a
+historical candle touches both the runner stop and target; it does not assume
+an intrabar event sequence that the candle data cannot establish.
 
 Configuration:
 ```env
 DUMMY_ORDERS_ENABLED=true
-DUMMY_ORDER_QUANTITY=1
+DUMMY_SUPERTREND_ORDERS_ENABLED=true
+DUMMY_ORDER_QUANTITY=2
 DUMMY_ORDER_STATE_DIR=./data/dummy_orders
-GTT_API_URL=https://sandbox.novag7.in/api/external/v1/gtt/place
-GTT_MAX_SIGNAL_AGE_SECONDS=60
-GTT_MAX_QUOTE_AGE_SECONDS=10
-GTT_LIVE_FRAME_MAX_AGE_SECONDS=5
+LIVE_SIGNAL_MAX_AGE_SECONDS=60
+LIVE_QUOTE_MAX_AGE_SECONDS=10
+LIVE_FRAME_MAX_AGE_SECONDS=5
 ```
+
 ## Dummy order history dashboard and API
 
 The Orders dashboard provides two views:
@@ -700,52 +718,3 @@ Telegram alerts are event-based and designed to remain readable in desktop and m
 All simulated-order notifications retain an explicit `SIMULATION ONLY • No live order sent` notice. Instrument keys are retained for traceability, while the trading symbol is the primary human-readable label.
 
 
-## Optional live GTT integration
-
-Configure these values in the private OrderFlow server .env file:
-
-```env
-GTT_ORDERS_ENABLED=false
-GTT_API_URL=https://sandbox.novag7.in/api/external/v1/gtt/place
-GTT_API_TOKEN=
-GTT_PRODUCT=I
-GTT_REQUEST_TIMEOUT_SECONDS=12
-```
-
-Set GTT_API_TOKEN to the exact 32-character secret configured as
-EXTERNAL_API_SOURCE_TOKEN on the receiving order service. The token is
-loaded directly from the process environment and is included only in the
-server-to-server JSON request. It is never exposed to the browser or written
-to logs, order records, or Git. Enabling GTT requires HTTPS and a 32-character
-token; configuration validation fails otherwise.
-
-The outgoing request contains instrument_key, trading_symbol, target,
-stoploss, lot, optional verified lot_size, product, transaction_type and
-api_token. It deliberately does not contain entry. The receiving service
-obtains its own current LTP for its immediate-entry GTT rule. Target and
-stop-loss are calculated by the existing OrderFlow dummy-order rules.
-
-Keep GTT_ORDERS_ENABLED=false until the receiving service is configured for
-the intended account, the token is set privately, and all price/quantity
-calculations have been checked. Turning this flag on submits live GTT requests
-for newly created eligible orders.
-
-## Supertrend GTT replacement cleanup
-
-When `GTT_ORDERS_ENABLED=true`, a new eligible Supertrend entry must first reconcile prior GTT exposure from the same isolation. The existing per-isolation execution lock, signal idempotency, 09:15 session start, 09:40 early/late cutoff, and two-entry/one-entry caps remain in force.
-
-Configure the same 32-character token used by `sandbox_v1` and the authenticated cleanup endpoint:
-
-```env
-GTT_ORDERS_ENABLED=true
-GTT_API_URL=https://sandbox.novag7.in/api/external/v1/gtt/place
-GTT_CLEANUP_URL=https://sandbox.novag7.in/api/external/v1/gtt/cleanup
-GTT_API_TOKEN=<same 32-character EXTERNAL_API_SOURCE_TOKEN>
-GTT_PRODUCT=I
-```
-
-Before a replacement GTT is submitted, Orderflow sends the previously stored GTT IDs to `GTT_CLEANUP_URL`. The sandbox service cancels untriggered GTTs or reconciles triggered GTTs against their generated regular order IDs. The dummy order stores the cleanup request, result, timestamp and error. Unknown/submitting prior GTT states, missing IDs, timeouts, broker errors or incomplete cleanup block the replacement. No automatic retry is performed for an unknown outcome.
-
-The sandbox must have `EXTERNAL_API_AUTH_ENABLED=true` and `ORDERFLOW_CLEANUP_ENABLED=true`. The cleanup permission is separate from `TRADING_ENABLED`; regular dashboard order placement remains disabled unless separately enabled.
-
-A triggered GTT with an active conditional exit rule but no generated broker order ID cannot be safely disarmed or squared off without risking a later unintended sell. That state is intentionally blocked for manual reconciliation.

@@ -634,9 +634,10 @@ function computeLivePnl(o, key) {
   const side = String(o.side || 'BUY').toUpperCase();
   const sign = side === 'BUY' ? 1 : -1;
   const points = (live - entry) * sign;
-  const pnl = points * units;
+  const realizedPnl = Number(o.realized_pnl_gross || 0);
+  const pnl = points * units + realizedPnl;
   const pct = entry ? (live - entry) / entry * 100 * sign : null;
-  return { live, points, pnl, pct, feed, units };
+  return { live, points, pnl, pct, feed, units, realizedPnl };
 }
 
 function liveProgress(o, live) {
@@ -842,6 +843,7 @@ function orderCard(o, idx, key) {
           ${signalBadge(o.signal_direction)}
           ${modeBadge(o.mode)}
           ${simulationBadge(o.simulation_mode)}
+          ${o.partial_exit_done ? '<span class="badge text-bg-success rounded-pill tag-badge"><i class="bi bi-scissors me-1"></i>1 LOT BOOKED · RUNNER ACTIVE</span>' : ''}
           ${priceSourceBadge(o.price_source)}
           ${executionBadge(o)}
         </div>
@@ -951,8 +953,10 @@ function orderCard(o, idx, key) {
                 <i class="bi bi-list-check me-1"></i>Order details
               </div>
               <div class="kv-list small">
-                <div class="kv-row"><span class="kv-key">Quantity × lot size</span><span class="kv-val">${o.quantity ?? '—'} × ${o.lot_size ?? 1}${o.quantity_units != null ? ` = ${o.quantity_units} units` : ''}</span></div>
-                <div class="kv-row"><span class="kv-key">Adjusted units</span><span class="kv-val qty-units">${units ? units.toLocaleString('en-IN') + ' units' : '—'}</span></div>
+                <div class="kv-row"><span class="kv-key">Original quantity</span><span class="kv-val">${o.original_quantity ?? o.quantity ?? '—'} lot(s) × ${o.lot_size ?? 1} = ${o.original_quantity_units ?? o.quantity_units ?? '—'} units</span></div>
+                <div class="kv-row"><span class="kv-key">Remaining quantity</span><span class="kv-val qty-units">${o.quantity ?? '—'} lot(s) / ${o.quantity_units ?? '—'} units</span></div>
+                ${o.partial_exit_done ? `<div class="kv-row"><span class="kv-key">First-lot target</span><span class="kv-val text-success fw-semibold">Exited @ ₹${formatPrice(o.partial_exit?.exit_price)} · P&amp;L ₹${formatPrice(o.partial_exit?.pnl_net)}</span></div>` : ''}
+                ${o.stop_loss_adjustment ? `<div class="kv-row"><span class="kv-key">Runner stop</span><span class="kv-val text-warning fw-semibold">₹${formatPrice(o.stop_loss_price)} (half-target protection)</span></div>` : ''}
                 <div class="kv-row"><span class="kv-key">Order sequence</span><span class="kv-val">${o.order_sequence ?? '—'} / ${o.max_orders_per_isolation ?? '—'}</span></div>
                 <div class="kv-row"><span class="kv-key">Isolation ID</span><span class="kv-val font-monospace">${escapeHtml(o.isolation_id || '—')}</span></div>
                 <div class="kv-row"><span class="kv-key">Source instrument (${escapeHtml(o.source_leg_role || '—')})</span><span class="kv-val font-monospace">${escapeHtml(sourceInst || '—')}</span></div>
