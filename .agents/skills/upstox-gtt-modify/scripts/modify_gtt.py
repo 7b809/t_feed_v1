@@ -82,6 +82,14 @@ def main() -> int:
         latest = _fetch(api, args.gtt_order_id)
         latest_preview = validate_gtt_modification(latest, args.leg, args.trigger_price)
 
+        # Abort if any order setting changed after the preview shown in this run.
+        # The user must review a fresh preview rather than approving stale details.
+        if latest_preview["modify_request"] != preview["modify_request"]:
+            raise RuntimeError(
+                "The GTT order changed after the preview was generated. "
+                "No modification was submitted; fetch and review the latest order again."
+            )
+
         request_data = latest_preview["modify_request"]
         sdk_rules = [
             upstox_client.GttRule(**rule)
