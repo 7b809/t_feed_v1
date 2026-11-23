@@ -74,7 +74,13 @@ class LiveFeedService:
         self._generation: int = 0
 
     def set_loop(self, loop) -> None:
+        """Wire the worker service and its broadcast hub to the app loop."""
         self._loop = loop
+        # Feed callbacks run on the Upstox worker thread. The broadcast
+        # hub needs the FastAPI loop to forward those ticks to WebSocket
+        # clients. Without this, publish_sync() silently drops every tick.
+        live_broadcast.set_loop(loop)
+        logger.info("[live-feed] asyncio loop wired to live broadcast hub")
 
     # ------------------------------------------------------------------ #
     # Subscription helpers                                               #
