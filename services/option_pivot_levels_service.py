@@ -1,4 +1,10 @@
-"""Parallel per-option opening-candle pivot calculation."""
+"""Per-option pivot levels for each configured completed candle interval.
+
+Each interval is persisted independently beside its option contract metadata:
+1m keeps the legacy pivot_levels.json name; other intervals use
+pivot_levels_<N>m.json. Only completed candles aligned to the 09:15 IST
+session open are eligible.
+"""
 from __future__ import annotations
 
 import json
@@ -9,7 +15,7 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime
+from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -20,7 +26,10 @@ from core.or_levels_calculator import compute_or_levels
 
 logger = get_logger(__file__)
 IST = ZoneInfo("Asia/Kolkata")
+SESSION_OPEN = dt_time(9, 15)
+SESSION_CLOSE = dt_time(15, 30)
 LEVEL_KEYS = ("R3", "R2", "R1", "AVG", "S1", "S2", "S3")
+SUPPORTED_INTERVALS = {1, 2, 3, 5, 10, 15, 30}
 
 
 def _safe(value: Any) -> str:
@@ -45,7 +54,65 @@ def _as_ist(timestamp: Any) -> datetime | None:
         return None
 
 
-def _valid_existing(path: Path, key: str, trade_date: str) -> bool:
+def parse_intervals(value: str | None = None) -> list[int]:
+    """Parse, validate, and de-duplicate configured Upstox minute intervals."""
+    raw = os.getenv("OPTION_PIVOT_INTERVALS", "1,15") if value is None else value
+    intervals: list[int] = []
+    for item in str(raw).split(","):
+        item = item.strip().lower().removesuffix("m")
+        if not item:
+            continue
+        try:
+            interval = int(item)
+        except ValueError:
+            logger.warning("Ignoring invalid OPTION_PIVOT_INTERVALS item: %r", item)
+            continue
+        if interval not in SUPPORTED_INTERVALS:
+            logger.warning("Ignoring unsupported option-pivot interval: %s", interval)
+            continue
+        if interval not in intervals:
+            intervals.append(interval)
+    if not intervals:
+        logger.warning("No valid OPTION_PIVOT_INTERVALS configured; using [1, 15]")
+        return [1, 15]
+    return sorted(intervals)
+
+
+def latest_completed_candle_start(
+    trade_date: str,
+    interval_minutes: int,
+    now: datetime | None = None,
+    grace_seconds: float | None = None,
+) -> datetime | None:
+    """Return the latest session-aligned candle start known to be complete.
+
+    The publication grace avoids requesting a candle at the exact exchange
+    boundary. A 15-minute candle is aligned from 09:15 (09:15-09:30, etc.).
+    """
+    current = now or datetime.now(IST)
+    current = current.replace(tzinfo=IST) if current.tzinfo is None else current.astimezone(IST)
+    session_start = datetime.combine(date.fromisoformat(trade_date), SESSION_OPEN, tzinfo=IST)
+    session_end = datetime.combine(date.fromisoformat(trade_date), SESSION_CLOSE, tzinfo=IST)
+    grace = float(
+        os.getenv("OPTION_PIVOT_CANDLE_CLOSE_GRACE_SECONDS", "5")
+        if grace_seconds is None else grace_seconds
+    )
+    effective_now = min(current - timedelta(seconds=max(0.0, grace)), session_end)
+    elapsed = (effective_now - session_start).total_seconds()
+    interval_seconds = int(interval_minutes) * 60
+    completed_count = math.floor(elapsed / interval_seconds)
+    if completed_count <= 0:
+        return None
+    return session_start + timedelta(seconds=(completed_count - 1) * interval_seconds)
+
+
+def _interval_path(folder: Path, interval: int) -> Path:
+    return folder / ("pivot_levels.json" if interval == 1 else f"pivot_levels_{interval}m.json")
+
+
+def _valid_existing(
+    path: Path, key: str, trade_date: str, interval: int, target_stamp: datetime
+) -> bool:
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
         levels = doc.get("levels") or {}
@@ -53,57 +120,102 @@ def _valid_existing(path: Path, key: str, trade_date: str) -> bool:
         return (
             doc.get("trade_date_ist") == trade_date
             and doc.get("instrument_key") == key
+            and int(doc.get("interval_minutes", 1)) == interval
             and source_stamp is not None
-            and source_stamp.date() == date.fromisoformat(trade_date)
-            and source_stamp.hour == 9
-            and source_stamp.minute == 15
+            and source_stamp == target_stamp
             and all(levels.get(level) is not None for level in LEVEL_KEYS)
         )
-    except (OSError, json.JSONDecodeError, AttributeError):
+    except (OSError, json.JSONDecodeError, AttributeError, TypeError, ValueError):
         return False
 
 
 class OptionInstrumentPivotLevelsService:
-    """Use bounded parallelism with a shared API request-rate limiter."""
+    """Bounded parallel fetches with one shared request-rate limiter."""
 
-    def __init__(self, root="data/option_chain", requests_per_second=None,
-                 max_retries=None, retry_backoff_seconds=None, max_workers=None):
+    def __init__(
+        self, root="data/option_chain", requests_per_second=None,
+        max_retries=None, retry_backoff_seconds=None, max_workers=None,
+        intervals=None, close_grace_seconds=None,
+    ):
         self.root = Path(root)
         self.requests_per_second = float(os.getenv("OPTION_PIVOT_FETCH_REQUESTS_PER_SECOND", "4")) if requests_per_second is None else float(requests_per_second)
         self.max_retries = int(os.getenv("OPTION_PIVOT_FETCH_MAX_RETRIES", "2")) if max_retries is None else int(max_retries)
         self.retry_backoff_seconds = float(os.getenv("OPTION_PIVOT_FETCH_RETRY_BACKOFF_SECONDS", "1")) if retry_backoff_seconds is None else float(retry_backoff_seconds)
         self.max_workers = max(1, int(os.getenv("OPTION_PIVOT_MAX_WORKERS", "8")) if max_workers is None else int(max_workers))
+        self.intervals = parse_intervals() if intervals is None else parse_intervals(",".join(str(x) for x in intervals))
+        self.close_grace_seconds = float(os.getenv("OPTION_PIVOT_CANDLE_CLOSE_GRACE_SECONDS", "5")) if close_grace_seconds is None else float(close_grace_seconds)
         self._last_request_at = 0.0
         self._rate_lock = threading.Lock()
         self._thread_local = threading.local()
 
-    def process_contracts(self, contracts: list[dict], access_token: str, trade_date: str) -> dict:
-        summary = {"state": "completed", "trade_date_ist": str(trade_date), "total": len(contracts or []),
-                   "computed": 0, "already_present": 0, "failed": 0, "skipped": 0, "workers": self.max_workers}
+    def process_contracts(
+        self, contracts: list[dict], access_token: str, trade_date: str,
+        intervals: list[int] | None = None, now: datetime | None = None,
+    ) -> dict:
+        selected_intervals = self.intervals if intervals is None else parse_intervals(",".join(str(x) for x in intervals))
+        summary = {
+            "state": "completed", "trade_date_ist": str(trade_date),
+            "total_contracts": len(contracts or []), "workers": self.max_workers,
+            "intervals": {},
+        }
         if not contracts:
             return summary
-        logger.info("Option pivot parallel batch started | contracts=%d workers=%d rate=%.2f/sec candle=09:15 IST",
-                    len(contracts), self.max_workers, self.requests_per_second)
-        completed = 0
-        with ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix="option-pivot") as pool:
-            futures = {pool.submit(self._process_one, row, str(trade_date), access_token): row for row in contracts}
-            for future in as_completed(futures):
-                completed += 1
-                row = futures[future] or {}
-                try:
-                    summary[future.result()] += 1
-                except Exception as exc:
-                    summary["failed"] += 1
-                    if summary["failed"] <= 3:
-                        logger.exception("Option pivot failed; continuing | %d/%d | key=%s", completed, len(contracts), row.get("instrument_key"))
-                    elif summary["failed"] % 100 == 0:
-                        logger.warning("Option pivot failures=%d latest=%s error=%s", summary["failed"], row.get("instrument_key"), exc)
-                if completed == 1 or completed % 50 == 0 or completed == len(contracts):
-                    logger.info("Option pivot progress %d/%d computed=%d existing=%d failed=%d skipped=%d",
-                                completed, len(contracts), summary["computed"], summary["already_present"], summary["failed"], summary["skipped"])
-        if summary["failed"]:
-            summary["state"] = "partial"
-        logger.info("Option pivot parallel batch completed: %s", summary)
+
+        due = {}
+        for interval in selected_intervals:
+            target = latest_completed_candle_start(
+                trade_date, interval, now=now, grace_seconds=self.close_grace_seconds
+            )
+            if target is not None:
+                due[interval] = target
+            summary["intervals"][f"{interval}m"] = {
+                "target_candle_timestamp": target.isoformat() if target else None,
+                "computed": 0, "already_present": 0, "failed": 0, "skipped": 0,
+            }
+        if not due:
+            summary["state"] = "waiting_for_completed_candle"
+            return summary
+
+        logger.info(
+            "Option pivot cycle started | contracts=%d intervals=%s workers=%d rate=%.2f/sec",
+            len(contracts), ",".join(f"{n}m" for n in due), self.max_workers,
+            self.requests_per_second,
+        )
+        for interval, target in due.items():
+            counts = summary["intervals"][f"{interval}m"]
+            completed = 0
+            with ThreadPoolExecutor(max_workers=self.max_workers, thread_name_prefix=f"option-pivot-{interval}m") as pool:
+                futures = {
+                    pool.submit(self._process_one, row, str(trade_date), access_token, interval, target): row
+                    for row in contracts
+                }
+                for future in as_completed(futures):
+                    completed += 1
+                    row = futures[future] or {}
+                    try:
+                        counts[future.result()] += 1
+                    except Exception as exc:
+                        counts["failed"] += 1
+                        if counts["failed"] <= 3:
+                            logger.exception(
+                                "Option pivot failed; continuing | interval=%dm | %d/%d | key=%s",
+                                interval, completed, len(contracts), row.get("instrument_key"),
+                            )
+                        elif counts["failed"] % 100 == 0:
+                            logger.warning(
+                                "Option pivot failures=%d interval=%dm latest=%s error=%s",
+                                counts["failed"], interval, row.get("instrument_key"), exc,
+                            )
+                    if completed == 1 or completed % 50 == 0 or completed == len(contracts):
+                        logger.info(
+                            "Option pivot progress interval=%dm %d/%d computed=%d existing=%d failed=%d skipped=%d",
+                            interval, completed, len(contracts), counts["computed"],
+                            counts["already_present"], counts["failed"], counts["skipped"],
+                        )
+            if counts["failed"]:
+                summary["state"] = "partial"
+            logger.info("Option pivot interval completed | interval=%dm | %s", interval, counts)
+        logger.info("Option pivot cycle completed: %s", summary)
         return summary
 
     def _fetcher(self, token: str):
@@ -113,7 +225,10 @@ class OptionInstrumentPivotLevelsService:
             self._thread_local.fetcher = client
         return client
 
-    def _process_one(self, contract: dict, trade_date: str, token: str) -> str:
+    def _process_one(
+        self, contract: dict, trade_date: str, token: str,
+        interval: int, target_stamp: datetime,
+    ) -> str:
         key = str((contract or {}).get("instrument_key") or "").strip()
         if not key:
             return "skipped"
@@ -123,52 +238,75 @@ class OptionInstrumentPivotLevelsService:
                 return "skipped"
         except (TypeError, ValueError):
             return "skipped"
+
         folder = _contract_folder(self.root, contract, trade_date.replace("-", ""))
         folder.mkdir(parents=True, exist_ok=True)
-        target = folder / "pivot_levels.json"
-        if _valid_existing(target, key, trade_date):
+        target = _interval_path(folder, interval)
+        if _valid_existing(target, key, trade_date, interval, target_stamp):
             return "already_present"
 
-        candles = self._fetch_with_retry(self._fetcher(token), key)
-        wanted_date = date.fromisoformat(trade_date)
-        # Exact 09:15 start timestamp only: never substitute 09:16 or later.
-        opening = []
+        candles = self._fetch_with_retry(self._fetcher(token), key, interval)
+        match = None
         for candle in candles:
             stamp = _as_ist(candle.get("timestamp"))
-            if stamp and stamp.date() == wanted_date and stamp.hour == 9 and stamp.minute == 15:
-                opening.append((stamp, candle))
-        opening.sort(key=lambda item: item[0])
-        if not opening:
-            logger.warning("Option pivot deferred: exact 09:15 candle unavailable | key=%s date=%s", key, trade_date)
+            if stamp == target_stamp:
+                match = candle
+                break
+        if match is None:
+            logger.debug(
+                "Option pivot deferred: completed candle not yet published | interval=%dm key=%s target=%s",
+                interval, key, target_stamp.isoformat(),
+            )
             return "failed"
-        first = opening[0][1]
-        values = compute_or_levels(first)
-        levels = {"R3": values["R3"], "R2": values["R2"], "R1": values["R1"],
-                  "AVG": values.get("A", values.get("avg")), "S1": values["S1"],
-                  "S2": values["S2"], "S3": values["S3"]}
-        document = {"schema_version": 1, "trade_date_ist": trade_date,
-                    "computed_at_ist": datetime.now(IST).isoformat(), "instrument_key": key,
-                    "trading_symbol": contract.get("trading_symbol") or key,
-                    "index_instrument_key": contract.get("index_instrument_key"),
-                    "index_canonical": contract.get("index_canonical"),
-                    "source": "Upstox HistoryV3Api.get_intra_day_candle_data",
-                    "source_candle_timestamp": first.get("timestamp"), "levels": levels}
+
+        values = compute_or_levels(match)
+        levels = {
+            "R3": values["R3"], "R2": values["R2"], "R1": values["R1"],
+            "AVG": values.get("A", values.get("avg")),
+            "S1": values["S1"], "S2": values["S2"], "S3": values["S3"],
+        }
+        if any(levels.get(name) is None or not math.isfinite(float(levels[name])) for name in LEVEL_KEYS):
+            raise ValueError(f"Invalid pivot values returned for {key} interval={interval}m")
+        candle_end = target_stamp + timedelta(minutes=interval)
+        document = {
+            "schema_version": 2,
+            "trade_date_ist": trade_date,
+            "computed_at_ist": datetime.now(IST).isoformat(),
+            "instrument_key": key,
+            "trading_symbol": contract.get("trading_symbol") or key,
+            "index_instrument_key": contract.get("index_instrument_key"),
+            "index_canonical": contract.get("index_canonical"),
+            "interval_minutes": interval,
+            "interval_label": f"{interval}m",
+            "source": "Upstox HistoryV3Api.get_intra_day_candle_data",
+            "source_candle_timestamp": match.get("timestamp"),
+            "source_candle_end_timestamp": candle_end.isoformat(),
+            "levels": levels,
+        }
         self._save_atomic(target, document)
         return "computed"
 
-    def _fetch_with_retry(self, fetcher, key: str) -> list[dict]:
+    def _fetch_with_retry(self, fetcher, key: str, interval: int) -> list[dict]:
         attempts = max(0, self.max_retries) + 1
         for attempt in range(1, attempts + 1):
             self._throttle()
             try:
-                return fetcher.fetch_intraday_candles(key, unit="minutes", interval="1")
+                return fetcher.fetch_intraday_candles(
+                    key, unit="minutes", interval=str(interval)
+                )
             except CandleFetchError as exc:
                 message = str(exc).lower()
-                transient = any(token in message for token in ("429", "500", "502", "503", "504", "timeout", "timed out", "connection", "temporar", "rate limit", "no candles"))
+                transient = any(token in message for token in (
+                    "429", "500", "502", "503", "504", "timeout", "timed out",
+                    "connection", "temporar", "rate limit", "no candles",
+                ))
                 if not transient or attempt >= attempts:
                     raise
                 delay = self.retry_backoff_seconds * (2 ** (attempt - 1))
-                logger.warning("Transient candle error; retry %d/%d in %.1fs | key=%s | %s", attempt, attempts - 1, delay, key, exc)
+                logger.warning(
+                    "Transient candle error; retry %d/%d in %.1fs | interval=%dm key=%s | %s",
+                    attempt, attempts - 1, delay, interval, key, exc,
+                )
                 time.sleep(max(0.0, delay))
         return []
 
