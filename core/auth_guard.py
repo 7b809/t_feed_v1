@@ -52,6 +52,21 @@ def _is_public(path: str) -> bool:
     return path in PUBLIC_EXACT or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES)
 
 
+# Guest mode exposes only read-only chart/search surfaces.
+_GUEST_PAGE_EXACT = {"/charts"}
+_GUEST_API_GET = {
+    "/api/upstox/search", "/api/upstox/instrument",
+    "/api/upstox/intraday", "/api/upstox/historical",
+    "/api/upstox/subscription-status",
+}
+
+
+def _is_guest_read_only_request(path: str, method: str) -> bool:
+    if not config.GUEST_MODE_ENABLED or method not in {"GET", "HEAD"}:
+        return False
+    return path in _GUEST_PAGE_EXACT or path.startswith("/chart/") or path in _GUEST_API_GET
+
+
 def _client_wants_html(request: Request) -> bool:
     accept = (request.headers.get("accept") or "").lower()
     if "application/json" in accept or request.headers.get("x-requested-with", "").lower() == "xmlhttprequest":
@@ -181,6 +196,15 @@ class AuthGuardMiddleware(BaseHTTPMiddleware):
                 content={"detail": "This area is available to administrators only."},
                 headers={"Cache-Control": "no-store"},
             )
+
+        # Anonymous visitors get only the read-only chart/search surface.
+        if not member and not is_authenticated(request) and _is_guest_read_only_request(path, request.method):
+            request.state.member = None
+            request.state.is_admin = False
+            response = await call_next(request)
+            response.headers.setdefault("Cache-Control", "no-store")
+            response.headers.setdefault("X-Robots-Tag", "noindex, nofollow")
+            return response
 
         if is_authenticated(request):
             request.state.is_admin = True
