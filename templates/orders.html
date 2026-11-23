@@ -844,6 +844,8 @@ function orderCard(o, idx, key) {
           ${modeBadge(o.mode)}
           ${simulationBadge(o.simulation_mode)}
           ${o.partial_exit_done ? '<span class="badge text-bg-success rounded-pill tag-badge"><i class="bi bi-scissors me-1"></i>1 LOT BOOKED · RUNNER ACTIVE</span>' : ''}
+          ${o.second_entry_decision?.status === 'ALLOWED_AFTER_FIRST_ORDER_LOSS' ? '<span class="badge text-bg-info rounded-pill tag-badge">2ND ENTRY · AFTER LOSS</span>' : ''}
+          ${o.second_entry_decision?.status?.startsWith('BLOCKED_') ? '<span class="badge text-bg-warning rounded-pill tag-badge">2ND ENTRY BLOCKED</span>' : ''}
           ${priceSourceBadge(o.price_source)}
           ${executionBadge(o)}
         </div>
@@ -957,6 +959,7 @@ function orderCard(o, idx, key) {
                 <div class="kv-row"><span class="kv-key">Remaining quantity</span><span class="kv-val qty-units">${o.quantity ?? '—'} lot(s) / ${o.quantity_units ?? '—'} units</span></div>
                 ${o.partial_exit_done ? `<div class="kv-row"><span class="kv-key">First-lot target</span><span class="kv-val text-success fw-semibold">Exited @ ₹${formatPrice(o.partial_exit?.exit_price)} · P&amp;L ₹${formatPrice(o.partial_exit?.pnl_net)}</span></div>` : ''}
                 ${o.stop_loss_adjustment ? `<div class="kv-row"><span class="kv-key">Runner stop</span><span class="kv-val text-warning fw-semibold">₹${formatPrice(o.stop_loss_price)} (half-target protection)</span></div>` : ''}
+                ${o.second_entry_decision ? `<div class="kv-row"><span class="kv-key">Second-entry decision</span><span class="kv-val">${escapeHtml(String(o.second_entry_decision.status || '').replaceAll('_', ' '))}</span></div>` : ''}
                 <div class="kv-row"><span class="kv-key">Order sequence</span><span class="kv-val">${o.order_sequence ?? '—'} / ${o.max_orders_per_isolation ?? '—'}</span></div>
                 <div class="kv-row"><span class="kv-key">Isolation ID</span><span class="kv-val font-monospace">${escapeHtml(o.isolation_id || '—')}</span></div>
                 <div class="kv-row"><span class="kv-key">Source instrument (${escapeHtml(o.source_leg_role || '—')})</span><span class="kv-val font-monospace">${escapeHtml(sourceInst || '—')}</span></div>

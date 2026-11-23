@@ -15,6 +15,7 @@ from .pivot_levels_service import PivotLevelsService
 from .telegram_message_formatter import (
     format_order_completion_notification,
     format_order_partial_exit_notification,
+    format_second_entry_blocked_notification,
     format_order_entry_notification,
     format_recovery_notification,
 )
@@ -828,6 +829,10 @@ class DummyOrderEngine:
                 for item in persisted_orders if isinstance(item, dict)
                 and (item.get("trigger") or {}).get("confirmed_time")
             }
+            processed_times.update(
+                str(value) for value in (state.get("supertrend_processed_signal_times") or [])
+                if value
+            )
             eligible = [x for x in candidates
                         if x["dt"] > meta["cutoff"] and x["time"] not in processed_times]
             if not eligible:
@@ -900,8 +905,13 @@ class DummyOrderEngine:
                     "Supertrend second signal ignored while first order remains open iso=%s order_id=%s",
                     isolation_id, existing_order.get("order_id"),
                 )
+                await self._record_second_entry_decision(
+                    state, isolation_id, existing_order, signal,
+                    "FIRST_ORDER_STILL_OPEN",
+                )
                 return
 
+            second_entry_context = None
             # The second entry is allowed only after a confirmed first-order loss.
             # A target touch (including a partial target exit) consumes the
             # second-entry opportunity permanently.
@@ -948,21 +958,29 @@ class DummyOrderEngine:
                         "Supertrend second entry blocked: first order reached target iso=%s order_id=%s",
                         isolation_id, (first_order or {}).get("order_id"),
                     )
-                    state["supertrend_second_entry_decision"] = {
-                        "status": "BLOCKED_FIRST_ORDER_PROFIT",
-                        "first_order_id": (first_order or {}).get("order_id"),
-                        "signal_time": signal["time"],
-                        "decided_at_ist": _now().isoformat(),
-                    }
-                    state["updated_at"] = _now().isoformat()
-                    await asyncio.to_thread(self._store.save, isolation_id, state)
+                    await self._record_second_entry_decision(
+                        state, isolation_id, first_order, signal,
+                        "FIRST_ORDER_TARGET_REACHED",
+                    )
                     return
                 if not confirmed_loss:
                     logger.info(
                         "Supertrend second entry blocked: first order outcome is not a confirmed loss iso=%s status=%s reason=%s",
                         isolation_id, first_status, first_reason,
                     )
+                    await self._record_second_entry_decision(
+                        state, isolation_id, first_order, signal,
+                        "FIRST_ORDER_OUTCOME_UNCONFIRMED",
+                    )
                     return
+                second_entry_context = {
+                    "status": "ALLOWED_AFTER_FIRST_ORDER_LOSS",
+                    "first_order_id": (first_order or {}).get("order_id"),
+                    "first_order_exit_reason": first_reason,
+                    "first_order_pnl": first_pnl,
+                    "signal_time": signal["time"],
+                    "decided_at_ist": _now().isoformat(),
+                }
 
             # Completed orders can be followed by another confirmed signal,
             # but the per-isolation entry cap remains authoritative.
@@ -1047,6 +1065,8 @@ class DummyOrderEngine:
                     "quote_age_seconds": eligibility["quote_age_seconds"],
                 },
                 "trigger": trigger, "placed_at": now_ist.isoformat(),
+                "second_entry_decision": second_entry_context,
+                "previous_order_id": (second_entry_context or {}).get("first_order_id"),
                 "order_sequence": order_count + 1,
                 "max_orders_per_isolation": order_limit,
                 "status": "DUMMY_PLACED",
@@ -1209,6 +1229,10 @@ class DummyOrderEngine:
                 for item in persisted_orders if isinstance(item, dict)
                 and (item.get("trigger") or {}).get("confirmed_time")
             }
+            processed_signal_times.update(
+                str(value) for value in (state.get("supertrend_processed_signal_times") or [])
+                if value
+            )
             signals = [item for item in signals if item["time"] not in processed_signal_times]
             persisted_count = self._supertrend_order_count(state)
             if persisted_count == 0 and signals:
@@ -1290,6 +1314,13 @@ class DummyOrderEngine:
 
 
             history = list(state.get("order_history") or [])
+            # A completed order can still occupy the current slot after restart.
+            # Include it in the replay ledger so second-entry eligibility can
+            # inspect its actual target/stop outcome.
+            if isinstance(persisted_order, dict) and str(persisted_order.get("status") or "").upper().startswith("COMPLETED"):
+                persisted_id = str(persisted_order.get("order_id") or "")
+                if not any(str(item.get("order_id") or "") == persisted_id for item in history if isinstance(item, dict)):
+                    history.append(dict(persisted_order))
             initial_history_count = len(history)
             order_count = self._supertrend_order_count(state)
             active, active_role, active_candles, last_processed = None, None, None, None
@@ -1376,6 +1407,7 @@ class DummyOrderEngine:
                 if order_count >= order_limit:
                     limit_reached = True
                     break
+                recovery_second_entry_context = None
                 if order_count >= 1:
                     prior_first = next(
                         (item for item in history if int(item.get("order_sequence") or 0) == 1),
@@ -1399,7 +1431,28 @@ class DummyOrderEngine:
                     )
                     if prior_target or not prior_loss:
                         limit_reached = True
+                        state["supertrend_second_entry_decision"] = {
+                            "status": (
+                                "BLOCKED_FIRST_ORDER_PROFIT"
+                                if prior_target else "BLOCKED_FIRST_ORDER_OUTCOME_UNKNOWN"
+                            ),
+                            "first_order_id": (prior_first or {}).get("order_id"),
+                            "signal_time": signal["time"],
+                            "decided_at_ist": _now().isoformat(),
+                        }
+                        processed = list(state.get("supertrend_processed_signal_times") or [])
+                        if signal["time"] not in processed:
+                            processed.append(signal["time"])
+                        state["supertrend_processed_signal_times"] = processed[-500:]
                         continue
+                    recovery_second_entry_context = {
+                        "status": "ALLOWED_AFTER_FIRST_ORDER_LOSS",
+                        "first_order_id": (prior_first or {}).get("order_id"),
+                        "first_order_exit_reason": prior_reason,
+                        "first_order_pnl": prior_pnl,
+                        "signal_time": signal["time"],
+                        "decided_at_ist": _now().isoformat(),
+                    }
                 entry_candle = next((bar for bar in role_candles
                                      if self._candle_dt(bar) is not None and
                                      self._candle_dt(bar) > signal["dt"] and
@@ -1413,6 +1466,9 @@ class DummyOrderEngine:
                     await asyncio.to_thread(self._store.save, isolation_id, state)
                     return
                 active = self._recovery_order(isolation_id, signal, role, key, entry_candle, meta)
+                if recovery_second_entry_context:
+                    active["second_entry_decision"] = recovery_second_entry_context
+                    state["supertrend_second_entry_decision"] = recovery_second_entry_context
                 order_count += 1
                 active["order_sequence"] = order_count
                 active["max_orders_per_isolation"] = order_limit
@@ -1601,6 +1657,51 @@ class DummyOrderEngine:
             )
         except Exception:
             logger.exception("Dummy order entry Telegram notification failed")
+
+    async def _record_second_entry_decision(
+        self, state: dict, isolation_id: str, order: dict | None,
+        signal: dict, reason: str,
+    ) -> None:
+        status = {
+            "FIRST_ORDER_STILL_OPEN": "BLOCKED_FIRST_ORDER_STILL_OPEN",
+            "FIRST_ORDER_TARGET_REACHED": "BLOCKED_FIRST_ORDER_PROFIT",
+            "FIRST_ORDER_OUTCOME_UNCONFIRMED": "BLOCKED_FIRST_ORDER_OUTCOME_UNKNOWN",
+        }.get(reason, "BLOCKED")
+        decision = {
+            "status": status,
+            "reason": reason,
+            "first_order_id": (order or {}).get("order_id"),
+            "first_order_exit_reason": (order or {}).get("exit_reason"),
+            "signal_time": signal.get("time"),
+            "decided_at_ist": _now().isoformat(),
+        }
+        state["supertrend_second_entry_decision"] = decision
+        processed = list(state.get("supertrend_processed_signal_times") or [])
+        signal_time = str(signal.get("time") or "")
+        if signal_time and signal_time not in processed:
+            processed.append(signal_time)
+        state["supertrend_processed_signal_times"] = processed[-500:]
+        if isinstance(order, dict):
+            order["second_entry_decision"] = decision
+        state["updated_at"] = _now().isoformat()
+        await asyncio.to_thread(self._store.save, isolation_id, state)
+        if isinstance(order, dict):
+            await self._persist_mongo_order_update(
+                self._date_key(state, isolation_id), isolation_id, "supertrend",
+                order, state.get("isolated_instrument") or {},
+                completed=str(order.get("status") or "").upper().startswith("COMPLETED"),
+            )
+        if self._telegram is not None:
+            try:
+                await self._send_formatted_telegram(
+                    format_second_entry_blocked_notification(
+                        state, order, signal, reason
+                    ),
+                    "Second entry blocked",
+                    "WARNING",
+                )
+            except Exception:
+                logger.exception("Second-entry decision Telegram notification failed")
 
     async def _notify_partial_exit(self, state: dict, order: dict) -> None:
         if self._telegram is None:

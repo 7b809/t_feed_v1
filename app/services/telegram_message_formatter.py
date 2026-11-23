@@ -137,6 +137,12 @@ def format_order_entry_notification(
     if signal:
         lines.append(f"Signal: {signal.replace('_', ' ').title()}")
 
+    second_entry = order.get("second_entry_decision") if isinstance(order.get("second_entry_decision"), dict) else {}
+    if second_entry.get("status") == "ALLOWED_AFTER_FIRST_ORDER_LOSS":
+        lines.append(
+            f"Second entry: allowed after first order {second_entry.get('first_order_exit_reason', 'LOSS')}"
+        )
+
     if status == "DUMMY_PLACED":
         entry_time = _time(order.get("started_at_ist") or order.get("entry_time_ist"))
         lines.append(f"Entry: {_money(order.get('entry_price'))}")
@@ -183,6 +189,37 @@ def format_order_entry_notification(
     if (source_symbol or source_key) and not same_source:
         source_label = source_symbol or source_key
         lines.append(f"Signal source: {source_label}")
+    lines.append("SIMULATION ONLY • No live order sent")
+    return "\n".join(lines)
+
+
+def format_second_entry_blocked_notification(
+    state: dict[str, Any],
+    order: dict[str, Any] | None,
+    signal: dict[str, Any],
+    reason: str,
+) -> str:
+    """Explain why a later Supertrend signal did not create another order."""
+    symbol = _instrument_name(order or {}, (order or {}).get("target_instrument_key") or (order or {}).get("instrument_key"))
+    reason_text = {
+        "FIRST_ORDER_STILL_OPEN": "The first order is still open; it must finish naturally.",
+        "FIRST_ORDER_TARGET_REACHED": "The first order reached its target; the second entry is not allowed.",
+        "FIRST_ORDER_OUTCOME_UNCONFIRMED": "The first order outcome is not a confirmed loss.",
+    }.get(reason, reason.replace("_", " ").title())
+    lines = [
+        "⛔ SECOND ENTRY BLOCKED",
+        f"📌 {symbol}",
+        f"Reason: {reason_text}",
+        f"Signal: {str(signal.get('direction') or '—').title()}",
+        f"Signal time: {_time(signal.get('time')) or '—'}",
+    ]
+    if order:
+        lines.append(
+            f"First order: {str(order.get('status') or '—')} • "
+            f"Exit: {str(order.get('exit_reason') or 'OPEN')}"
+        )
+        if order.get("pnl_net") is not None:
+            lines.append(f"First order P&L: {_money(order.get('pnl_net'))}")
     lines.append("SIMULATION ONLY • No live order sent")
     return "\n".join(lines)
 

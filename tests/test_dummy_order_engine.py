@@ -422,6 +422,16 @@ def test_first_order_target_blocks_second_entry_even_inside_window(tmp_path):
         assert state["orders"]["supertrend"]["order_id"] == first["order_id"]
         assert state["supertrend_order_count"] == 1
         assert state["supertrend_second_entry_decision"]["status"] == "BLOCKED_FIRST_ORDER_PROFIT"
+        assert state["supertrend_processed_signal_times"] == ["2026-11-12T09:24:00+05:30"]
+        telegram_messages = list(engine._telegram.messages)
+        assert any("SECOND ENTRY BLOCKED" in message[1] for message in telegram_messages)
+
+        # Replayed duplicate signal is idempotent: no extra decision or Telegram alert.
+        await engine.on_supertrend_frame({
+            "event": "supertrend_signal", "signal": "BEARISH",
+            "confirmed_time": "2026-11-12T09:24:00+05:30", "price": 123.45,
+        }, "CE", "isolated", isolation_id)
+        assert len(engine._telegram.messages) == len(telegram_messages)
 
     asyncio.run(run())
 

@@ -690,7 +690,7 @@ History API endpoints (application base path `/api/v1`):
 Optional history query parameters: `strategy=SUPERTREND`, `status=DUMMY_PLACED|COMPLETED_TARGET|COMPLETED_STOP_LOSS|COMPLETED_SIGNAL_REVERSAL`, and `search=<symbol-or-order-text>`. Page size is limited to 100. The API merges each day's `orders_history` events with the latest per-isolation order snapshots and de-duplicates them by isolation and order ID. Supertrend entry timing is based on each signal's confirmed timestamp in Asia/Kolkata (IST), not frame-receive time:
 
 - Signals confirmed before 09:15 are ignored.
-- If the first eligible signal is from 09:15:00 up to (but not including) 09:40:00, the isolation may create up to **two** entries. Both entries must be confirmed before 09:40. For example, 09:18 and 09:24 can create entries 1 and 2; a third signal at 09:35 is rejected by the two-entry cap.
+- If the first eligible signal is from 09:15:00 up to (but not including) 09:40:00, the isolation may create up to **two** entries. Both entries must be confirmed before 09:40. The second entry is allowed only after the first order completes at a confirmed loss; a first-order target win blocks it. For example, 09:18 and 09:24 can create entries 1 and 2 only when entry 1 has stopped out before the second signal.
 - If the first eligible signal is at or after 09:40, it may create **one** entry only. Any later signal is rejected.
 - If the first entry was created before 09:40, signals at or after 09:40 cannot create another entry, even if the two-entry cap has not been reached.
 - A rejected signal never reverses, closes, or replaces an existing order. The existing order continues to be monitored by its original target and stop-loss.
@@ -712,7 +712,9 @@ Telegram alerts are event-based and designed to remain readable in desktop and m
 - **Isolation received/updated:** isolated trading symbol first, instrument key second, opposite-leg symbol/key, and IST date/time.
 - **Simulated entry:** only the order that was just created; strategy, signal direction, target instrument, entry price, quantity/lot units, target/stop and confirmation time.
 - **Signal without a usable quote:** clearly marked as `SIGNAL RECORDED • ENTRY WAITING`; it does not imply a simulated fill.
-- **Order completed:** exit reason, entry-to-exit prices, simulated P&L and duration. High/low tick diagnostics are intentionally omitted.
+- **First-lot target:** one lot is booked, the runner stop is moved to half the original target distance, and the original target remains active.
+- **Second-entry decision:** Telegram explains when a second signal is blocked by an open/profitable first order, or when the second entry is allowed after a confirmed first-order loss.
+- **Order completed:** exit reason, entry-to-exit prices, cumulative simulated P&L and duration. High/low tick diagnostics are intentionally omitted.
 - **Startup recovery:** one compact reconciliation summary instead of a repeated dump of every strategy's state.
 
 All simulated-order notifications retain an explicit `SIMULATION ONLY • No live order sent` notice. Instrument keys are retained for traceability, while the trading symbol is the primary human-readable label.
