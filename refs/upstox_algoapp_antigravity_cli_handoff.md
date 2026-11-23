@@ -88,9 +88,3 @@ All custom skills were created/edited using `nano` and verified with `python3 -m
 * **Safety Guardrail:** Reserve `--skip-permissions` for controlled testing; require explicit confirmation (such as via Telegram) before placing live money orders.
 
 ---
-
-## 5. Planned Next Steps
-
-1. **Telegram Confirmation Workflow:** Add a structured Telegram approval flow before executing live entry/exit orders.
-2. **Dynamic Risk & Exit Helpers:** Add helpers for dynamic SL/Target rules (such as `SL = Entry * 0.70` and point targets rounded to `0.05` ticks) plus fast position exit / GTT cancellation.
-3. **Position & Margin Awareness:** Keep open positions (`NIFTY26NOV26900CE`, qty `65`) and available Equity margin (`₹1,400.00`) in mind before placing additional option/F&O orders.
