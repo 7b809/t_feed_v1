@@ -140,6 +140,39 @@
   </p>
 </section>
 
+
+<section class="panel-card broker-order-book-card">
+  <div class="panel-header flex-wrap gap-3">
+    <div>
+      <h2>Upstox broker order book <span class="count-chip count-chip-tight" id="brokerOrderCount">—</span></h2>
+      <p id="brokerOrderBookStatus">Loading all current-day orders from the Upstox account…</p>
+    </div>
+    <button class="btn btn-light btn-sm" id="refreshBrokerOrders">
+      <i class="bi bi-arrow-clockwise me-1"></i>Refresh broker orders
+    </button>
+  </div>
+  <div class="orders-table-wrap">
+    <table class="orders-table broker-orders-table">
+      <thead>
+        <tr>
+          <th>Instrument</th>
+          <th>Order ID</th>
+          <th>Side</th>
+          <th>Qty</th>
+          <th>Filled / Pending</th>
+          <th>Product / Type</th>
+          <th>Avg / Order price</th>
+          <th>Status / Message</th>
+          <th>Order time</th>
+        </tr>
+      </thead>
+      <tbody id="brokerOrdersBody">
+        <tr><td colspan="9" class="table-empty">Loading Upstox order book…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
 <div class="metric-grid">
   <div class="metric-card">
     <div class="metric-label">Today's project orders</div>

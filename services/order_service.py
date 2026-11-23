@@ -1303,7 +1303,12 @@ class OrderService:
     def exit_all_positions(
         self, *, tag: str | None = None, segment: str | None = None
     ) -> dict:
-        """Call Upstox's native exit_positions API; no order IDs are needed."""
+        """Use Upstox's official REST Exit All Positions endpoint.
+
+        The broker acts on account positions, including positions entered
+        outside this service. Successful IDs and per-position partial errors
+        are preserved in the result and local audit record.
+        """
         entry = self._new_entry(
             "EXIT_ALL",
             action="EXIT_ALL_POSITIONS",
@@ -1317,31 +1322,41 @@ class OrderService:
 
         try:
             self._require_trading()
-            _, order_v2 = self._clients()
-            response = order_v2.exit_positions(tag=tag, segment=segment)
-            formatted_resp = _format_success_response(response, default_status=200)
-            data = (
-                formatted_resp.get("data")
-                if isinstance(formatted_resp.get("data"), dict)
-                else _response_data(response)
-            )
-            ids = data.get("order_ids") or []
-            ids = [str(value) for value in ids if value]
+            result = submit_exit_positions(tag=tag, segment=segment)
+            ids = [str(value) for value in (result.get("order_ids") or []) if value]
+            errors = result.get("errors") or []
+            summary = result.get("summary") or {
+                "total": len(ids) + len(errors),
+                "success": len(ids),
+                "error": len(errors),
+            }
+            partial = result.get("broker_status") == "partial_success" or bool(errors)
+            local_status = "EXIT_ALL_PARTIAL_SUCCESS" if partial else "EXIT_ALL_SUBMITTED"
+
             persistence = self._append_event(
                 entry["local_id"],
                 self._new_event(
                     "EXIT_ALL_RESPONSE",
                     order_ids=ids,
-                    broker_response=formatted_resp,
+                    errors=errors,
+                    summary=summary,
+                    broker_response=result.get("broker_response"),
                 ),
-                status="EXIT_ALL_SUBMITTED",
+                status=local_status,
                 require_mongo=False,
             )
             self.repository.update_entry(
                 entry["local_id"],
-                {"broker_response": formatted_resp, "last_modified_time": now_iso()},
+                {
+                    "order_ids": ids,
+                    "broker_response": result.get("broker_response"),
+                    "broker_errors": errors,
+                    "broker_summary": summary,
+                    "last_modified_time": now_iso(),
+                },
                 require_mongo=False,
             )
+
             for exit_id in ids:
                 audit = self._new_entry(
                     "EXIT_ALL_ORDER",
@@ -1349,35 +1364,37 @@ class OrderService:
                     order_ids=[exit_id],
                     parent_action_id=entry["local_id"],
                     status="SUBMITTED",
-                    broker_response=formatted_resp,
+                    broker_response=result.get("broker_response"),
                 )
                 audit["events"].append(
                     self._new_event(
                         "EXIT_ALL_ORDER_CREATED",
                         parent_action_id=entry["local_id"],
-                        broker_response=formatted_resp,
+                        broker_response=result.get("broker_response"),
                     )
                 )
                 try:
                     self.repository.append_entry(audit, require_mongo=False)
                 except Exception:
-                    logger.exception(
-                        "Could not persist exit-all order %s", exit_id
-                    )
+                    logger.exception("Could not persist exit-all order %s", exit_id)
+
             notify_event(
-                "Exit all positions submitted",
+                "Exit all positions partially accepted" if partial else "Exit all positions submitted",
                 [
-                    "Exit order ID(s): "
-                    + (", ".join(ids) if ids else "Not returned"),
+                    "Exit order ID(s): " + (", ".join(ids) if ids else "None returned"),
                     f"Tag: {tag or 'All'} | Segment: {segment or 'All'}",
-                    "Broker-native exit_positions request submitted.",
+                    f"Summary: total={summary.get('total', 0)}, success={summary.get('success', 0)}, error={summary.get('error', 0)}",
+                    *([f"Broker reported {len(errors)} position error(s)."] if errors else []),
                 ],
-                "EXIT",
+                "WARNING" if partial else "EXIT",
             )
             return {
-                "status": "exit_all_submitted",
+                "status": "exit_all_partial_success" if partial else "exit_all_submitted",
+                "broker_status": result.get("broker_status"),
                 "order_ids": ids,
-                "broker_response": formatted_resp,
+                "errors": errors,
+                "summary": summary,
+                "broker_response": result.get("broker_response"),
                 "persistence": persistence,
             }
         except TradingDisabledError:
