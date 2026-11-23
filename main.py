@@ -680,6 +680,10 @@ async def app_lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     token_refresh_task: asyncio.Task | None = None
 
+    # Wire live-feed worker callbacks to the running FastAPI event loop
+    # in every operating mode before any feed can be started.
+    live_feed_service.set_loop(loop)
+
     async def _periodic_token_refresh() -> None:
         interval_seconds = max(60, int(config.UPSTOX_TOKEN_CHECK_INTERVAL_MINUTES) * 60)
         while True:
@@ -721,7 +725,6 @@ async def app_lifespan(app: FastAPI):
             # when explicitly opting out of read-only viewer mode.
             _run_config_validation()
         else:
-            live_feed_service.set_loop(loop)
             feed_started = await asyncio.to_thread(live_feed_service.start)
             logger.info(
                 "[performance-viewer] read-only startup complete "
