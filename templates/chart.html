@@ -3594,6 +3594,8 @@ triggerLoadHistoryBtn.addEventListener("click", loadOlderHistoricalData);
 // SUBSCRIPTION STATUS + ON-DEMAND SUBSCRIBE
 // ============================================================
 async function checkSubscriptionStatus() {
+  // Guest pages do not render subscription controls.
+  if (!subscribeBanner || !subscribeBannerText || !subscribeBtn) return;
   if (!isMarketOpenNow()) {
     subscribeBanner.classList.remove("visible");
     return;
@@ -3614,6 +3616,8 @@ async function checkSubscriptionStatus() {
   }
 }
 async function requestSubscription() {
+  // This action is available only when the subscription controls are rendered.
+  if (!subscribeBanner || !subscribeBannerText || !subscribeBtn) return;
   if (!isMarketOpenNow()) {
     subscribeBannerText.textContent = "Market is closed. Subscribe when the market reopens.";
     return;
@@ -3644,7 +3648,7 @@ async function requestSubscription() {
     subscribeBtn.innerHTML = `<i class="bi bi-plus-circle me-1"></i> Subscribe to live feed`;
   }
 }
-subscribeBtn.addEventListener("click", requestSubscription);
+if (subscribeBtn) subscribeBtn.addEventListener("click", requestSubscription);
 
 // ============================================================
 // WEBSOCKET MESSAGE
