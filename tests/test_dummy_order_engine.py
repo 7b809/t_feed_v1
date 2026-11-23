@@ -165,14 +165,13 @@ def test_order_completes_at_stop_loss(tmp_path):
 
 
 
-def test_supertrend_opposite_signal_closes_and_replaces_open_order(tmp_path):
+def test_supertrend_opposite_signal_does_not_reverse_open_order(tmp_path):
     async def run():
         engine, store = build(tmp_path)
         isolation_id = "2026-11-12__CE"
         await engine.register_isolation(isolation_id, isolation_payload(),
                                         {"isolated": "CE", "opposite": "PE"})
 
-        # Resistance is the bearish setup and enters on the opposite leg.
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "RESISTANCE",
             "confirmed_time": "2026-11-12T09:18:00+05:30", "price": 123.45,
@@ -181,27 +180,17 @@ def test_supertrend_opposite_signal_closes_and_replaces_open_order(tmp_path):
         assert first["target_instrument_key"] == "PE"
         assert first["status"] == "DUMMY_PLACED"
 
-        # A later support signal is bullish and routes to the isolated leg.
-        await engine.on_market_tick(
-            "PE", {"ltpc": {"ltp": 200.0}},
-            (datetime.fromisoformat(first["started_at_ist"]) + timedelta(seconds=60)).isoformat(),
-        )
+        # A later opposite signal cannot close or replace an open position.
         await engine.on_supertrend_frame({
             "event": "supertrend_signal", "signal": "SUPPORT",
             "confirmed_time": "2026-11-12T09:24:00+05:30", "price": 123.45,
         }, "CE", "isolated", isolation_id)
 
         state = store.load(isolation_id)
-        replacement = state["orders"]["supertrend"]
-        closed = state["order_history"][-1]
-        assert closed["order_id"] == first["order_id"]
-        assert closed["status"] == "COMPLETED_SIGNAL_REVERSAL"
-        assert closed["exit_reason"] == "SIGNAL_REVERSAL"
-        assert closed["exit_price"] == 123.45
-        assert replacement["target_instrument_key"] == "CE"
-        assert replacement["target_leg_role"] == "isolated"
-        assert replacement["status"] == "DUMMY_PLACED"
-        assert replacement["order_id"] != first["order_id"]
+        current = state["orders"]["supertrend"]
+        assert current["order_id"] == first["order_id"]
+        assert current["status"] == "DUMMY_PLACED"
+        assert state.get("order_history", []) == []
 
     asyncio.run(run())
 
