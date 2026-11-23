@@ -385,3 +385,42 @@ def cancel_gtt_order(gtt_order_id: str, *, cleanup: bool = False) -> dict[str, A
         audit_warning = f"Cancellation accepted but audit update failed: {type(exc).__name__}"
     return {"success": True, "gtt_order_id": gtt_order_id, "status": "CANCEL_SUBMITTED",
             "broker_response": payload, "audit_warning": audit_warning}
+
+
+
+def cancel_gtt_orders(gtt_order_ids: list[str]) -> dict[str, Any]:
+    """Cancel multiple GTTs through the official one-ID-per-request REST endpoint."""
+    ids = list(dict.fromkeys(str(value).strip() for value in gtt_order_ids if str(value).strip()))
+    if not ids or len(ids) > 20:
+        raise GTTServiceError("Provide between 1 and 20 GTT order IDs.", status_code=400)
+
+    results: list[dict[str, Any]] = []
+    for gtt_order_id in ids:
+        try:
+            results.append(cancel_gtt_order(gtt_order_id))
+        except GTTServiceError as exc:
+            results.append({
+                "success": False,
+                "gtt_order_id": gtt_order_id,
+                "status": "ERROR",
+                "error": str(exc),
+                "broker_error": exc.payload or None,
+            })
+        except Exception as exc:
+            logger.exception("Unexpected GTT cancellation failure for %s", gtt_order_id)
+            results.append({
+                "success": False,
+                "gtt_order_id": gtt_order_id,
+                "status": "ERROR",
+                "error": f"Unexpected cancellation error: {type(exc).__name__}",
+            })
+
+    cancelled = sum(1 for item in results if item.get("success"))
+    failed = len(results) - cancelled
+    return {
+        "success": failed == 0,
+        "requested": len(ids),
+        "cancelled": cancelled,
+        "failed": failed,
+        "results": results,
+    }
