@@ -972,8 +972,49 @@ async def _pump_with_client_listener(ws: WebSocket, sub) -> None:
 # ---------------------------------------------------------------------------
 # WebSocket routes
 # ---------------------------------------------------------------------------
+def _websocket_access_mode(ws: WebSocket) -> str:
+    """Determine access from signed credentials, never client query flags."""
+    try:
+        from core.auth import is_authenticated
+        if is_authenticated(ws):
+            return "admin"
+    except Exception:
+        pass
+    try:
+        from core.user_accounts import get_user_session
+        if get_user_session(ws):
+            return "member"
+    except Exception:
+        pass
+    return "guest"
+
+
+def _guest_single_chart_requested(ws: WebSocket) -> bool:
+    key = str(ws.query_params.get("instrument_key") or "").strip()
+    if not key or "," in key:
+        return False
+    if any(ws.query_params.get(name) for name in ("instruments", "keys", "underlying", "strike", "type")):
+        return False
+    if str(ws.query_params.get("all") or "").lower() in {"1", "true", "yes", "on"}:
+        return False
+    return len(key) >= 3
+
+
+async def _authorize_chart_websocket(ws: WebSocket, *, allow_guest: bool = True) -> bool:
+    mode = _websocket_access_mode(ws)
+    if mode == "admin":
+        return True
+    allowed = _guest_single_chart_requested(ws)
+    if mode == "guest":
+        allowed = allowed and allow_guest and config.GUEST_MODE_ENABLED
+    if not allowed:
+        await ws.close(code=1008, reason="A single-instrument chart subscription is required")
+        return False
+    return True
 @router.websocket("/ws/live")
 async def ws_live(ws: WebSocket) -> None:
+    if not await _authorize_chart_websocket(ws, allow_guest=True):
+        return
     await ws.accept()
     keys_param, underlying, strike, type_, all_ = _parse_filters(ws)
 
@@ -1005,6 +1046,8 @@ async def ws_live(ws: WebSocket) -> None:
 
 @router.websocket("/ws/chart")
 async def ws_chart(ws: WebSocket) -> None:
+    if not await _authorize_chart_websocket(ws, allow_guest=True):
+        return
     await ws.accept()
     keys_param, underlying, strike, type_, all_ = _parse_filters(ws)
     if keys_param:
@@ -1036,6 +1079,8 @@ async def ws_chart(ws: WebSocket) -> None:
 @router.websocket("/ws/all-feeds")
 async def ws_all_feeds(ws: WebSocket) -> None:
     """Direct route for client charts pointing to /all-feeds."""
+    if not await _authorize_chart_websocket(ws, allow_guest=True):
+        return
     await ws.accept()
     keys_param, underlying, strike, type_, all_ = _parse_filters(ws)
 
@@ -1088,6 +1133,8 @@ async def ws_list_feeds(ws: WebSocket) -> None:
     sending any of the messages handled by ``_pump_with_client_listener``
     — ``subscribe`` / ``unsubscribe`` / ``set`` / ``clear``.
     """
+    if not await _authorize_chart_websocket(ws, allow_guest=False):
+        return
     await ws.accept()
 
     keys_param, underlying, strike, type_, _ = _parse_filters(ws)
