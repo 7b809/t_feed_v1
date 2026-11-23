@@ -892,3 +892,54 @@ This tree highlights the main runtime components; additional service, repository
 ## Provider notes
 
 This repository integrates with Upstox services and the Upstox Python SDK. Provider authentication, market-data availability, instrument validity, feed-mode availability, and subscription limits remain subject to the applicable Upstox account and API terms.
+
+## Per-option multi-interval pivot levels
+
+For every eligible option contract discovered under `OPTION_PIVOT_INDEXES`, the
+service calculates pivot levels from completed Upstox intraday candles. The
+default interval list is `1,15` (one-minute and fifteen-minute candles only).
+Configure `OPTION_PIVOT_INTERVALS=1,5,15,30` to enable additional supported
+minute intervals: `1,2,3,5,10,15,30`.
+
+Each interval is aligned to the NSE session open at 09:15 IST and is processed
+only after its candle has closed and the configurable publication grace has
+elapsed. For example, the first 15-minute candle is 09:15–09:30; its pivot
+levels are eligible shortly after 09:30. The scheduler rechecks every
+`OPTION_PIVOT_SCHEDULER_INTERVAL_SECONDS` (default 30 seconds, minimum 15),
+so delayed Upstox publication or a temporarily unavailable candle is retried
+on a later cycle. The worker never substitutes a different candle when the
+exact expected candle is missing.
+
+Files are written independently in each contract's daily folder:
+
+- `pivot_levels.json` — 1-minute levels (legacy filename retained).
+- `pivot_levels_15m.json` — 15-minute levels.
+- `pivot_levels_5m.json`, etc. — additional configured intervals.
+
+Each file records `interval_minutes`, `source_candle_timestamp`,
+`source_candle_end_timestamp`, and the seven levels
+`R3/R2/R1/AVG/S1/S2/S3`. A later candle updates only its own interval file;
+one interval cannot overwrite another. Existing files are skipped only when
+their trade date, instrument key, interval, exact source-candle timestamp,
+and all seven levels match the expected completed candle.
+
+The interval worker uses the existing bounded worker pool, thread-local
+Upstox candle clients, shared aggregate request-rate limiter, transient retry
+backoff, and atomic file replacement. A failed instrument/interval does not
+stop other contracts or intervals. Relevant settings:
+
+```dotenv
+OPTION_PIVOT_INTERVALS=1,15
+OPTION_PIVOT_SCHEDULER_INTERVAL_SECONDS=30
+OPTION_PIVOT_CANDLE_CLOSE_GRACE_SECONDS=5
+OPTION_PIVOT_MAX_WORKERS=8
+OPTION_PIVOT_FETCH_REQUESTS_PER_SECOND=4
+OPTION_PIVOT_FETCH_MAX_RETRIES=2
+OPTION_PIVOT_FETCH_RETRY_BACKOFF_SECONDS=1
+```
+
+The scheduler cadence is a polling interval, not a guarantee that every
+contract is refreshed at the exact candle-close second. Actual completion
+depends on Upstox candle publication, API rate limits, the number of option
+contracts, and the duration of the current worker batch.
+
