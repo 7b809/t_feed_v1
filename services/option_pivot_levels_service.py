@@ -261,7 +261,16 @@ class OptionInstrumentPivotLevelsService:
         folder = _contract_folder(self.root, contract, trade_date.replace("-", ""))
         folder.mkdir(parents=True, exist_ok=True)
         target = _interval_path(folder, interval)
-        if _valid_existing(target, key, trade_date, interval, target_stamp):
+        target_is_current = _valid_existing(target, key, trade_date, interval, target_stamp)
+        opening_is_saved = True
+        if interval == 1:
+            opening_stamp = datetime.combine(
+                date.fromisoformat(trade_date), SESSION_OPEN, tzinfo=IST
+            )
+            opening_is_saved = _valid_existing(
+                folder / "pivot_levels.json", key, trade_date, 1, opening_stamp
+            )
+        if target_is_current and opening_is_saved:
             return "already_present"
 
         candles = self._fetch_with_retry(self._fetcher(token), key, interval)
