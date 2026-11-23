@@ -912,14 +912,16 @@ exact expected candle is missing.
 
 Files are written independently in each contract's daily folder:
 
-- `pivot_levels.json` — 1-minute levels (legacy filename retained).
-- `pivot_levels_15m.json` — 15-minute levels.
+- `pivot_levels.json` — original 09:15 opening one-minute snapshot (kept for backward compatibility).
+- `pivot_levels_1m.json` — rolling levels from the latest completed one-minute candle.
+- `pivot_levels_15m.json` — rolling levels from the latest completed fifteen-minute candle.
 - `pivot_levels_5m.json`, etc. — additional configured intervals.
 
 Each file records `interval_minutes`, `source_candle_timestamp`,
 `source_candle_end_timestamp`, and the seven levels
 `R3/R2/R1/AVG/S1/S2/S3`. A later candle updates only its own interval file;
-one interval cannot overwrite another. Existing files are skipped only when
+one interval cannot overwrite another. The original `pivot_levels.json`
+opening snapshot remains unchanged after the first 09:15 candle is saved. Existing files are skipped only when
 their trade date, instrument key, interval, exact source-candle timestamp,
 and all seven levels match the expected completed candle.
 
