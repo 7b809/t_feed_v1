@@ -241,8 +241,12 @@ _STORE = _StateStore()
 
 
 def _prompt_audit(action, isolation_id, context, request, response, status):
-    prompt = build_action_prompt(action, context)
-    event = _AUDIT.append(action, isolation_id, prompt, request, response, status)
+    cli_meta = response.get("_algocli", {}) if isinstance(response, dict) else {}
+    prompt = cli_meta.get("prompt") or build_action_prompt(action, context)
+    event = _AUDIT.append(
+        action, isolation_id, prompt, request, response, status,
+        metadata={"algocli": cli_meta} if cli_meta else {},
+    )
     # Detailed prompt/JSON response goes to normal chat only.
     send_private_audit(event)
     return event
@@ -386,7 +390,7 @@ def _entry_limit(now):
 
 def _active_entry(state):
     for entry in reversed(state.get("entries", [])):
-        if entry.get("status") in {"GTT_SUBMITTED", "OPEN", "REVERSAL_PENDING", "RECONCILIATION_REQUIRED"}:
+        if entry.get("status") in {"ENTRY_INTENT_PERSISTED", "GTT_SUBMITTED", "OPEN", "REVERSAL_PENDING", "RECONCILIATION_REQUIRED"}:
             return entry
     return None
 
@@ -496,6 +500,7 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
             response = client.place_gtt_bracket(
                 plan["instrument_key"], leg["quantity_units"], plan["product"],
                 plan["entry_price"], plan["stop_loss_price"], leg["target_price"],
+                operation_id=f"{entry_id}-{leg['name']}",
             )
             gid = _extract_id(response)
             if not gid:
@@ -512,7 +517,9 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
             entry.update(status="RECONCILIATION_REQUIRED", last_error=f"GTT write failed or ambiguous: {exc}")
             _STORE.save(state)
             _prompt_audit("PLACE_GTT_FAILED", isolation_id, {"plan": plan, "leg": leg, "signal": signal},
-                          request, {"error": str(exc), "retry": False}, "RECONCILIATION_REQUIRED")
+                          request, {"error": str(exc), "retry": False,
+                                    "_algocli": getattr(client, "last_execution", {})},
+                          "RECONCILIATION_REQUIRED")
             return entry
     entry.update(status="GTT_SUBMITTED", submitted_at_ist=_now().isoformat())
     _STORE.save(state)
@@ -557,11 +564,15 @@ def _process(record, payload, received_at, role):
         if key in state["processed_signal_keys"]:
             return
         try:
-            from clients.upstox_gtt_client import UpstoxGTTClient
-            client = UpstoxGTTClient()
+            from clients.algocli_client import AlgoCLIClient
+            client = AlgoCLIClient()
             current = _active_entry(state)
             is_reversal = False
             if current:
+                if current.get("status") in {"ENTRY_INTENT_PERSISTED", "RECONCILIATION_REQUIRED", "REVERSAL_PENDING"}:
+                    # An earlier write may have reached the broker. Reconcile manually; do not
+                    # submit, cancel, close, or reverse automatically from an ambiguous state.
+                    return
                 if current.get("signal_direction") == direction:
                     state["processed_signal_keys"].append(key)
                     _STORE.save(state)
@@ -594,7 +605,11 @@ def _process(record, payload, received_at, role):
                 "isolation_id": iso_id, "signal_direction": direction,
                 "signal_time_ist": stamp.isoformat(), "reason": str(exc),
             })
-            event = _AUDIT.append("EXECUTION_BLOCKED", iso_id, prompt, {}, {"accepted": False, "reason": str(exc)}, "BLOCKED")
+            event = _AUDIT.append(
+                "EXECUTION_BLOCKED", iso_id, prompt, {},
+                {"accepted": False, "reason": str(exc)}, "BLOCKED",
+                metadata={"algocli": getattr(locals().get("client"), "last_execution", {})},
+            )
             send_private_audit(event)
 
 
@@ -646,15 +661,15 @@ def _monitor_once():
         return
     if not docs:
         return
-    from clients.upstox_gtt_client import UpstoxGTTClient
-    client = UpstoxGTTClient()
+    from clients.algocli_client import AlgoCLIClient
+    client = AlgoCLIClient()
     for state in docs:
         state.pop("_id", None)
         iso_id = state.get("isolation_id")
         with _lock(iso_id):
             changed = False
             for entry in state.get("entries", []):
-                if entry.get("status") not in {"GTT_SUBMITTED", "OPEN", "RECONCILIATION_REQUIRED"}:
+                if entry.get("status") not in {"GTT_SUBMITTED", "OPEN"}:
                     continue
                 for leg in entry.get("gtt_legs", []):
                     if leg.get("terminal") or not leg.get("gtt_order_id"):

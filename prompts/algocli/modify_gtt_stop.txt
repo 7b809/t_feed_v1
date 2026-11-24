@@ -1,0 +1,1 @@
+Use the upstox-gtt-modify skill to modify the STOPLOSS trigger of GTT order $gtt_order_id to $stop_price. Return the API response as valid JSON only.

@@ -1,0 +1,1 @@
+Use the upstox-orders-fetch skill to fetch GTT order $gtt_order_id. Return the API response as valid JSON only.

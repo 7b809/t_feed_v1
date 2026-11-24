@@ -1,0 +1,1 @@
+Use the upstox-order skill to place a MARKET SELL order for instrument $instrument_key, quantity $quantity, product $product, with tag $tag. Return the API response as valid JSON only.

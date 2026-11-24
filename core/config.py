@@ -409,7 +409,12 @@ def _live_float(name: str, default: float) -> float:
 
 LIVE_GTT_EXECUTION_ENABLED = _live_bool("LIVE_GTT_EXECUTION_ENABLED", "false")
 LIVE_GTT_KILL_SWITCH = _live_bool("LIVE_GTT_KILL_SWITCH", "false")
-LIVE_GTT_SANDBOX = _live_bool("LIVE_GTT_SANDBOX", "false")
+# Path to the separate AlgoCLI checkout. It owns broker authentication and API access.
+ALGOCLI_PROJECT_DIR = os.getenv("ALGOCLI_PROJECT_DIR", "").strip()
+ALGOCLI_LAUNCHER_PATH = os.getenv("ALGOCLI_LAUNCHER_PATH", "launch_upstox_agy.py").strip() or "launch_upstox_agy.py"
+ALGOCLI_PYTHON = os.getenv("ALGOCLI_PYTHON", "python3").strip() or "python3"
+ALGOCLI_TIMEOUT_SECONDS = _live_int("ALGOCLI_TIMEOUT_SECONDS", 180)
+ALGOCLI_SKIP_PERMISSIONS = _live_bool("ALGOCLI_SKIP_PERMISSIONS", "false")
 LIVE_GTT_ORDER_PRODUCT = os.getenv("LIVE_GTT_ORDER_PRODUCT", "I").strip().upper()
 if LIVE_GTT_ORDER_PRODUCT not in {"I", "D", "MTF"}:
     LIVE_GTT_ORDER_PRODUCT = "I"

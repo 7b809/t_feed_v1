@@ -1,0 +1,1 @@
+Use the upstox-orders-fetch skill to fetch order $order_id. Return the API response as valid JSON only.

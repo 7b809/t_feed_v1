@@ -20,7 +20,7 @@ _LOCK = threading.RLock()
 def _safe(value):
     if isinstance(value, dict):
         return {str(k): _safe(v) for k, v in value.items()
-                if str(k).lower() not in {"access_token", "authorization", "api_key", "password", "secret"}}
+                if not any(secret in str(k).lower() for secret in ("access_token", "refresh_token", "auth_token", "authorization", "api_key", "password", "secret", "bearer"))}
     if isinstance(value, (list, tuple)):
         return [_safe(v) for v in value]
     if isinstance(value, str) and value.lower().startswith("bearer "):
@@ -64,7 +64,7 @@ class GTTExecutionAuditService:
             "trade_date_ist": day,
             "action": action,
             "isolation_id": isolation_id,
-            "prompt_origin": "deterministic_execution_contract",
+            "prompt_origin": "algocli_template" if "Use the " in str(prompt) else "deterministic_execution_contract",
             "prompt": prompt,
             "request": _safe(request or {}),
             "response_kind": "broker_or_internal_json",

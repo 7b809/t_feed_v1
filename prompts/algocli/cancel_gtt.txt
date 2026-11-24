@@ -1,0 +1,1 @@
+Use the upstox skill to cancel GTT order $gtt_order_id. Return the API response as valid JSON only.
