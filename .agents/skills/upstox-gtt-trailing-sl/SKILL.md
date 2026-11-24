@@ -1,40 +1,31 @@
 ---
 name: upstox-gtt-trailing-sl
-description: Enter at live market price and manage fixed-target plus step-trailing stop-loss exits on Upstox. Use when the user requests a market entry with SL distance, target distance and trailing jump.
+description: Enter at live market price and manage a fixed target plus step-trailing stop-loss on Upstox. Use when the user requests market entry with SL distance, target distance and trailing jump.
 ---
 
 # Upstox Market Entry + Trailing Stop Skill
 
-## Important execution model
-- This workflow intentionally uses a normal MARKET entry, not a GTT ENTRY rule.
-- Upstox GTT requires an ENTRY rule. Its IMMEDIATE trigger sends a LIMIT order at the supplied trigger price; it is not a market order. Do not use GTT IMMEDIATE as a substitute for the requested live market entry.
-- After the market entry fills, this script places a normal protective SL-M order and a fixed TARGET LIMIT order. It then monitors LTP and modifies the SL-M trigger in favourable, discrete trailing-jump increments.
-- This is a locally managed bracket, not a broker-native OCO/GTT. The manager process must remain running. The broker-side initial SL and target remain active if the process stops, but trailing adjustments and sibling cancellation will stop. Never imply that trailing continues after the manager exits.
+## Execution model
+- Entry is a normal MARKET order. Do not use a GTT ENTRY rule: GTT `IMMEDIATE` is not a market order.
+- After the market entry fills, place one broker-side protective SL-M exit.
+- Monitor LTP locally for the fixed target. When target is reached, cancel the SL-M, verify it is cancelled, then submit a MARKET exit. Never keep independent stop and target orders live together; they are not assumed to be OCO.
+- On each full favourable trailing-jump increment, modify the SL-M trigger by the same number of points. Never loosen the stop.
+- This is a locally managed strategy, not broker-native OCO/GTT. The manager must remain running. If it stops, the last SL-M remains at the broker, but target monitoring and further trailing stop.
 
-## Required inputs
-- Instrument key (resolve it; never guess derivative tokens)
-- BUY or SELL
-- Quantity (F&O quantity must satisfy exchange lot-size rules)
-- Product: I, D or MTF
-- Stop-loss distance (> 0)
-- Target distance (> 0)
-- Trailing jump (> 0)
-- Tick size for the instrument
+## Inputs
+Instrument key, BUY/SELL, quantity, product (I/D/MTF), SL distance, target distance, trailing jump and instrument tick size. Distances are price points relative to the actual average fill. Resolve the instrument and verify F&O lot size; never guess tokens or lot sizes.
 
-Distances and trailing jump are price points, not absolute trigger prices.
+## Safety workflow
+1. Validate inputs and resolve the instrument/tick/lot size.
+2. Run without `--confirm`. It fetches a reference LTP and displays the complete configuration and a stable SHA-256 hash. The reference LTP is informational; all exit prices use actual average fill.
+3. Obtain explicit user approval for the exact instrument, side, quantity, product, distances, tick size and hash.
+4. Only then rerun with `--confirm --expected-preview-hash <hash>`. The hash covers the approved inputs and is stable across LTP ticks.
+5. Place one MARKET entry. Wait for terminal order status; manage only the actually filled quantity using actual average fill price. If no reliable fill is confirmed, stop and require manual reconciliation.
+6. Place SL-M first. The fixed target is monitored locally; when reached, cancel and verify the SL-M before submitting a market exit. If cancellation cannot be verified, do not submit the target exit.
+7. Stop management and report immediately on partial exit fills, rejected/cancelled protective SL, API errors, or ambiguous order states. Verify final order status and require manual reconciliation when needed.
+8. Never execute live orders during tests. Never read `.env` or print credentials.
 
-## Mandatory safety workflow
-1. Validate all inputs and resolve/verify instrument and lot size before execution.
-2. Run the script without `--confirm`. It fetches the current LTP and prints the full strategy preview plus a SHA-256 preview hash. The displayed LTP is informational only; actual levels are calculated from the market order's average fill price.
-3. Show the preview to the user and obtain explicit approval for the exact instrument, side, quantity, product, distances, trailing jump, and preview hash.
-4. Only then rerun with `--confirm --expected-preview-hash <hash>`. A mismatch aborts before placing the entry.
-5. The script places one MARKET entry, waits for its terminal state, uses actual filled quantity and average fill price, and places the initial protective SL-M and fixed target LIMIT exits.
-6. It monitors order status and LTP. On each full trailing-jump increment in the favourable direction, it moves the stop trigger by the same number of points. The stop must never move backwards. The target remains fixed.
-7. When either exit completes, it cancels the sibling and verifies both statuses. Partial exit fills or API errors stop automated management and are reported for immediate manual reconciliation.
-8. Never place a live order during tests. Tests must use pure calculations/mocks only.
-
-## Execution
-Preview:
+## Preview
 ```bash
 python3 .agents/skills/upstox-gtt-trailing-sl/scripts/place_trailing_sl.py \
   --instrument "<instrument_key>" --side BUY --quantity <qty> --product I \
@@ -42,7 +33,7 @@ python3 .agents/skills/upstox-gtt-trailing-sl/scripts/place_trailing_sl.py \
   --tick-size <tick_size>
 ```
 
-After the exact preview is approved:
+## Execute only after approval of the exact preview hash
 ```bash
 python3 .agents/skills/upstox-gtt-trailing-sl/scripts/place_trailing_sl.py \
   --instrument "<instrument_key>" --side BUY --quantity <qty> --product I \
@@ -50,4 +41,4 @@ python3 .agents/skills/upstox-gtt-trailing-sl/scripts/place_trailing_sl.py \
   --tick-size <tick_size> --confirm --expected-preview-hash "<preview_hash>"
 ```
 
-Use `--side SELL` for a short entry. The script reads only `UPSTOX_ACCESS_TOKEN` from the environment. Never read `.env`, print tokens, or submit an order without the exact confirmation hash.
+Use `--side SELL` for short entries. The script reads `UPSTOX_ACCESS_TOKEN` from the environment. Keep the manager process running throughout the trade.
