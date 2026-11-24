@@ -223,6 +223,13 @@ def run_manager(token: str, args: argparse.Namespace, entry_price: float,
         side=exit_side, order_type="SL-M", trigger_price=initial_sl,
         tag=f"trail-sl-{entry_order_id}",
     )
+    stop_state = order_status(token, stop_id)
+    stop_status = str(stop_state.get("status", "")).lower()
+    if stop_status not in {"open", "trigger pending"}:
+        emit({"critical": "Initial SL-M order was submitted but its active status could not be verified.",
+              "stop_order": stop_state, "entry_order_id": entry_order_id,
+              "manual_reconciliation_required": True})
+        return 2
     current_sl = initial_sl
     emit({
         "event": "protection_active", "entry_order_id": entry_order_id,
@@ -265,9 +272,22 @@ def run_manager(token: str, args: argparse.Namespace, entry_price: float,
         improves = next_sl > current_sl if args.side == "BUY" else next_sl < current_sl
         if improves:
             modify_stop(token, stop_id, filled_qty, next_sl)
+            updated_state = order_status(token, stop_id)
+            updated_status = str(updated_state.get("status", "")).lower()
+            updated_trigger = updated_state.get("trigger_price")
+            if updated_status not in {"open", "trigger pending"}:
+                emit({"critical": "Trailing stop modification was submitted but active status could not be verified.",
+                      "stop_order": updated_state, "manual_reconciliation_required": True})
+                return 2
+            if updated_trigger is not None and abs(float(updated_trigger) - next_sl) > args.tick_size / 2:
+                emit({"critical": "Broker-reported stop trigger differs from the requested trailing level.",
+                      "requested_trigger": next_sl, "stop_order": updated_state,
+                      "manual_reconciliation_required": True})
+                return 2
             current_sl = next_sl
             emit({"event": "stop_trailed", "ltp": ltp, "new_stop": current_sl,
-                  "entry": entry_price, "target_unchanged": target})
+                  "entry": entry_price, "target_unchanged": target,
+                  "verified_order_status": updated_status})
 
 
 def main() -> int:
