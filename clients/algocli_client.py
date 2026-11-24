@@ -264,47 +264,6 @@ class AlgoCLIClient:
     def cancel_gtt(self, gtt_id: str):
         return self._run("cancel_gtt.txt", {"gtt_order_id": gtt_id}, write=True)
 
-    def modify_gtt_stop(self, gtt_id: str, stop: float):
-        result = self._run("modify_gtt_stop.txt", {
-            "gtt_order_id": gtt_id, "stop_price": stop,
-        }, write=True)
-        write_meta = result.get("_algocli", {})
-        try:
-            verified = self.get_gtt(gtt_id)
-            rules = verified.get("rules")
-            matches = [
-                rule for rule in (rules if isinstance(rules, list) else [])
-                if isinstance(rule, dict) and str(rule.get("strategy", "")).upper() == "STOPLOSS"
-            ]
-            if len(matches) != 1:
-                raise AlgoCLIError("Could not verify exactly one STOPLOSS rule after algoai modification")
-            actual = matches[0].get("trigger_price")
-            try:
-                matches_requested = abs(float(actual) - float(stop)) <= 0.011
-            except (TypeError, ValueError):
-                matches_requested = False
-            if not matches_requested:
-                raise AlgoCLIError(
-                    f"Runner stop modification is not verified: requested {stop}, broker reports {actual}"
-                )
-        except Exception as exc:
-            self.last_execution = {
-                "operation_id": write_meta.get("operation_id"),
-                "template": write_meta.get("template"),
-                "prompt": write_meta.get("prompt"),
-                "outcome": "AMBIGUOUS",
-                "verification_error": _redact_text(str(exc)),
-            }
-            raise AlgoCLIWriteAmbiguous(
-                "GTT stop modification may have been submitted, but broker verification failed; reconcile before retrying."
-            ) from exc
-        self.last_execution = write_meta
-        return {
-            "modify_response": result.get("response"),
-            "verified_gtt": verified,
-            "_algocli": write_meta,
-        }
-
     def get_positions(self) -> list[dict]:
         result = self._run("get_positions.txt", {})
         data = self._data(result)
