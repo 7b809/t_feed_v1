@@ -1,1 +1,0 @@
-Use the upstox-gtt-trailing-sl skill for instrument $instrument_key, BUY, quantity $quantity, product I (Intraday), SL distance $sl_distance, target distance $target_distance, trailing jump $trailing_jump. Resolve tick size and lot size. Show the preview and follow the skill's confirmation flow. Return valid JSON only.
