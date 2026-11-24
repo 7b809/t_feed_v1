@@ -1091,7 +1091,7 @@ class DummyOrderEngine:
             logger.info("Dummy %s entry saved iso=%s target=%s trigger=%s",
                         indicator, isolation_id, target_key, trigger.get("confirmed_time"))
             # OrderFlow is intentionally dummy-only: no broker or GTT call is made.
-            await self._notify_entry(state, order)            await self._notify_entry(state, order)
+            await self._notify_entry(state, order)
 
 
 
