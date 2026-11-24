@@ -454,14 +454,13 @@ def _cancel_close(client, state, entry, isolation_id):
         request = {
             "instrument_key": entry["instrument_key"],
             "lots": lots,
-            "quantity_units": qty,
             "transaction_type": "SELL",
             "order_type": "MARKET",
         }
         entry.update(status="REVERSAL_PENDING", close_intent=request)
         _STORE.save(state)
         try:
-            response = client.place_market_exit(entry["instrument_key"], lots, "gtt-reversal")
+            response = client.place_market_exit(entry["instrument_key"], lots)
             _prompt_audit("CLOSE_POSITION", isolation_id, request, request, response, "CLOSE_ORDER_SUBMITTED")
         except Exception as exc:
             entry.update(status="RECONCILIATION_REQUIRED", last_error=f"Close outcome ambiguous: {exc}")
