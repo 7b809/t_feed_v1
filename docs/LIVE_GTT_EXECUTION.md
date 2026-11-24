@@ -1,4 +1,4 @@
-# Supertrend GTT execution through independent AlgoCLI
+# Supertrend single-GTT execution through AlgoCLI
 
 ## Execution boundary
 
@@ -15,70 +15,73 @@ algoai --skip-permissions --prompt "<rendered prompt template>"
 
 The isolation project does not define or depend on an AlgoCLI project directory,
 launcher script, Python interpreter, custom working directory, or internal
-AlgoCLI implementation. The algoai executable must already be available on
-the host PATH. Authentication and broker access remain inside the CLI and its
-skills; this project does not read broker tokens or .env files for execution.
+AlgoCLI implementation. Authentication and broker access remain inside the CLI
+and its skills.
 
 ## Activation and safety
 
 `LIVE_GTT_EXECUTION_ENABLED=false` remains the required default. Keep it false
 until the separate AlgoCLI team confirms that its unattended sandbox execution path
-is implemented and verified. This project intentionally has no sandbox selector,
-sandbox token, or broker credential setting.
+is implemented and verified.
 
-The kill switch must remain false only when deliberately enabling the worker.
 Both `LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR` and
 `LIVE_GTT_MAX_RISK_PER_TRADE_INR` must be positive before entries can be planned.
-The execution worker fails closed if the algoai executable is unavailable.
+The worker fails closed if the algoai executable is unavailable.
 
 ## Prompt templates
 
-Templates are fixed files; runtime code substitutes only named values:
 - `get_ltp.txt` — latest instrument LTP
-- `place_gtt.txt` — one-lot immediate live-market entry with calculated stop-loss and normal target, product I
-- `place_gtt_trailing_sl.txt` — one-lot trailing-SL GTT using dynamic stop distance, extended target distance and trailing jump, product I
-- `get_gtt.txt` — inspect one GTT
-- `cancel_gtt.txt` — cancel one GTT
-- `modify_gtt_stop.txt` — modify one GTT stop-loss
+- `place_gtt.txt` — one normal GTT with calculated stop-loss and target, product I
+- `get_gtt.txt` — inspect the GTT
+- `cancel_gtt.txt` — cancel the GTT
 - `get_positions.txt` — read current positions
 - `place_market_exit.txt` — market exit expressed in lots
-- `get_order_details.txt` — inspect one normal order
+- `get_order_details.txt` — inspect a normal order
 
-Prompts explicitly name the skill from the external skills catalog. The main project
-does not generate new operational instructions or copy the external skill implementation.
+The trailing-SL prompt and its adapter method have been removed. The project
+places one normal GTT only; it does not place a second GTT or perform runner
+stop modifications.
 
 ## Subprocess and response handling
 
-The adapter captures stdout, stderr, exit code and duration. The prompt requests valid JSON;
-the adapter extracts a JSON object/array from stdout, allowing CLI status lines around it.
-A non-zero exit, invalid JSON, missing response fields or timeout fails closed.
+The adapter captures stdout, stderr, exit code and duration. The prompt requests valid
+JSON; the adapter extracts a JSON object/array from stdout, allowing CLI status lines
+around it. A non-zero exit, invalid JSON or timeout fails closed.
 
 Write timeouts and non-zero exits are ambiguous: the broker or skill workflow may have
 accepted or staged the write before the CLI failed. The state is marked
 `RECONCILIATION_REQUIRED`; the adapter never retries a write automatically. A
 deterministic local operation reference is recorded for traceability, but it is not
 represented as a broker-enforced idempotency key. Skill-level preview/confirmation
-remains inside AlgoCLI; the application stores the JSON returned by the subprocess and
-does not create a separate confirmation workflow.
+remains inside AlgoCLI; the application stores the JSON returned by the subprocess
+and does not create a separate confirmation workflow.
 
 A GTT response ID is required before the service treats placement as submitted.
-GTT acceptance is not an exchange fill. The monitor continues to require a confirmed
-target/stop rule and linked completed exit order before classifying a fill.
+GTT acceptance is not an exchange fill. The monitor requires a confirmed target/stop
+rule and linked completed exit order before classifying a fill.
 
-## Strategy retained
+## Strategy
 
 - BULLISH buys the isolated option; BEARISH buys the opposite option.
 - Signal age, frame age and isolation lookback checks remain active.
-- Exactly two separate GTT orders are requested on the same unique instrument key; each represents exactly one lot and receives its own broker GTT ID and independent state record.
-- The normal GTT uses the existing calculated stop-loss and premium-band target. It enters immediately at the live market price and includes product I (Intraday).
-- The trailing GTT uses the external `upstox-gtt-trailing-sl` skill and product I. Its quantity is one contract lot in units; its SL distance is `entry_price - calculated_stop_loss_price`, its target distance is the original premium-band target points multiplied by 5, and its trailing jump is half the original target points. Values are calculated dynamically and tick-rounded.
-- Initial stop uses the configured percentage adjusted by S1/S2/S3 support logic. That same final stop is used to derive the trailing GTT's stop distance.
-- The trailing skill owns its trailing behavior; the application does not apply the old runner midpoint stop modification.
-- Both GTT prompts request JSON. The complete rendered prompt and returned JSON are retained in the execution audit. The service extracts a GTT ID when present so each order can be tracked independently. A response without an identifiable GTT ID is retained and blocks further automated action pending reconciliation.
-- Opposite signals cancel existing GTTs, reconcile broker position, convert the exact
-  net units into lots using the stored lot size, close that lot count at market and wait
-  for zero before a reversal is considered. Non-integral lot positions are blocked for
-  manual reconciliation.
+- Exactly one normal GTT is placed per qualified signal.
+- The GTT quantity is the configured `DUMMY_ORDER_QUANTITY` in lots, converted
+  using the verified contract lot size. The default remains two lots, now in one GTT.
+- Entry uses the current live market price; the fetched LTP is an internal input
+  for stop, target and risk calculations, not an entry trigger price.
+- The target remains the existing premium-band target: 60, 50 or 40 points
+  according to the configured premium thresholds.
+- The initial stop is first calculated using the configured percentage below entry.
+  The service then checks S1, S2 and S3. If support levels are strictly below the
+  calculated stop, it selects the highest such level (the nearest support below
+  the calculated stop). If none qualify, it retains the percentage-based stop.
+  A support above the calculated stop is never used to widen the stop-loss.
+- Both the selected stop and target are tick-rounded before the single GTT prompt
+  is rendered. Product `I` (Intraday) is specified in the placement prompt.
+- Opposite signals cancel the active GTT, reconcile broker position, convert exact
+  net units into lots using the stored lot size, close that lot count at market and
+  wait for zero before a reversal is considered. Non-integral lot positions are
+  blocked for manual reconciliation.
 - Ambiguous or unresolved entries block subsequent automated actions.
 
 ## Audit
@@ -86,12 +89,11 @@ target/stop rule and linked completed exit order before classifying a fill.
 The daily local JSON and Mongo audit retain the exact rendered prompt, request,
 AlgoCLI JSON response, exit code, operation reference and duration. The private
 Telegram audit receives the prompt/request/response; the group receives lifecycle
-milestones only. Secrets are not sourced by this project and should not be included
-in CLI output.
+milestones only. Secrets should not be included in CLI output.
 
-## Important external dependency
+## External dependency
 
-The external skill catalog includes preview/explicit-confirmation requirements for
-some trading writes. The CLI permission flag does not replace the skill-level
-confirmation rules. Keep execution disabled until the external team confirms the
-unattended sandbox workflow and structured JSON responses required by this worker.
+The external skill catalog may impose preview/explicit-confirmation requirements.
+The CLI permission flag does not replace skill-level confirmation rules. Keep
+execution disabled until the external team confirms the unattended sandbox workflow
+and structured JSON responses required by this worker.
