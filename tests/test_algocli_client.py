@@ -32,7 +32,7 @@ def test_predefined_prompt_substitution():
     assert "stop-loss 70" in prompt
     assert "target 140" in prompt
     assert "entry-price" not in prompt
-    assert "product" not in prompt
+    assert "product I" in prompt
     assert "$instrument_key" not in prompt
 
 
@@ -132,11 +132,11 @@ def test_place_gtt_prompt_uses_lots_and_live_market_entry():
     assert "do not set an entry trigger price" in prompt
     assert "stop-loss 70" in prompt
     assert "target 140" in prompt
-    assert "product" not in prompt
+    assert "product I" in prompt
     assert "quantity" not in prompt
 
 
-def test_market_exit_prompt_uses_lots_without_product_or_quantity():
+def test_market_exit_prompt_uses_lots_and_intraday_product():
     prompt = AlgoCLIClient()._template("place_market_exit.txt", {
         "instrument_key": "NSE_FO|12345",
         "lots": 2,
@@ -168,7 +168,7 @@ def test_gtt_client_passes_only_instrument_lots_stop_and_target(monkeypatch):
     assert "quantity" not in captured["values"]
 
 
-def test_market_exit_client_passes_lots_without_product_quantity_or_tag(monkeypatch):
+def test_market_exit_client_passes_lots_without_extra_product_quantity_or_tag(monkeypatch):
     client = AlgoCLIClient()
     captured = {}
     monkeypatch.setattr(
@@ -183,3 +183,46 @@ def test_market_exit_client_passes_lots_without_product_quantity_or_tag(monkeypa
     assert "product" not in captured["values"]
     assert "quantity" not in captured["values"]
     assert "tag" not in captured["values"]
+
+
+
+def test_trailing_gtt_prompt_substitutes_dynamic_values():
+    prompt = AlgoCLIClient()._template("place_gtt_trailing_sl.txt", {
+        "instrument_key": "NSE_FO|12345",
+        "quantity": 75,
+        "sl_distance": 34.5,
+        "target_distance": 300,
+        "trailing_jump": 30,
+    })
+    assert "upstox-gtt-trailing-sl" in prompt
+    assert "NSE_FO|12345" in prompt
+    assert "quantity 75" in prompt
+    assert "product I" in prompt
+    assert "SL distance 34.5" in prompt
+    assert "target distance 300" in prompt
+    assert "trailing jump 30" in prompt
+    assert "confirmation flow" in prompt
+
+
+def test_trailing_gtt_client_passes_dynamic_values(monkeypatch):
+    client = AlgoCLIClient()
+    captured = {}
+    monkeypatch.setattr(
+        client, "_run",
+        lambda name, values, write=False: captured.update(
+            name=name, values=values, write=write
+        ) or {"response": {"gtt_order_id": "GTT-TRAIL-1"}},
+    )
+    client.place_gtt_trailing_sl(
+        "NSE_FO|12345", 75, 34.5, 300, 30, operation_id="op-trailing-1"
+    )
+    assert captured["name"] == "place_gtt_trailing_sl.txt"
+    assert captured["write"] is True
+    assert captured["values"] == {
+        "instrument_key": "NSE_FO|12345",
+        "quantity": 75,
+        "sl_distance": 34.5,
+        "target_distance": 300,
+        "trailing_jump": 30,
+        "operation_id": "op-trailing-1",
+    }
