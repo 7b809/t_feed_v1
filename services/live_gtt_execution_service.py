@@ -249,11 +249,12 @@ def _prompt_audit(action, isolation_id, context, request, response, status):
 
 
 def send_private_audit(event):
-    def clip(s, n=3000):
+    def clip(s, n):
         return s if len(s) <= n else s[:n-30] + "\n...[truncated; full copy is in audit storage]"
-    prompt = html.escape(clip(event.get("prompt", "")))
-    request = html.escape(clip(json.dumps(event.get("request", {}), ensure_ascii=False, indent=2, default=str), 1000))
-    response = html.escape(clip(json.dumps(event.get("response", {}), ensure_ascii=False, indent=2, default=str)))
+    # Keep the combined HTML message below Telegram's message-size limit.
+    prompt = html.escape(clip(event.get("prompt", ""), 700))
+    request = html.escape(clip(json.dumps(event.get("request", {}), ensure_ascii=False, indent=2, default=str), 600))
+    response = html.escape(clip(json.dumps(event.get("response", {}), ensure_ascii=False, indent=2, default=str), 1500))
     msg = (
         f"<b>LIVE GTT · {html.escape(str(event.get('action')))}</b>\n"
         f"Time: <code>{html.escape(str(event.get('timestamp_ist')))}</code>\n"
@@ -463,7 +464,7 @@ def _cancel_close(client, state, entry, isolation_id):
     return True
 
 
-def _submit(client, state, plan, signal, isolation_id):
+def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
     entry_id = hashlib.sha256(f"{isolation_id}|{signal['signal_key']}".encode()).hexdigest()[:24]
     entry = {
         "entry_id": entry_id, "signal_key": signal["signal_key"],
@@ -515,7 +516,10 @@ def _submit(client, state, plan, signal, isolation_id):
             return entry
     entry.update(status="GTT_SUBMITTED", submitted_at_ist=_now().isoformat())
     _STORE.save(state)
-    _group("GTT_ENTRY_SUBMITTED", plan, ids=[x["gtt_order_id"] for x in entry["gtt_legs"]])
+    _group(
+        "REVERSAL_ENTRY_SUBMITTED" if is_reversal else "GTT_ENTRY_SUBMITTED",
+        plan, ids=[x["gtt_order_id"] for x in entry["gtt_legs"]],
+    )
     return entry
 
 
@@ -556,6 +560,7 @@ def _process(record, payload, received_at, role):
             from clients.upstox_gtt_client import UpstoxGTTClient
             client = UpstoxGTTClient()
             current = _active_entry(state)
+            is_reversal = False
             if current:
                 if current.get("signal_direction") == direction:
                     state["processed_signal_keys"].append(key)
@@ -569,6 +574,7 @@ def _process(record, payload, received_at, role):
                     return
                 if not _cancel_close(client, state, current, iso_id):
                     return
+                is_reversal = True
             limit = _entry_limit(now)
             if limit <= 0 or int(state.get("entry_count", 0)) >= limit:
                 state["processed_signal_keys"].append(key)
@@ -581,7 +587,7 @@ def _process(record, payload, received_at, role):
                 raise RuntimeError("A pre-existing position exists for the target instrument")
             signal = {"direction": direction, "signal_time": stamp, "signal_key": key,
                       "received_at_ist": received.isoformat(), "source_instrument_key": source_key}
-            _submit(client, state, plan, signal, iso_id)
+            _submit(client, state, plan, signal, iso_id, is_reversal=is_reversal)
         except Exception as exc:
             logger.exception("Live GTT signal rejected/failed | isolation=%s", iso_id)
             prompt = build_action_prompt("EXECUTION_BLOCKED", {
