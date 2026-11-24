@@ -24,11 +24,15 @@ def test_unwraps_json_result_envelope():
 def test_predefined_prompt_substitution():
     client = AlgoCLIClient()
     prompt = client._template("place_gtt.txt", {
-        "instrument_key": "NSE_FO|12345", "quantity": 25, "product": "I",
-        "entry_price": 100, "sl_price": 70, "target_price": 140,
+        "instrument_key": "NSE_FO|12345", "lots": 1, "lot_label": "1 lot",
+        "sl_price": 70, "target_price": 140,
     })
     assert "NSE_FO|12345" in prompt
-    assert "quantity 25" in prompt
+    assert "1 lot" in prompt
+    assert "stop-loss 70" in prompt
+    assert "target 140" in prompt
+    assert "entry-price" not in prompt
+    assert "product" not in prompt
     assert "$instrument_key" not in prompt
 
 
