@@ -1,4 +1,4 @@
-from services.live_gtt_execution_service import _adjust_stop, _direction, _target_points, _tick
+from services.live_gtt_execution_service import _adjust_stop, _direction, _target_points, _tick, _trailing_parameters
 
 
 def test_target_bands():
@@ -28,3 +28,19 @@ def test_signal_direction():
     assert _direction({"signal": "BULLISH"}) == "BULLISH"
     assert _direction({"direction": "bearish"}) == "BEARISH"
     assert _direction({"signal": "unknown"}) is None
+
+
+def test_trailing_parameters_are_derived_from_calculated_stop_and_target():
+    assert _trailing_parameters(100, 70, 60, 0.05) == {
+        "stop_loss_distance": 30.0,
+        "target_distance": 300.0,
+        "trailing_jump": 30.0,
+    }
+
+
+def test_trailing_parameters_use_support_adjusted_stop():
+    assert _trailing_parameters(100, 82.5, 50, 0.05) == {
+        "stop_loss_distance": 17.5,
+        "target_distance": 250.0,
+        "trailing_jump": 25.0,
+    }
