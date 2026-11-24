@@ -576,6 +576,14 @@ def _linked_ids(detail):
     return list(dict.fromkeys(result))
 
 
+def _rule_state(detail, strategy):
+    rules = detail.get("rules") or []
+    matches = [r for r in rules if isinstance(r, dict) and _status(r.get("strategy")) == strategy]
+    if len(matches) != 1:
+        return ""
+    return _status(matches[0].get("status") or matches[0].get("state"))
+
+
 def _filled_order(client, detail):
     for order_id in _linked_ids(detail):
         try:
@@ -615,19 +623,23 @@ def _monitor_once():
                         broker_status = _status(detail.get("status") or detail.get("state"))
                         if broker_status:
                             leg["broker_status"] = broker_status
-                        order = _filled_order(client, detail)
+                        target_state = _rule_state(detail, "TARGET")
+                        stop_state = _rule_state(detail, "STOPLOSS")
+                        triggered_exit = (
+                            target_state in {"TRIGGERED", "EXECUTED", "COMPLETE", "COMPLETED", "FILLED"}
+                            or stop_state in {"TRIGGERED", "EXECUTED", "COMPLETE", "COMPLETED", "FILLED"}
+                        )
+                        # A linked ENTRY order can be FILLED while the GTT is still
+                        # protecting the position. Never interpret that as a target exit.
+                        order = _filled_order(client, detail) if triggered_exit else None
                         if order:
-                            leg.update(terminal=True, status="FILLED", filled_order=order,
-                                       filled_at_ist=_now().isoformat())
+                            exit_kind = "TARGET" if target_state in {"TRIGGERED", "EXECUTED", "COMPLETE", "COMPLETED", "FILLED"} else "STOPLOSS"
+                            leg.update(terminal=True, status=f"{exit_kind}_FILLED", filled_order=order,
+                                       exit_kind=exit_kind, filled_at_ist=_now().isoformat())
                             changed = True
-                            if leg.get("name") == "LOT_1_FIXED_TARGET":
-                                rules = detail.get("rules") or []
-                                target = [r for r in rules if _status(r.get("strategy")) == "TARGET"]
-                                target_state = _status(target[0].get("status") or target[0].get("state")) if len(target) == 1 else ""
-                                if target_state not in {"TRIGGERED", "EXECUTED", "COMPLETE", "COMPLETED", "FILLED"}:
-                                    entry.update(status="RECONCILIATION_REQUIRED",
-                                                 last_error="Linked order filled but target rule outcome is not explicit")
-                                    continue
+                            if leg.get("name") == "LOT_1_FIXED_TARGET" and exit_kind == "TARGET":
+                                entry["target1_exit_confirmed"] = True
+                                _group("TARGET1_EXIT_CONFIRMED", entry, reason="Broker target rule and linked exit order confirmed")
                                 runner = next((x for x in entry["gtt_legs"] if x.get("name") == "LOT_2_R3_RUNNER"), None)
                                 if runner and not runner.get("runner_stop_adjusted"):
                                     midpoint = entry["entry_price"] + (entry["target1_price"] - entry["entry_price"]) / 2
@@ -639,8 +651,14 @@ def _monitor_once():
                                                   request, response, "RUNNER_STOP_MODIFIED")
                                     runner.update(runner_stop_adjusted=True, stop_loss_price=midpoint)
                                     _group("RUNNER_STOP_MODIFIED", entry, reason=f"Runner SL moved to {midpoint}")
-                        elif broker_status in {"CANCELLED", "CANCELED", "EXPIRED", "REJECTED", "COMPLETE", "COMPLETED"}:
+                        elif broker_status in {"CANCELLED", "CANCELED", "EXPIRED", "REJECTED"}:
                             leg.update(terminal=True, broker_status=broker_status)
+                            changed = True
+                        elif broker_status in {"COMPLETE", "COMPLETED"} and not triggered_exit:
+                            # GTT is terminal but the exit leg cannot be identified.
+                            # Keep it visible for manual reconciliation; do not call it a fill.
+                            entry.update(status="RECONCILIATION_REQUIRED",
+                                         last_error="GTT completed without an identifiable target/stop exit state")
                             changed = True
                     except Exception:
                         logger.exception("GTT reconciliation failed | isolation=%s gtt=%s", iso_id, leg.get("gtt_order_id"))
