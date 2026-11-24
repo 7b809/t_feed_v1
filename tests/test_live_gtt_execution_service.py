@@ -1,4 +1,7 @@
-from services.live_gtt_execution_service import _adjust_stop, _direction, _target_points, _tick
+from services.live_gtt_execution_service import (
+    _adjust_stop, _adjust_trailing_stop, _direction, _target_points, _tick,
+    _trailing_step, _trailing_stop_for_price,
+)
 
 
 def test_target_bands():
@@ -36,3 +39,26 @@ def test_signal_direction():
     assert _direction({"signal": "BULLISH"}) == "BULLISH"
     assert _direction({"direction": "bearish"}) == "BEARISH"
     assert _direction({"signal": "unknown"}) is None
+
+
+
+def test_gtt2_stop_uses_nearest_support_but_never_above_percentage_stop():
+    stop, meta = _adjust_trailing_stop(100, 70, {"S1": 85, "S2": 65, "S3": 55})
+    assert stop == 65
+    assert meta["selected_level"] == "S2"
+
+    stop, meta = _adjust_trailing_stop(100, 70, {"S1": 85, "S2": 75, "S3": 72})
+    assert stop == 70
+    assert meta["selected_level"] == "PERCENTAGE"
+
+
+def test_gtt2_trailing_step_uses_initial_entry_stop_and_target():
+    assert _trailing_step(100, 70, 140) == 50
+
+
+def test_gtt2_trailing_moves_stop_one_fixed_step_per_full_price_step():
+    assert _trailing_stop_for_price(100, 70, 50, 149, 0.05) == (70, 0)
+    assert _trailing_stop_for_price(100, 70, 50, 150, 0.05) == (120, 1)
+    assert _trailing_stop_for_price(100, 70, 50, 200, 0.05) == (170, 2)
+    assert _trailing_stop_for_price(100, 70, 50, 249, 0.05) == (170, 2)
+    assert _trailing_stop_for_price(100, 70, 50, 250, 0.05) == (220, 3)

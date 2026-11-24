@@ -409,7 +409,9 @@ def _live_float(name: str, default: float) -> float:
 
 LIVE_GTT_EXECUTION_ENABLED = _live_bool("LIVE_GTT_EXECUTION_ENABLED", "false")
 LIVE_GTT_KILL_SWITCH = _live_bool("LIVE_GTT_KILL_SWITCH", "false")
-DUMMY_ORDER_QUANTITY = _live_int("DUMMY_ORDER_QUANTITY", 2)
+# Each of the two independent GTTs is fixed to one lot for this strategy.
+LIVE_GTT_LOTS_PER_ORDER = _live_int("LIVE_GTT_LOTS_PER_ORDER", 1)
+DUMMY_ORDER_QUANTITY = _live_int("DUMMY_ORDER_QUANTITY", 2)  # legacy; not used by two-GTT execution
 DUMMY_ORDER_STOP_LOSS_PERCENT = _live_float("DUMMY_ORDER_STOP_LOSS_PERCENT", 30.0)
 DUMMY_TARGET_UPPER_THRESHOLD = _live_float("DUMMY_TARGET_UPPER_THRESHOLD", 200.0)
 DUMMY_TARGET_LOWER_THRESHOLD = _live_float("DUMMY_TARGET_LOWER_THRESHOLD", 100.0)

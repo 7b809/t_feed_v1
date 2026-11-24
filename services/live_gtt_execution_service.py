@@ -16,7 +16,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from core.config import (
-    DUMMY_ORDER_QUANTITY, DUMMY_ORDER_STOP_LOSS_PERCENT,
+    LIVE_GTT_LOTS_PER_ORDER, DUMMY_ORDER_STOP_LOSS_PERCENT,
     DUMMY_TARGET_UPPER_THRESHOLD, DUMMY_TARGET_LOWER_THRESHOLD,
     DUMMY_TARGET_POINTS_ABOVE_UPPER, DUMMY_TARGET_POINTS_MIDDLE, DUMMY_TARGET_POINTS_BELOW_LOWER,
     LIVE_GTT_EXECUTION_ENABLED, LIVE_GTT_KILL_SWITCH, LIVE_GTT_ISOLATION_LOOKBACK_SECONDS,
@@ -162,7 +162,7 @@ def _pivot_levels(key, day):
 
 
 def _adjust_stop(entry, raw, levels):
-    """Select the nearest S1/S2/S3 support strictly below the percentage stop."""
+    """Existing GTT 1 rule: choose the nearest support strictly below the percentage SL."""
     supports = [
         (name, value)
         for name in ("S1", "S2", "S3")
@@ -181,6 +181,51 @@ def _adjust_stop(entry, raw, levels):
         "pivot_levels": levels,
         "support_adjustment_applied": name != "PERCENTAGE",
     }
+
+
+def _adjust_trailing_stop(entry, raw, levels):
+    """GTT 2: nearest S-level below entry, but never place SL above the 30% stop."""
+    supports = [
+        (name, value)
+        for name in ("S1", "S2", "S3")
+        if (value := _num(levels.get(name))) is not None
+        and 0 < value < entry
+    ]
+    if supports:
+        level_name, level_value = max(supports, key=lambda item: item[1])
+        stop = min(raw, level_value)
+        selected = level_name if stop == level_value else "PERCENTAGE"
+    else:
+        level_name, level_value = None, None
+        stop, selected = raw, "PERCENTAGE"
+    return stop, {
+        "raw_percentage_stop_loss": raw,
+        "nearest_support_name": level_name,
+        "nearest_support_value": level_value,
+        "final_stop_loss": stop,
+        "selected_level": selected,
+        "pivot_levels": levels,
+        "support_adjustment_applied": selected != "PERCENTAGE",
+        "rule": "min(30_percent_stop, nearest_support_below_entry)",
+    }
+
+
+def _trailing_step(entry, stop, target):
+    """Fixed step from the original entry, initial SL and initial target."""
+    step = (float(entry) - float(stop)) + ((float(target) - float(entry)) / 2.0)
+    if not math.isfinite(step) or step <= 0:
+        raise ValueError("GTT 2 trailing step must be a positive finite number")
+    return step
+
+
+def _trailing_stop_for_price(entry, initial_stop, step, ltp, tick):
+    """Move the SL by one fixed step for every full step of favourable movement."""
+    step = float(step)
+    if step <= 0:
+        raise ValueError("Trailing step must be positive")
+    completed_steps = max(0, int(math.floor((float(ltp) - float(entry)) / step + 1e-12)))
+    desired = _tick(float(initial_stop) + completed_steps * step, tick)
+    return desired, completed_steps
 
 
 def _leg(record, direction):
@@ -286,7 +331,8 @@ def send_private_audit(event):
 def _group(status, plan, reason=None, ids=None):
     # Only the primary lifecycle milestones are sent to the official group.
     allowed = {"GTT_ENTRY_SUBMITTED", "POSITION_CLOSED", "REVERSAL_ENTRY_SUBMITTED",
-               "GTT_TARGET_EXIT_CONFIRMED", "POSITION_COMPLETED"}
+               "GTT_TARGET_EXIT_CONFIRMED", "POSITION_COMPLETED",
+               "GTT_TRAIL_UPDATED", "GTT_RECONCILIATION_REQUIRED"}
     if status not in allowed:
         return
     fields = [
@@ -299,6 +345,17 @@ def _group(status, plan, reason=None, ids=None):
                        ("quantity_lots", "Lots"), ("quantity_units", "Units")):
         if plan.get(key) not in (None, ""):
             fields.append(f"{label}: <code>{html.escape(str(plan[key]))}</code>")
+    for leg in plan.get("gtt_legs", []):
+        if not isinstance(leg, dict):
+            continue
+        fields.append(
+            f"{html.escape(str(leg.get('name') or 'GTT'))}: "
+            f"SL <code>{html.escape(str(leg.get('current_stop_loss_price') or leg.get('stop_loss_price') or '—'))}</code> · "
+            f"Target <code>{html.escape(str(leg.get('target_price') or '—'))}</code> · "
+            f"Lots <code>{html.escape(str(leg.get('lots') or '—'))}</code>"
+        )
+    if plan.get("trailing_step_points") is not None:
+        fields.append(f"Trailing step: <code>{html.escape(str(plan['trailing_step_points']))} points</code>")
     if ids:
         fields.append("GTT IDs: <code>" + html.escape(", ".join(ids)) + "</code>")
     if reason:
@@ -350,32 +407,82 @@ def _plan(client, leg, day):
     if age > LIVE_GTT_QUOTE_MAX_AGE_SECONDS:
         raise ValueError(f"Quote request exceeded freshness limit ({age:.3f}s)")
     entry = _tick(float(quote["last_price"]), tick)
-    one, _fifteen = _pivot_levels(key, day)
+    one, fifteen = _pivot_levels(key, day)
+
+    # GTT 1 preserves the previously deployed target and support-selection rules.
     target_points = _target_points(entry)
-    target = _tick(entry + target_points, tick)
+    target1 = _tick(entry + target_points, tick)
     raw_stop = entry * (1 - DUMMY_ORDER_STOP_LOSS_PERCENT / 100)
-    stop, stop_meta = _adjust_stop(entry, raw_stop, one)
-    stop = _tick(stop, tick)
-    lots = int(DUMMY_ORDER_QUANTITY)
-    if lots <= 0:
-        raise ValueError("DUMMY_ORDER_QUANTITY must be a positive lot count")
+    stop1, stop1_meta = _adjust_stop(entry, raw_stop, one)
+    stop1 = _tick(stop1, tick)
+
+    # GTT 2 uses this contract's completed 15-minute R3 when present.
+    r3 = _num(fifteen.get("R3")) if isinstance(fifteen, dict) else None
+    if r3 is not None:
+        target2 = _tick(r3, tick)
+        if target2 <= entry:
+            raise ValueError(
+                f"15-minute R3 ({target2}) is not above live entry ({entry}); refusing invalid GTT 2 target"
+            )
+        target2_source = "15M_R3"
+    else:
+        # Literal configured rule: calculated target PRICE multiplied by five.
+        target2 = _tick(target1 * 5, tick)
+        target2_source = "CALCULATED_TARGET_PRICE_X5"
+
+    stop2, stop2_meta = _adjust_trailing_stop(entry, raw_stop, one)
+    stop2 = _tick(stop2, tick)
+    trail_step = _tick(_trailing_step(entry, stop2, target2), tick)
+    lots = int(LIVE_GTT_LOTS_PER_ORDER)
+    if lots != 1:
+        raise ValueError("LIVE_GTT_LOTS_PER_ORDER must be exactly 1 for the two-GTT strategy")
     units = lots * lot
-    notional = entry * units
-    risk = (entry - stop) * units
+
+    # Risk caps apply to the combined two-order exposure, not one GTT in isolation.
+    notional = entry * units * 2
+    risk = ((entry - stop1) + (entry - stop2)) * units
     if LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR <= 0 or LIVE_GTT_MAX_RISK_PER_TRADE_INR <= 0:
         raise ValueError("Positive LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR and LIVE_GTT_MAX_RISK_PER_TRADE_INR are required")
     if notional > LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR:
-        raise ValueError(f"Order notional ₹{notional:.2f} exceeds configured cap")
+        raise ValueError(f"Combined two-GTT notional ₹{notional:.2f} exceeds configured cap")
     if risk > LIVE_GTT_MAX_RISK_PER_TRADE_INR:
-        raise ValueError(f"Initial risk ₹{risk:.2f} exceeds configured cap")
-    return {
+        raise ValueError(f"Combined two-GTT initial risk ₹{risk:.2f} exceeds configured cap")
+
+    common = {
         "instrument_key": key, "trading_symbol": leg.get("trading_symbol") or key,
-        "entry_price": entry, "stop_loss_price": stop, "raw_stop_loss_price": raw_stop,
-        "stop_loss_context": stop_meta, "target_points": target_points, "target_price": target,
+        "entry_price": entry, "raw_stop_loss_price": raw_stop,
         "quantity_lots": lots, "quantity_units": units,
         "lot_size": lot, "tick_size": tick,
-        "estimated_notional_inr": round(notional, 2), "estimated_initial_risk_inr": round(risk, 2),
         "quote_fetched_at_ist": received.isoformat(), "quote_age_seconds": round(age, 3),
+    }
+    gtt_orders = [
+        {
+            **common, "name": "GTT_1_EXISTING", "strategy": "EXISTING",
+            "stop_loss_price": stop1, "stop_loss_context": stop1_meta,
+            "target_points": target_points, "target_price": target1,
+            "trailing_enabled": False,
+        },
+        {
+            **common, "name": "GTT_2_TRAILING", "strategy": "TRAILING",
+            "stop_loss_price": stop2, "stop_loss_context": stop2_meta,
+            "target_price": target2, "target_source": target2_source,
+            "trailing_enabled": True, "trailing_step_points": trail_step,
+            "trailing_initial_entry": entry, "trailing_initial_stop": stop2,
+            "trailing_initial_target": target2,
+        },
+    ]
+    logger.info(
+        "Two-GTT plan calculated | instrument=%s entry=%.2f | GTT1 SL=%.2f target=%.2f | "
+        "GTT2 SL=%.2f target=%.2f source=%s trail_step=%.2f | lots_each=%d combined_notional=%.2f combined_risk=%.2f",
+        key, entry, stop1, target1, stop2, target2, target2_source, trail_step,
+        lots, notional, risk,
+    )
+    return {
+        **common, "stop_loss_price": stop1, "target_price": target1,
+        "gtt_orders": gtt_orders, "trailing_step_points": trail_step,
+        "gtt2_target_source": target2_source,
+        "estimated_notional_inr": round(notional, 2),
+        "estimated_initial_risk_inr": round(risk, 2),
     }
 
 
@@ -485,84 +592,128 @@ def _cancel_close(client, state, entry, isolation_id):
 
 def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
     entry_id = hashlib.sha256(f"{isolation_id}|{signal['signal_key']}".encode()).hexdigest()[:24]
-    operation_id = f"{entry_id}-NORMAL_GTT"
-    lots = int(plan["quantity_lots"])
     entry = {
         "entry_id": entry_id, "signal_key": signal["signal_key"],
         "signal_direction": signal["direction"], "signal_time_ist": signal["signal_time"].isoformat(),
         "instrument_key": plan["instrument_key"], "trading_symbol": plan["trading_symbol"],
         "entry_price": plan["entry_price"],
         "stop_loss_price": plan["stop_loss_price"], "target_price": plan["target_price"],
-        "quantity_lots": lots, "quantity_units": plan["quantity_units"],
+        "quantity_lots": plan["quantity_lots"], "quantity_units": plan["quantity_units"],
         "lot_size": plan["lot_size"], "gtt_legs": [],
+        "combined_estimated_notional_inr": plan["estimated_notional_inr"],
+        "combined_estimated_initial_risk_inr": plan["estimated_initial_risk_inr"],
         "status": "ENTRY_INTENT_PERSISTED", "created_at_ist": _now().isoformat(),
     }
+    for order in plan["gtt_orders"]:
+        leg_state = {
+            "name": order["name"], "strategy": order["strategy"],
+            "lots": order["quantity_lots"], "quantity_units": order["quantity_units"],
+            "stop_loss_price": order["stop_loss_price"], "current_stop_loss_price": order["stop_loss_price"],
+            "target_price": order["target_price"], "terminal": False,
+            "status": "WRITE_NOT_STARTED",
+        }
+        if order["trailing_enabled"]:
+            leg_state.update({
+                "trailing_enabled": True,
+                "trailing_step_points": order["trailing_step_points"],
+                "trailing_initial_entry": order["trailing_initial_entry"],
+                "trailing_initial_stop": order["trailing_initial_stop"],
+                "trailing_initial_target": order["trailing_initial_target"],
+                "trailing_completed_steps": 0,
+                "trailing_updates": [],
+            })
+        entry["gtt_legs"].append(leg_state)
+
     state.setdefault("entries", []).append(entry)
     state["entry_count"] = int(state.get("entry_count", 0)) + 1
     state.setdefault("processed_signal_keys", []).append(signal["signal_key"])
     state["processed_signal_keys"] = state["processed_signal_keys"][-500:]
     _STORE.save(state)
 
-    request = {
-        "instrument_key": plan["instrument_key"],
-        "lots": lots,
-        "quantity_units": plan["quantity_units"],
-        "transaction_type": "BUY",
-        "product": "I",
-        "entry_type": "IMMEDIATE_MARKET",
-        "stop_loss_price": plan["stop_loss_price"],
-        "target_price": plan["target_price"],
-    }
-    try:
-        response = client.place_gtt_bracket(
-            plan["instrument_key"], lots,
-            plan["stop_loss_price"], plan["target_price"],
-            operation_id=operation_id,
-        )
-        gid = _extract_id(response)
-        stored = {
-            "name": "NORMAL_GTT",
-            "gtt_order_id": gid,
-            "lots": lots,
-            "quantity_units": plan["quantity_units"],
-            "stop_loss_price": plan["stop_loss_price"],
-            "target_price": plan["target_price"],
-            "submission_response": response.get("response") if isinstance(response, dict) else response,
-            "terminal": False,
-            "status": "GTT_SUBMITTED" if gid else "RESPONSE_RECORDED_NO_GTT_ID",
+    # Submit each one-lot GTT independently. Persist each write intent before invoking
+    # AlgoCLI so an ambiguous response can never cause an automatic duplicate.
+    for order, stored in zip(plan["gtt_orders"], entry["gtt_legs"]):
+        operation_id = f"{entry_id}-{order['name']}"
+        request = {
+            "gtt_name": order["name"],
+            "instrument_key": order["instrument_key"],
+            "lots": order["quantity_lots"],
+            "quantity_units": order["quantity_units"],
+            "transaction_type": "BUY",
+            "product": "I",
+            "entry_type": "IMMEDIATE_MARKET",
+            "stop_loss_price": order["stop_loss_price"],
+            "target_price": order["target_price"],
+            "target_source": order.get("target_source", "EXISTING_PREMIUM_BAND"),
+            "trailing_step_points": order.get("trailing_step_points"),
+            "operation_id": operation_id,
         }
-        entry["gtt_legs"].append(stored)
+        stored.update(status="WRITE_INTENT_PERSISTED", operation_id=operation_id,
+                      write_intent_at_ist=_now().isoformat())
         _STORE.save(state)
-        _prompt_audit(
-            "PLACE_GTT", isolation_id, {"plan": plan, "signal": signal},
-            request, response, "GTT_SUBMITTED" if gid else "RESPONSE_RECORDED_NO_GTT_ID",
+        logger.info(
+            "Submitting %s | isolation=%s instrument=%s lots=%d SL=%.2f target=%.2f",
+            order["name"], isolation_id, order["instrument_key"], order["quantity_lots"],
+            order["stop_loss_price"], order["target_price"],
         )
-        if not gid:
-            entry.update(
-                status="RECONCILIATION_REQUIRED",
-                last_error="GTT response JSON saved without a readable GTT ID; no retry attempted",
+        try:
+            response = client.place_gtt_bracket(
+                order["instrument_key"], order["quantity_lots"],
+                order["stop_loss_price"], order["target_price"],
+                operation_id=operation_id,
             )
+            gid = _extract_id(response)
+            stored.update({
+                "gtt_order_id": gid,
+                "submission_response": response.get("response") if isinstance(response, dict) else response,
+                "status": "GTT_SUBMITTED" if gid else "RESPONSE_RECORDED_NO_GTT_ID",
+                "submitted_at_ist": _now().isoformat(),
+            })
             _STORE.save(state)
+            _prompt_audit(
+                "PLACE_GTT", isolation_id, {"plan": order, "signal": signal},
+                request, response, "GTT_SUBMITTED" if gid else "RESPONSE_RECORDED_NO_GTT_ID",
+            )
+            if not gid:
+                reason = f"{order['name']} response saved without a readable GTT ID; no retry attempted"
+                stored["status"] = "RECONCILIATION_REQUIRED"
+                entry.update(status="RECONCILIATION_REQUIRED", last_error=reason)
+                _STORE.save(state)
+                _group("GTT_RECONCILIATION_REQUIRED", entry, reason=reason, ids=[
+                    x["gtt_order_id"] for x in entry["gtt_legs"] if x.get("gtt_order_id")
+                ])
+                return entry
+            logger.info("%s submitted | isolation=%s gtt_id=%s", order["name"], isolation_id, gid)
+        except Exception as exc:
+            reason = f"{order['name']} write failed or is ambiguous: {exc}"
+            stored.update(status="RECONCILIATION_REQUIRED", last_error=str(exc),
+                          write_failed_at_ist=_now().isoformat())
+            entry.update(status="RECONCILIATION_REQUIRED", last_error=reason)
+            _STORE.save(state)
+            _prompt_audit(
+                "PLACE_GTT_FAILED", isolation_id, {"plan": order, "signal": signal},
+                request, {"error": str(exc), "retry": False,
+                          "_algocli": getattr(client, "last_execution", {})},
+                "RECONCILIATION_REQUIRED",
+            )
+            _group("GTT_RECONCILIATION_REQUIRED", entry, reason=reason, ids=[
+                x["gtt_order_id"] for x in entry["gtt_legs"] if x.get("gtt_order_id")
+            ])
             return entry
-    except Exception as exc:
-        entry.update(status="RECONCILIATION_REQUIRED", last_error=f"GTT write failed or ambiguous: {exc}")
-        _STORE.save(state)
-        _prompt_audit(
-            "PLACE_GTT_FAILED", isolation_id, {"plan": plan, "signal": signal},
-            request, {"error": str(exc), "retry": False,
-                      "_algocli": getattr(client, "last_execution", {})},
-            "RECONCILIATION_REQUIRED",
-        )
-        return entry
 
     entry.update(status="GTT_SUBMITTED", submitted_at_ist=_now().isoformat())
     _STORE.save(state)
     _group(
         "REVERSAL_ENTRY_SUBMITTED" if is_reversal else "GTT_ENTRY_SUBMITTED",
-        plan, ids=[stored["gtt_order_id"]],
+        {**plan, "signal_direction": signal["direction"],
+         "gtt_legs": entry["gtt_legs"]},
+        ids=[x["gtt_order_id"] for x in entry["gtt_legs"] if x.get("gtt_order_id")],
+    )
+    logger.info(
+        "Both independent GTTs submitted | isolation=%s entry_id=%s ids=%s",
+        isolation_id, entry_id, [x.get("gtt_order_id") for x in entry["gtt_legs"]],
     )
     return entry
-
 
 def _process(record, payload, received_at, role):
     if not LIVE_GTT_EXECUTION_ENABLED or LIVE_GTT_KILL_SWITCH:
@@ -685,6 +836,145 @@ def _filled_order(client, detail):
     return None
 
 
+
+def _rule_trigger_price(detail, strategy):
+    rules = detail.get("rules") or []
+    matches = [r for r in rules if isinstance(r, dict) and _status(r.get("strategy")) == strategy]
+    if len(matches) != 1:
+        return None
+    rule = matches[0]
+    for key in ("trigger_price", "trigger_value", "price", "value"):
+        value = _num(rule.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _maybe_trail_gtt(client, state, entry, leg, detail, isolation_id):
+    if leg.get("strategy") != "TRAILING" or not leg.get("trailing_enabled"):
+        return False
+    if leg.get("trail_update_pending") or leg.get("trail_reconciliation_required"):
+        return False
+    if _rule_state(detail, "TARGET") in {"TRIGGERED", "EXECUTED", "COMPLETE", "COMPLETED", "FILLED"}:
+        return False
+    if _rule_state(detail, "STOPLOSS") in {"TRIGGERED", "EXECUTED", "COMPLETE", "COMPLETED", "FILLED"}:
+        return False
+
+    started = _now()
+    quote = client.get_ltp(entry["instrument_key"])
+    received = _now()
+    age = (received - started).total_seconds()
+    if age > LIVE_GTT_QUOTE_MAX_AGE_SECONDS:
+        logger.warning("Trailing quote stale; skip this monitor cycle | gtt=%s age=%.3fs",
+                       leg.get("gtt_order_id"), age)
+        return False
+    ltp = _num(quote.get("last_price"))
+    if ltp is None:
+        raise ValueError("Trailing LTP response has no valid last_price")
+
+    initial_entry = float(leg["trailing_initial_entry"])
+    initial_stop = float(leg["trailing_initial_stop"])
+    step = float(leg["trailing_step_points"])
+    tick = float(entry.get("tick_size") or 0)
+    desired_stop, completed_steps = _trailing_stop_for_price(
+        initial_entry, initial_stop, step, ltp, tick
+    )
+    previous_steps = int(leg.get("trailing_completed_steps", 0))
+    current_stop = float(leg.get("current_stop_loss_price") or leg.get("stop_loss_price"))
+    if completed_steps <= previous_steps or desired_stop <= current_stop + (tick / 2):
+        return False
+
+    operation_id = f"{entry['entry_id']}-TRAIL-{completed_steps}"
+    request = {
+        "gtt_order_id": leg["gtt_order_id"],
+        "instrument_key": entry["instrument_key"],
+        "new_stop_loss_price": desired_stop,
+        "previous_stop_loss_price": current_stop,
+        "ltp": ltp,
+        "completed_trailing_steps": completed_steps,
+        "fixed_trailing_step_points": step,
+        "operation_id": operation_id,
+        "preserve_target_rule": True,
+    }
+    # Persist the write intent before changing the broker GTT. An ambiguous result
+    # blocks further automated writes until a human reconciles the actual GTT.
+    leg["trail_update_pending"] = {
+        **request, "intent_at_ist": _now().isoformat(),
+    }
+    _STORE.save(state)
+    logger.info(
+        "GTT 2 trailing update intent | isolation=%s gtt=%s ltp=%.2f step=%.2f steps=%d old_sl=%.2f new_sl=%.2f",
+        isolation_id, leg["gtt_order_id"], ltp, step, completed_steps, current_stop, desired_stop,
+    )
+    try:
+        response = client.modify_gtt_stop_loss(
+            leg["gtt_order_id"], desired_stop, operation_id=operation_id
+        )
+        _prompt_audit(
+            "MODIFY_GTT_STOPLOSS", isolation_id, request, request, response,
+            "MODIFY_RESPONSE_RECEIVED",
+        )
+        verified = client.get_gtt(leg["gtt_order_id"])
+        actual_stop = _rule_trigger_price(verified, "STOPLOSS")
+        if actual_stop is None or abs(actual_stop - desired_stop) > (tick / 2):
+            raise RuntimeError(
+                f"Modified GTT stop could not be verified (expected={desired_stop}, actual={actual_stop})"
+            )
+        leg.update(
+            current_stop_loss_price=desired_stop,
+            trailing_completed_steps=completed_steps,
+            last_trail_update_at_ist=_now().isoformat(),
+            trail_update_pending=None,
+        )
+        leg.setdefault("trailing_updates", []).append({
+            "timestamp_ist": _now().isoformat(), "ltp": ltp,
+            "previous_stop_loss_price": current_stop,
+            "new_stop_loss_price": desired_stop,
+            "completed_steps": completed_steps,
+            "step_points": step,
+            "broker_verified": True,
+        })
+        _STORE.save(state)
+        _prompt_audit(
+            "VERIFY_GTT_STOPLOSS", isolation_id, request,
+            {"gtt_order_id": leg["gtt_order_id"], "expected_stop_loss": desired_stop},
+            verified, "MODIFY_VERIFIED",
+        )
+        _group(
+            "GTT_TRAIL_UPDATED", {**entry, "stop_loss_price": desired_stop,
+             "target_price": leg.get("target_price"),
+             "trailing_step_points": step},
+            reason=f"{leg.get('name')} SL moved {current_stop:.2f} → {desired_stop:.2f} at LTP {ltp:.2f}",
+            ids=[leg["gtt_order_id"]],
+        )
+        logger.info(
+            "GTT 2 trailing stop verified | isolation=%s gtt=%s sl=%.2f steps=%d",
+            isolation_id, leg["gtt_order_id"], desired_stop, completed_steps,
+        )
+        return True
+    except Exception as exc:
+        leg["trail_reconciliation_required"] = True
+        leg["trail_update_error"] = str(exc)
+        entry.update(status="RECONCILIATION_REQUIRED",
+                     last_error=f"GTT 2 trailing modification ambiguous/unverified: {exc}")
+        _STORE.save(state)
+        _prompt_audit(
+            "MODIFY_GTT_STOPLOSS_FAILED", isolation_id, request,
+            {"error": str(exc), "retry": False,
+             "_algocli": getattr(client, "last_execution", {})},
+            "RECONCILIATION_REQUIRED",
+        )
+        _group(
+            "GTT_RECONCILIATION_REQUIRED", entry,
+            reason=f"GTT 2 trailing update needs manual reconciliation: {exc}",
+            ids=[leg["gtt_order_id"]],
+        )
+        logger.exception(
+            "GTT 2 trailing update requires reconciliation | isolation=%s gtt=%s",
+            isolation_id, leg.get("gtt_order_id"),
+        )
+        return False
+
 def _monitor_once():
     if not LIVE_GTT_EXECUTION_ENABLED or LIVE_GTT_KILL_SWITCH:
         return
@@ -721,6 +1011,11 @@ def _monitor_once():
                         )
                         # A linked ENTRY order can be FILLED while the GTT is still
                         # protecting the position. Never interpret that as a target exit.
+                        if not triggered_exit and leg.get("strategy") == "TRAILING":
+                            _maybe_trail_gtt(client, state, entry, leg, detail, iso_id)
+                            if entry.get("status") == "RECONCILIATION_REQUIRED":
+                                changed = True
+                                break
                         order = _filled_order(client, detail) if triggered_exit else None
                         if order:
                             exit_kind = "TARGET" if target_state in {"TRIGGERED", "EXECUTED", "COMPLETE", "COMPLETED", "FILLED"} else "STOPLOSS"

@@ -1,4 +1,4 @@
-# Supertrend single-GTT execution through AlgoCLI
+# Supertrend two-GTT execution through AlgoCLI
 
 ## Execution boundary
 
@@ -21,79 +21,94 @@ and its skills.
 ## Activation and safety
 
 `LIVE_GTT_EXECUTION_ENABLED=false` remains the required default. Keep it false
-until the separate AlgoCLI team confirms that its unattended sandbox execution path
-is implemented and verified.
+until the separate AlgoCLI team confirms the unattended sandbox execution path,
+structured JSON responses, and support for modifying an existing GTT's STOPLOSS
+rule without cancelling/recreating the GTT. The CLI permission flag does not
+replace skill-level confirmation requirements.
 
 Both `LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR` and
 `LIVE_GTT_MAX_RISK_PER_TRADE_INR` must be positive before entries can be planned.
-The worker fails closed if the algoai executable is unavailable.
+The worker fails closed if the algoai executable is unavailable. Risk caps are
+evaluated against the combined exposure of both one-lot orders.
 
-## Prompt templates
+## Strategy
+
+Every qualified signal creates two independent GTTs for the same selected option:
+
+| Feature | GTT 1 | GTT 2 |
+|---|---|---|
+| Quantity | 1 lot | 1 lot |
+| Entry | Immediate live-market entry | Immediate live-market entry |
+| Initial SL | Existing support-below-percentage-stop rule | Lower of 30% stop and nearest S1/S2/S3 below entry |
+| Target | Existing premium-band target: 60/50/40 points | 15-minute R3, otherwise calculated GTT 1 target PRICE × 5 |
+| Trailing | Disabled | Enabled |
+| Trailing step | — | Fixed from initial Entry, SL and Target |
+
+GTT 1 retains the original stop calculation: calculate the configured percentage
+stop first, then select the highest S1/S2/S3 support strictly below that stop.
+If none qualifies, retain the percentage stop.
+
+GTT 2 selects the nearest S1/S2/S3 support below entry, then uses the lower of
+that support and the 30% stop. It therefore never widens the 30% stop. If no
+support below entry exists, it uses the 30% stop.
+
+The GTT 2 target is the current contract's completed 15-minute R3 when a valid
+same-day pivot file is available. If the 15-minute R3 is unavailable, the fallback
+is the calculated GTT 1 target PRICE multiplied by five. If R3 exists but is not
+above the live entry, planning fails closed rather than creating an invalid
+long-position target.
+
+The initial trailing step is calculated once and never recalculated:
+
+```text
+trail_step = (initial_entry - initial_stop) + ((initial_target - initial_entry) / 2)
+```
+
+For every complete favourable move of `trail_step` points from the original
+entry, GTT 2's STOPLOSS trigger is raised by the same number of `trail_step`
+points. Example: entry 100, initial SL 70, target 140 gives a 50-point step;
+at LTP 150 the SL becomes 120, at 200 it becomes 170, and at 250 it becomes 220.
+The SL only moves upward. The monitor persists each modification intent, sends
+the change through the installed `upstox-gtt` skill, fetches the GTT again, and
+accepts the change only after the broker's STOPLOSS trigger price is verified.
+
+If the modification response is ambiguous, the broker state cannot be verified,
+or the skill does not support GTT modification, the entry is marked
+`RECONCILIATION_REQUIRED`; no blind retry or cancel/recreate fallback is used.
+
+## Placement, persistence and notifications
+
+- GTT 1 and GTT 2 are submitted separately, sequentially, with one lot each.
+- A separate deterministic operation reference and persisted write intent are
+  recorded for each GTT before its broker write.
+- If either write is ambiguous or returns no GTT ID, the entry is blocked for
+  manual reconciliation; the other GTT is not duplicated or automatically retried.
+- The state document records each GTT ID, strategy, initial/current SL, target,
+  target source, trailing step, completed trail steps and verified trail history.
+- The append-only daily audit stores each rendered prompt, request, response,
+  operation reference and result locally and in MongoDB.
+- Detailed execution/audit notifications go to the configured private Telegram
+  chat. Entry, trailing and reconciliation lifecycle summaries go to the official
+  Telegram group. Both routes log delivery failures.
+- GTT acceptance is not proof of exchange fill. Each GTT is independently
+  monitored and its linked exit order must be reconciled before a fill is confirmed.
+- Opposite signals cancel every active GTT leg, reconcile actual net position,
+  close the exact reconciled quantity at market and wait for zero before reversal.
+
+## AlgoCLI prompt templates
 
 - `get_ltp.txt` — latest instrument LTP
-- `place_gtt.txt` — one normal GTT with calculated stop-loss and target, product I
-- `get_gtt.txt` — inspect the GTT
-- `cancel_gtt.txt` — cancel the GTT
+- `place_gtt.txt` — one normal GTT with calculated SL/target, product I
+- `modify_gtt_stop_loss.txt` — modify only the STOPLOSS rule on an existing GTT
+- `get_gtt.txt` — inspect a GTT
+- `cancel_gtt.txt` — cancel a GTT
 - `get_positions.txt` — read current positions
 - `place_market_exit.txt` — market exit expressed in lots
 - `get_order_details.txt` — inspect a normal order
 
-The trailing-SL prompt and its adapter method have been removed. The project
-places one normal GTT only; it does not place a second GTT or perform runner
-stop modifications.
-
-## Subprocess and response handling
-
-The adapter captures stdout, stderr, exit code and duration. The prompt requests valid
-JSON; the adapter extracts a JSON object/array from stdout, allowing CLI status lines
-around it. A non-zero exit, invalid JSON or timeout fails closed.
-
-Write timeouts and non-zero exits are ambiguous: the broker or skill workflow may have
-accepted or staged the write before the CLI failed. The state is marked
-`RECONCILIATION_REQUIRED`; the adapter never retries a write automatically. A
-deterministic local operation reference is recorded for traceability, but it is not
-represented as a broker-enforced idempotency key. Skill-level preview/confirmation
-remains inside AlgoCLI; the application stores the JSON returned by the subprocess
-and does not create a separate confirmation workflow.
-
-A GTT response ID is required before the service treats placement as submitted.
-GTT acceptance is not an exchange fill. The monitor requires a confirmed target/stop
-rule and linked completed exit order before classifying a fill.
-
-## Strategy
-
-- BULLISH buys the isolated option; BEARISH buys the opposite option.
-- Signal age, frame age and isolation lookback checks remain active.
-- Exactly one normal GTT is placed per qualified signal.
-- The GTT quantity is the configured `DUMMY_ORDER_QUANTITY` in lots, converted
-  using the verified contract lot size. The default remains two lots, now in one GTT.
-- Entry uses the current live market price; the fetched LTP is an internal input
-  for stop, target and risk calculations, not an entry trigger price.
-- The target remains the existing premium-band target: 60, 50 or 40 points
-  according to the configured premium thresholds.
-- The initial stop is first calculated using the configured percentage below entry.
-  The service then checks S1, S2 and S3. If support levels are strictly below the
-  calculated stop, it selects the highest such level (the nearest support below
-  the calculated stop). If none qualify, it retains the percentage-based stop.
-  A support above the calculated stop is never used to widen the stop-loss.
-- Both the selected stop and target are tick-rounded before the single GTT prompt
-  is rendered. Product `I` (Intraday) is specified in the placement prompt.
-- Opposite signals cancel the active GTT, reconcile broker position, convert exact
-  net units into lots using the stored lot size, close that lot count at market and
-  wait for zero before a reversal is considered. Non-integral lot positions are
-  blocked for manual reconciliation.
-- Ambiguous or unresolved entries block subsequent automated actions.
-
-## Audit
-
-The daily local JSON and Mongo audit retain the exact rendered prompt, request,
-AlgoCLI JSON response, exit code, operation reference and duration. The private
-Telegram audit receives the prompt/request/response; the group receives lifecycle
-milestones only. Secrets should not be included in CLI output.
-
 ## External dependency
 
-The external skill catalog may impose preview/explicit-confirmation requirements.
-The CLI permission flag does not replace skill-level confirmation rules. Keep
-execution disabled until the external team confirms the unattended sandbox workflow
-and structured JSON responses required by this worker.
+The current external skill contract must be checked before enabling execution.
+The repository does not implement or bypass AlgoCLI internals or skill-level
+confirmation. Keep `LIVE_GTT_EXECUTION_ENABLED=false` until unattended
+sandbox execution and safe in-place GTT STOPLOSS modification are confirmed.

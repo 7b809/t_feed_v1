@@ -264,6 +264,14 @@ class AlgoCLIClient:
     def cancel_gtt(self, gtt_id: str):
         return self._run("cancel_gtt.txt", {"gtt_order_id": gtt_id}, write=True)
 
+    def modify_gtt_stop_loss(self, gtt_id: str, stop_loss: float, operation_id=None):
+        """Modify only an existing GTT STOPLOSS rule; caller must verify the result."""
+        return self._run("modify_gtt_stop_loss.txt", {
+            "gtt_order_id": gtt_id,
+            "sl_price": stop_loss,
+            "operation_id": operation_id,
+        }, write=True)
+
     def get_positions(self) -> list[dict]:
         result = self._run("get_positions.txt", {})
         data = self._data(result)
