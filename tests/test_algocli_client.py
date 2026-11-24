@@ -144,7 +144,7 @@ def test_market_exit_prompt_uses_lots_and_intraday_product():
     })
     assert "MARKET SELL 2 lots" in prompt
     assert "NSE_FO|12345" in prompt
-    assert "product" not in prompt
+    assert "product I" in prompt
     assert "quantity" not in prompt
 
 
