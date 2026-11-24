@@ -12,7 +12,7 @@ This document describes the Upstox agent skills currently present in this reposi
 | `upstox-order` | Place a normal MARKET or LIMIT order | Writes a live order | `.agents/skills/upstox-order/SKILL.md` |
 | `upstox-gtt` | Place a standard GTT order with entry, stop-loss and target triggers | Writes a GTT order | `.agents/skills/upstox-gtt/SKILL.md` |
 | `upstox-gtt-variants` | Place GTT variants with IMMEDIATE / ABOVE / BELOW entry and optional SL / target legs | Writes a GTT order | `.agents/skills/upstox-gtt-variants/SKILL.md` |
-| `upstox-gtt-modify` | Inspect and modify exactly one trigger leg on an existing GTT | Read first; modification requires explicit confirmation | `.agents/skills/upstox-gtt-modify/SKILL.md` |
+| `upstox-gtt-modify` | Inspect and modify one or multiple trigger legs on an existing GTT in one modification request | Read first; modification requires explicit confirmation | `.agents/skills/upstox-gtt-modify/SKILL.md` |
 | `upstox-orders-fetch` | Fetch normal orders, GTT orders, or a specific order; filter results | Read-only | `.agents/skills/upstox-orders-fetch/SKILL.md` |
 | `upstox-pnl` | Fetch today's positions and P&L | Read-only | `.agents/skills/upstox-pnl/SKILL.md` |
 
@@ -133,40 +133,40 @@ algoai --skip-permissions --prompt "Use the upstox-gtt-variants skill to prepare
 
 ### `upstox-gtt-modify`
 
-**Use it for:** Inspecting an existing GTT and changing exactly one trigger price while retaining the other rules and settings.
+**Use it for:** Inspecting an existing GTT and changing one or more trigger prices on that same GTT. Multiple selected legs are submitted together in one GTT modification API request.
 
 **Scripts:**
 - `.agents/skills/upstox-gtt-modify/scripts/get_gtt.py`
 - `.agents/skills/upstox-gtt-modify/scripts/modify_gtt.py`
 - `.agents/skills/upstox-gtt-modify/scripts/validate_gtt_modify.py`
 
-**Supported legs:**
-- `ENTRY`
-- `STOPLOSS`
-- `TARGET`
+**Supported legs:** `ENTRY`, `STOPLOSS`, and `TARGET`. Any combination of distinct legs can be updated together; each selected rule must exist exactly once.
+
+**CLI syntax:** Repeat `--update LEG=PRICE` for each selected leg, e.g. `--update TARGET=300 --update STOPLOSS=230`. Existing `--leg` and `--trigger-price` single-leg syntax remains supported. Use `--json` for machine-readable output.
 
 **Safety workflow:**
-1. Run the modification script without `--confirm` to fetch the latest GTT and show a preview.
-2. Show the GTT ID, selected leg, old trigger, requested trigger, quantity and rule-preservation details.
-3. Wait for the user's explicit approval of that exact preview.
-4. Rerun with `--confirm` using the same GTT ID, leg and requested trigger.
-5. Fetch again and verify the updated trigger.
+1. Run without `--confirm` to fetch the latest GTT and preview every requested old/new trigger value.
+2. Include the full-order `state_fingerprint` in the JSON preview.
+3. Wait for explicit approval of the exact GTT ID, every requested value, and that fingerprint.
+4. Rerun with `--confirm --expected-state-hash <fingerprint>` using the same updates.
+5. The script re-fetches and aborts if the reviewed state changed, then submits all updates in one API request.
+6. Fetch again and verify every requested trigger.
 
-Only one leg is changed per request. Other rules, quantity and GTT type are retained. Do not infer a missing GTT ID, leg or trigger price.
+Any combination of distinct legs can be changed together. Unselected rules, quantity, GTT type and supported per-rule settings are retained. Do not infer a missing GTT ID, leg or trigger price.
 
 **Sample prompts:**
 
-Preview only:
+Preview STOPLOSS and TARGET together:
 ```bash
-algoai --skip-permissions --prompt "Use the upstox-gtt-modify skill to preview changing GTT [gtt_order_id], leg STOPLOSS, to trigger price [new_price]. Run without --confirm. Show the current value and proposed value, and confirm that all other rules and settings will remain unchanged. Do not modify anything yet. Do not read .env."
+algoai --skip-permissions --prompt "Use the upstox-gtt-modify skill to preview modifying GTT [gtt_order_id]. Change TARGET to [new_target_price] and STOPLOSS to [new_stoploss_price] together in one API modification request. Show both old/new prices, preserve ENTRY and all other settings, and return JSON including state_fingerprint. Do not execute yet. Do not read .env."
 ```
 
-After reviewing the preview, explicitly approve:
+After reviewing and explicitly approving the exact preview, including its fingerprint:
 ```bash
-algoai --skip-permissions --prompt "I explicitly confirm the exact GTT modification preview just shown: GTT [gtt_order_id], leg STOPLOSS, new trigger price [new_price]. Use the upstox-gtt-modify skill and execute with --confirm. Change only this leg, then fetch the GTT again and report whether the new trigger price was verified. Do not read .env or expose credentials."
+algoai --skip-permissions --prompt "I explicitly approve GTT [gtt_order_id], TARGET [new_target_price], STOPLOSS [new_stoploss_price], and state_fingerprint [fingerprint_from_preview]. Execute both updates together using --confirm and --expected-state-hash with that fingerprint. Re-fetch and verify both values. Return JSON only. Do not read .env or expose credentials."
 ```
 
-Replace `STOPLOSS` with `ENTRY` or `TARGET` only when that is the intended leg.
+For a single leg, use one `--update LEG=PRICE` argument or the backwards-compatible `--leg` / `--trigger-price` options. Confirmed execution always requires the reviewed state fingerprint.
 
 ## 7. Fetch normal orders and GTT orders
 
