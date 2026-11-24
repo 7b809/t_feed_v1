@@ -314,7 +314,7 @@ class AlgoCLIClient:
             raise AlgoCLIError("Positions response is not an array")
         return data
 
-    def place_market_exit(self, instrument_key, lots, tag):
+    def place_market_exit(self, instrument_key, lots):
         lots = int(lots)
         if lots <= 0:
             raise AlgoCLIError("Market-exit lot count must be a positive integer")
@@ -322,7 +322,6 @@ class AlgoCLIClient:
             "instrument_key": instrument_key,
             "lots": lots,
             "lot_label": f"{lots} lot" if lots == 1 else f"{lots} lots",
-            "tag": tag,
         }, write=True)
 
     def get_order_details(self, order_id):
