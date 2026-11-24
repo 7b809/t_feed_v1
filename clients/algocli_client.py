@@ -1,12 +1,13 @@
-"""Subprocess adapter for the independent AlgoCLI installation.
+"""Direct CLI adapter for the installed AlgoCLI command.
 
-The isolation service owns strategy decisions and never imports the Upstox SDK
-for order execution. AlgoCLI owns its own authentication and broker access.
+The isolation application invokes only:
+    algoai --skip-permissions --prompt "<rendered prompt>"
+No AlgoCLI project directory, launcher script, Python interpreter, or broker
+credentials are configured or accessed by this application.
 """
 from __future__ import annotations
 
 import json
-import os
 import re
 import signal
 import subprocess
@@ -16,16 +17,10 @@ from pathlib import Path
 from string import Template
 from typing import Any
 
-from core.config import (
-    ALGOCLI_LAUNCHER_PATH,
-    ALGOCLI_PROJECT_DIR,
-    ALGOCLI_PYTHON,
-    ALGOCLI_TIMEOUT_SECONDS,
-    ALGOCLI_SKIP_PERMISSIONS,
-)
 from core.logger import get_logger
 
 logger = get_logger(__file__)
+CLI_TIMEOUT_SECONDS = 180
 
 
 def _redact_text(value: str) -> str:
@@ -36,6 +31,7 @@ def _redact_text(value: str) -> str:
     )
     return value
 
+
 class AlgoCLIError(RuntimeError):
     """AlgoCLI failed before a trustworthy structured response was available."""
 
@@ -45,21 +41,16 @@ class AlgoCLIWriteAmbiguous(AlgoCLIError):
 
 
 class AlgoCLIClient:
-    """Execute predefined prompts through the independent AlgoCLI launcher."""
+    """Run predefined prompt templates using the installed algoai command."""
 
     def __init__(self) -> None:
-        self.project_dir = Path(ALGOCLI_PROJECT_DIR).expanduser() if ALGOCLI_PROJECT_DIR else None
-        launcher = Path(ALGOCLI_LAUNCHER_PATH).expanduser()
-        if not launcher.is_absolute() and self.project_dir:
-            launcher = self.project_dir / launcher
-        self.launcher = launcher
         self.last_execution: dict[str, Any] = {}
 
     def _template(self, name: str, values: dict[str, Any]) -> str:
         root = Path(__file__).resolve().parents[1] / "prompts" / "algocli"
         path = root / name
         if not path.is_file():
-            raise AlgoCLIError(f"AlgoCLI prompt template is missing: {name}")
+            raise AlgoCLIError(f"Prompt template is missing: {name}")
         template = Template(path.read_text(encoding="utf-8"))
         try:
             return template.substitute({k: str(v) for k, v in values.items()})
@@ -68,7 +59,6 @@ class AlgoCLIClient:
 
     @staticmethod
     def _json_from_stdout(stdout: str) -> Any:
-        """Extract the last valid JSON value from CLI output (timing lines may surround it)."""
         decoder = json.JSONDecoder()
         candidates = []
         for index, char in enumerate(stdout):
@@ -80,12 +70,11 @@ class AlgoCLIClient:
             except json.JSONDecodeError:
                 continue
         if not candidates:
-            raise AlgoCLIError("AlgoCLI did not return valid JSON on stdout")
+            raise AlgoCLIError("algoai did not return valid JSON on stdout")
         return max(candidates, key=lambda item: item[0])[1]
 
     @staticmethod
     def _unwrap(value: Any) -> Any:
-        """Unwrap common CLI JSON envelopes without inventing broker fields."""
         current = value
         for _ in range(4):
             if isinstance(current, str):
@@ -114,77 +103,76 @@ class AlgoCLIClient:
         return current
 
     def _run(self, template_name: str, values: dict[str, Any], *, write: bool = False) -> dict:
-        if not self.project_dir or not self.project_dir.is_dir():
-            raise AlgoCLIError(
-                "ALGOCLI_PROJECT_DIR must point to the independent AlgoCLI project; "
-                "execution is blocked until it is configured."
-            )
-        if not self.launcher.is_file():
-            raise AlgoCLIError(f"AlgoCLI launcher does not exist: {self.launcher}")
-
         operation_id = str(values.get("operation_id") or uuid.uuid4().hex)
-        prompt_values = {**values, "operation_id": operation_id}
-        prompt = self._template(template_name, prompt_values)
-        command = [
-            ALGOCLI_PYTHON, str(self.launcher),
-            "--output-format", "json",
-            "--prompt", prompt,
-        ]
-        if ALGOCLI_SKIP_PERMISSIONS:
-            command.append("--skip-permissions")
+        prompt = self._template(template_name, {**values, "operation_id": operation_id})
 
+        # Invoke only the installed CLI. No project path, script, interpreter,
+        # custom working directory, or broker credential is passed.
+        command = ["algoai", "--skip-permissions", "--prompt", prompt]
         started = time.monotonic()
-        proc = subprocess.Popen(
-            command,
-            cwd=str(self.project_dir),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            start_new_session=(os.name != "nt"),
-        )
         try:
-            stdout, stderr = proc.communicate(timeout=max(10, ALGOCLI_TIMEOUT_SECONDS))
+            proc = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                start_new_session=True,
+            )
+        except FileNotFoundError as exc:
+            raise AlgoCLIError(
+                "The algoai command is not installed or is not available on PATH."
+            ) from exc
+
+        try:
+            stdout, stderr = proc.communicate(timeout=CLI_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired as exc:
-            if os.name != "nt":
-                try:
-                    os.killpg(proc.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            else:
+            try:
+                import os
+                os.killpg(proc.pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, AttributeError):
                 proc.terminate()
             try:
                 proc.communicate(timeout=5)
             except subprocess.TimeoutExpired:
-                if os.name != "nt":
-                    try:
-                        os.killpg(proc.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                else:
+                try:
+                    import os
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, AttributeError):
                     proc.kill()
                 proc.communicate()
-            message = f"AlgoCLI timed out after {ALGOCLI_TIMEOUT_SECONDS}s; broker outcome is unknown"
             self.last_execution = {
-                "operation_id": operation_id, "template": template_name,
-                "prompt": prompt, "exit_code": None,
+                "operation_id": operation_id,
+                "template": template_name,
+                "prompt": prompt,
+                "exit_code": None,
                 "duration_seconds": round(time.monotonic() - started, 3),
-                "stderr": str(exc), "outcome": "AMBIGUOUS" if write else "FAILED",
+                "stderr": _redact_text(str(exc)),
+                "outcome": "AMBIGUOUS" if write else "FAILED",
+                "command": "algoai --skip-permissions --prompt <template>",
             }
             if write:
-                raise AlgoCLIWriteAmbiguous(message) from exc
-            raise AlgoCLIError(message) from exc
+                raise AlgoCLIWriteAmbiguous(
+                    f"algoai timed out after {CLI_TIMEOUT_SECONDS}s; broker outcome is unknown"
+                ) from exc
+            raise AlgoCLIError(f"algoai timed out after {CLI_TIMEOUT_SECONDS}s") from exc
 
         duration = round(time.monotonic() - started, 3)
         self.last_execution = {
-            "operation_id": operation_id, "template": template_name,
-            "prompt": prompt, "exit_code": proc.returncode,
+            "operation_id": operation_id,
+            "template": template_name,
+            "prompt": prompt,
+            "exit_code": proc.returncode,
             "duration_seconds": duration,
-            "stderr": _redact_text(stderr[-4000:]), "outcome": "COMPLETED" if proc.returncode == 0 else ("AMBIGUOUS" if write else "FAILED"),
+            "stderr": _redact_text(stderr[-4000:]),
+            "outcome": "COMPLETED" if proc.returncode == 0 else ("AMBIGUOUS" if write else "FAILED"),
+            "command": "algoai --skip-permissions --prompt <template>",
         }
         if proc.returncode != 0:
-            message = _redact_text(f"AlgoCLI exited with code {proc.returncode}: {stderr[-1500:] or stdout[-1500:]}")
+            message = _redact_text(
+                f"algoai exited with code {proc.returncode}: {stderr[-1500:] or stdout[-1500:]}"
+            )
             if write:
                 raise AlgoCLIWriteAmbiguous(
                     message + " (write outcome is unknown; reconcile before any retry)"
@@ -195,14 +183,15 @@ class AlgoCLIClient:
             parsed = self._json_from_stdout(stdout)
             payload = self._unwrap(parsed)
             if not isinstance(payload, (dict, list)):
-                raise AlgoCLIError("AlgoCLI JSON response must be an object or array")
+                raise AlgoCLIError("algoai JSON response must be an object or array")
         except AlgoCLIError as exc:
             if write:
                 self.last_execution["outcome"] = "AMBIGUOUS"
                 raise AlgoCLIWriteAmbiguous(
-                    f"{exc}; AlgoCLI exited successfully but the broker response is unreadable. Reconcile before retrying."
+                    f"{exc}; write outcome is unknown. Reconcile before retrying."
                 ) from exc
             raise
+
         return {
             "response": payload,
             "_algocli": {
@@ -211,6 +200,7 @@ class AlgoCLIClient:
                 "prompt": prompt,
                 "exit_code": proc.returncode,
                 "duration_seconds": duration,
+                "command": "algoai --skip-permissions --prompt <template>",
             },
         }
 
@@ -243,8 +233,7 @@ class AlgoCLIClient:
         price = data.get("last_price", data.get("ltp"))
         if price is None:
             raise AlgoCLIError(f"LTP response has no last_price for {instrument_key}")
-        return {"last_price": float(price), "provider_timestamp": data.get("timestamp"),
-                "raw": result}
+        return {"last_price": float(price), "provider_timestamp": data.get("timestamp"), "raw": result}
 
     def place_gtt_bracket(self, instrument_key, quantity, product, entry, stop, target, operation_id=None):
         return self._run("place_gtt.txt", {
@@ -282,7 +271,7 @@ class AlgoCLIClient:
                 if isinstance(rule, dict) and str(rule.get("strategy", "")).upper() == "STOPLOSS"
             ]
             if len(matches) != 1:
-                raise AlgoCLIError("Could not verify exactly one STOPLOSS rule after AlgoCLI modification")
+                raise AlgoCLIError("Could not verify exactly one STOPLOSS rule after algoai modification")
             actual = matches[0].get("trigger_price")
             try:
                 matches_requested = abs(float(actual) - float(stop)) <= 0.011
