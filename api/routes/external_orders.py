@@ -5,18 +5,21 @@ server-to-server credentials never need to be exposed to browser JavaScript.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
+from upstox_client.rest import ApiException
 
 from api.routes.orders import _raise_http, _service
 from core.external_api_auth import require_external_api_auth
 from core.logger import get_logger
 from models.gtt_models import CancelGTTRequest, CleanupGTTRequest, GTTOrderIDsRequest, PlaceGTTRequest
 from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderRequest
-from services.gtt_service import GTTServiceError, cancel_gtt_order, cancel_gtt_orders, place_gtt_order
+from sandbox_services.gtt_modify_service import modify_gtt_order
 from services.daily_profit_guard_service import DailyProfitGuardError, get_today_pnl_status
+from services.gtt_service import GTTServiceError, cancel_gtt_order, cancel_gtt_orders, place_gtt_order
 from services.orderflow_cleanup_service import OrderflowCleanupError, OrderflowCleanupService
 from services.upstox_order_api import UpstoxOrderAPIError, get_order_book
 
@@ -27,6 +30,20 @@ router = APIRouter(
     tags=["external-orders"],
     dependencies=[Depends(require_external_api_auth)],
 )
+
+
+class ModifyGTTRequest(BaseModel):
+    """Request schema for modifying SL and/or Target on an existing GTT order."""
+
+    model_config = ConfigDict(extra="allow")  # Allows body.api_token for require_external_api_auth
+
+    gtt_order_id: str = Field(..., min_length=1, description="Existing Upstox GTT Order ID")
+    sl_price: Optional[float] = Field(default=None, description="New Stop-Loss trigger price or offset")
+    target_price: Optional[float] = Field(default=None, description="New Target trigger price or offset")
+    is_offset: bool = Field(
+        default=False,
+        description="If True, computes SL/Target relative to existing ENTRY price; if False, uses exact prices.",
+    )
 
 
 @router.post("/portfolio/today-pnl")
@@ -130,6 +147,34 @@ def external_place_gtt(body: PlaceGTTRequest):
             status_code=500, detail={"error": "Unexpected GTT service error."}
         ) from None
 
+
+@router.post("/gtt/modify")
+def external_modify_gtt(body: ModifyGTTRequest):
+    """Modify Stop-Loss, Target, or both on an existing GTT order."""
+    try:
+        return modify_gtt_order(
+            gtt_order_id=body.gtt_order_id,
+            sl_price=body.sl_price,
+            target_price=body.target_price,
+            is_offset=body.is_offset,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": str(exc)},
+        ) from None
+    except ApiException as exc:
+        status_code = getattr(exc, "status", None) or 502
+        detail: dict[str, Any] = {"error": getattr(exc, "reason", str(exc))}
+        if getattr(exc, "body", None):
+            detail["broker_error"] = exc.body
+        raise HTTPException(status_code=status_code, detail=detail) from None
+    except Exception:
+        logger.exception("Unexpected external GTT modification failure")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Unexpected GTT modification error."},
+        ) from None
 
 
 @router.post("/gtt/cancel")
