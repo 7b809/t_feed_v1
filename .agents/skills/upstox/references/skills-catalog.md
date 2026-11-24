@@ -12,11 +12,12 @@ This document describes the Upstox agent skills currently present in this reposi
 | `upstox-order` | Place a normal MARKET or LIMIT order | Writes a live order | `.agents/skills/upstox-order/SKILL.md` |
 | `upstox-gtt` | Place a standard GTT order with entry, stop-loss and target triggers | Writes a GTT order | `.agents/skills/upstox-gtt/SKILL.md` |
 | `upstox-gtt-variants` | Place GTT variants with IMMEDIATE / ABOVE / BELOW entry and optional SL / target legs | Writes a GTT order | `.agents/skills/upstox-gtt-variants/SKILL.md` |
+| `upstox-gtt-trailing-sl` | Enter at market, protect with SL-M, manage a fixed target and step-trailing stop | Writes live orders; local manager must remain running | `.agents/skills/upstox-gtt-trailing-sl/SKILL.md` |
 | `upstox-gtt-modify` | Inspect and modify one or multiple trigger legs on an existing GTT in one modification request | Read first; modification requires explicit confirmation | `.agents/skills/upstox-gtt-modify/SKILL.md` |
 | `upstox-orders-fetch` | Fetch normal orders, GTT orders, or a specific order; filter results | Read-only | `.agents/skills/upstox-orders-fetch/SKILL.md` |
 | `upstox-pnl` | Fetch today's positions and P&L | Read-only | `.agents/skills/upstox-pnl/SKILL.md` |
 
-The six named skills after the general `upstox` skill are focused workflows. The general skill also contains shared API guidance and reference documents; it is not limited to a single script.
+The named skills after the general `upstox` skill are focused workflows. The general skill also contains shared API guidance and reference documents; it is not limited to a single script.
 
 ## 2. General Upstox skill
 
@@ -129,7 +130,35 @@ BELOW entry with stop-loss only:
 algoai --skip-permissions --prompt "Use the upstox-gtt-variants skill to prepare a GTT for [instrument_key], quantity [quantity], entry trigger type BELOW at [entry_price], and stop-loss [sl_price]. Do not add a target leg. Validate, show the preview, and wait for my explicit confirmation before placing it. Never read .env or print credentials."
 ```
 
-## 6. Modify an existing GTT
+## 6. Market entry with step-trailing stop-loss
+
+### `upstox-gtt-trailing-sl`
+
+**Use it for:** A live MARKET entry with SL distance, fixed target distance and step-based trailing jump. This is deliberately not a GTT ENTRY workflow: Upstox GTT `IMMEDIATE` is not a MARKET order.
+
+**Script:** `.agents/skills/upstox-gtt-trailing-sl/scripts/place_trailing_sl.py`
+
+**Inputs:** instrument key, BUY/SELL, quantity, product (I/D/MTF), SL distance, target distance, trailing jump and instrument tick size. All distances are measured from the actual average entry fill, not an absolute trigger price.
+
+**Execution model and limitations:**
+- The script places a MARKET entry, then a broker-side SL-M exit sized to the confirmed filled quantity.
+- The fixed target is monitored locally. On target touch, the script cancels and verifies the SL-M before sending a MARKET exit. It does not leave independent stop and target orders active together because they are not assumed to be OCO.
+- Trailing updates move the SL-M by one full trailing-jump for each favourable price increment. The stop never moves backwards.
+- The manager process must remain running for target monitoring and further trailing. If it stops, the last SL-M remains broker-side, but the target and additional trailing are no longer managed.
+- Partial exits, ambiguous states or API errors require immediate manual reconciliation.
+
+**Safety:** Run preview without `--confirm`. Review the full configuration and `preview_hash`; explicitly approve that exact configuration. Execute only with `--confirm --expected-preview-hash <preview_hash>`. The hash covers the strategy inputs, not the changing reference LTP. The script uses the actual average fill price to calculate exit levels. Never read `.env` or expose credentials.
+
+**Sample prompt:**
+```bash
+algoai --skip-permissions --prompt "Use the upstox-gtt-trailing-sl skill to prepare a live MARKET BUY for [instrument_key], quantity [quantity], product [I/D/MTF], stop-loss distance [sl_points], target distance [target_points], and trailing jump [jump_points]. Resolve/verify the instrument, lot size and tick size. Run preview only, show the reference LTP separately from the eventual fill price, and return the preview_hash. Do not place any order until I explicitly approve the exact preview hash. Do not read .env or expose tokens."
+```
+
+After reviewing and explicitly approving the exact preview:
+```bash
+algoai --skip-permissions --prompt "I explicitly approve the upstox-gtt-trailing-sl preview for [instrument_key], [BUY/SELL], quantity [quantity], product [product], SL distance [sl_points], target distance [target_points], trailing jump [jump_points], and preview_hash [hash]. Execute only that approved configuration. Verify the actual market fill, initial SL-M, fixed target monitoring and each trailing update. Keep the manager running and report any partial fill or ambiguous state for immediate reconciliation. Do not read .env or expose credentials."
+```
+## 7. Modify an existing GTT
 
 ### `upstox-gtt-modify`
 
@@ -168,7 +197,7 @@ algoai --skip-permissions --prompt "I explicitly approve GTT [gtt_order_id], TAR
 
 For a single leg, use one `--update LEG=PRICE` argument or the backwards-compatible `--leg` / `--trigger-price` options. Confirmed execution always requires the reviewed state fingerprint.
 
-## 7. Fetch normal orders and GTT orders
+## 8. Fetch normal orders and GTT orders
 
 ### `upstox-orders-fetch`
 
@@ -219,7 +248,7 @@ Filtered orders:
 algoai --skip-permissions --prompt "Use the upstox-orders-fetch skill with --kind all --symbol NIFTY --segment NSE_FO to fetch matching normal and GTT orders. Return valid JSON only and do not omit available fields. Do not read .env. This is read-only."
 ```
 
-## 8. Today's P&L and positions
+## 9. Today's P&L and positions
 
 ### `upstox-pnl`
 
@@ -239,7 +268,7 @@ algoai --skip-permissions --prompt "Use the upstox-pnl skill to fetch today's P&
 algoai --skip-permissions --prompt "Use the upstox-pnl skill to fetch today's positions and P&L. Include all fields returned by the script, including available realised/unrealised P&L and position details. Do not calculate or invent missing values. Return JSON only. Do not read .env."
 ```
 
-## 9. Core Upstox reference documents
+## 10. Core Upstox reference documents
 
 The general `upstox` skill contains reference documents under `.agents/skills/upstox/references/`. These are topic guides loaded by the general skill when relevant; they are not separate standalone skill directories.
 
@@ -256,7 +285,7 @@ The general `upstox` skill contains reference documents under `.agents/skills/up
 | `instruments.md` | Instrument lookup, instrument keys and lot-size information |
 | `errors.md` | HTTP/API errors, Upstox error codes and rate-limit troubleshooting |
 
-## 10. Shared execution and security rules
+## 11. Shared execution and security rules
 
 Apply these rules across the Upstox workflows:
 
@@ -271,7 +300,7 @@ Apply these rules across the Upstox workflows:
 9. **Do not make extra API calls** when a focused skill says to run its script once, unless the user explicitly requests additional retrieval or verification. The GTT modification workflow has its own required re-fetch/verification sequence.
 10. **Treat `--skip-permissions` as a CLI execution flag, not as user approval** for a live financial action. Explicit confirmation is still required by the trading safety rules.
 
-## 11. Choosing the right skill
+## 12. Choosing the right skill
 
 | User's request | Use |
 |---|---|
@@ -279,6 +308,7 @@ Apply these rules across the Upstox workflows:
 | "Place a normal limit/market order" | `upstox-order` (and follow main skill safety guardrails) |
 | "Place a GTT with entry, SL and target triggers" | `upstox-gtt` |
 | "Place a GTT with immediate/above/below entry or optional legs" | `upstox-gtt-variants` |
+| "Enter at market with distance-based SL, fixed target and step-trailing stop" | `upstox-gtt-trailing-sl` |
 | "Change the stop-loss/entry/target trigger on an existing GTT" | `upstox-gtt-modify` |
 | "List all normal and GTT orders or fetch a particular order" | `upstox-orders-fetch` |
 | "Show today's P&L and positions" | `upstox-pnl` |
