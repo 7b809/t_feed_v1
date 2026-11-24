@@ -387,3 +387,60 @@ OPTION_PIVOT_INDEXES = [
     ).split(",")
     if key.strip()
 ]
+
+
+# ---------------------------------------------------------------------------
+# Live Supertrend GTT execution (disabled by default)
+# ---------------------------------------------------------------------------
+def _live_bool(name: str, default: str = "false") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+def _live_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+def _live_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+LIVE_GTT_EXECUTION_ENABLED = _live_bool("LIVE_GTT_EXECUTION_ENABLED", "false")
+LIVE_GTT_KILL_SWITCH = _live_bool("LIVE_GTT_KILL_SWITCH", "false")
+LIVE_GTT_SANDBOX = _live_bool("LIVE_GTT_SANDBOX", "false")
+LIVE_GTT_ORDER_PRODUCT = os.getenv("LIVE_GTT_ORDER_PRODUCT", "I").strip().upper()
+if LIVE_GTT_ORDER_PRODUCT not in {"I", "D", "MTF"}:
+    LIVE_GTT_ORDER_PRODUCT = "I"
+
+DUMMY_ORDER_QUANTITY = _live_int("DUMMY_ORDER_QUANTITY", 2)
+DUMMY_ORDER_STOP_LOSS_PERCENT = _live_float("DUMMY_ORDER_STOP_LOSS_PERCENT", 30.0)
+DUMMY_TARGET_UPPER_THRESHOLD = _live_float("DUMMY_TARGET_UPPER_THRESHOLD", 200.0)
+DUMMY_TARGET_LOWER_THRESHOLD = _live_float("DUMMY_TARGET_LOWER_THRESHOLD", 100.0)
+DUMMY_TARGET_POINTS_ABOVE_UPPER = _live_float("DUMMY_TARGET_POINTS_ABOVE_UPPER", 60.0)
+DUMMY_TARGET_POINTS_MIDDLE = _live_float("DUMMY_TARGET_POINTS_MIDDLE", 50.0)
+DUMMY_TARGET_POINTS_BELOW_LOWER = _live_float("DUMMY_TARGET_POINTS_BELOW_LOWER", 40.0)
+
+LIVE_GTT_ISOLATION_LOOKBACK_SECONDS = _live_int("LIVE_GTT_ISOLATION_LOOKBACK_SECONDS", 60)
+LIVE_GTT_MAX_SIGNAL_AGE_SECONDS = _live_int("LIVE_GTT_MAX_SIGNAL_AGE_SECONDS", 120)
+LIVE_GTT_MAX_FRAME_AGE_SECONDS = _live_int("LIVE_GTT_MAX_FRAME_AGE_SECONDS", 5)
+LIVE_GTT_QUOTE_MAX_AGE_SECONDS = _live_int("LIVE_GTT_QUOTE_MAX_AGE_SECONDS", 10)
+
+LIVE_GTT_EARLY_ENTRY_START = os.getenv("LIVE_GTT_EARLY_ENTRY_START", "09:15")
+LIVE_GTT_EARLY_ENTRY_END = os.getenv("LIVE_GTT_EARLY_ENTRY_END", "09:39:59")
+LIVE_GTT_EARLY_MAX_ENTRIES = _live_int("LIVE_GTT_EARLY_MAX_ENTRIES", 2)
+LIVE_GTT_LATE_ENTRY_START = os.getenv("LIVE_GTT_LATE_ENTRY_START", "09:40")
+LIVE_GTT_LATE_MAX_ENTRIES = _live_int("LIVE_GTT_LATE_MAX_ENTRIES", 1)
+LIVE_GTT_LATE_ALLOW_REVERSAL = _live_bool("LIVE_GTT_LATE_ALLOW_REVERSAL", "false")
+
+LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR = _live_float("LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR", 0.0)
+LIVE_GTT_MAX_RISK_PER_TRADE_INR = _live_float("LIVE_GTT_MAX_RISK_PER_TRADE_INR", 0.0)
+LIVE_GTT_REVERSAL_CLOSE_TIMEOUT_SECONDS = _live_int("LIVE_GTT_REVERSAL_CLOSE_TIMEOUT_SECONDS", 30)
+LIVE_GTT_MONITOR_INTERVAL_SECONDS = _live_int("LIVE_GTT_MONITOR_INTERVAL_SECONDS", 3)
+
+LIVE_GTT_AUDIT_COLLECTION = os.getenv("LIVE_GTT_AUDIT_COLLECTION", "live_gtt_execution_audit")
+LIVE_GTT_STATE_COLLECTION = os.getenv("LIVE_GTT_STATE_COLLECTION", "live_gtt_execution_state")
+LIVE_GTT_AUDIT_DIR = os.getenv("LIVE_GTT_AUDIT_DIR", "data/live_gtt_audit")
+LIVE_GTT_STATE_DIR = os.getenv("LIVE_GTT_STATE_DIR", "data/live_gtt_state")
+LIVE_GTT_AUDIT_MAX_EVENTS = _live_int("LIVE_GTT_AUDIT_MAX_EVENTS", 500)

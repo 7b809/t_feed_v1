@@ -159,6 +159,10 @@ class OptionChainSupertrendCapture:
                                         dispatch_isolated_supertrend_signal(
                                             sink["record"], payload, received, sink["role"],
                                         )
+                                        from services.live_gtt_execution_service import dispatch_live_supertrend_signal
+                                        dispatch_live_supertrend_signal(
+                                            sink["record"], payload, received, sink["role"],
+                                        )
                                     except Exception:
                                         logger.exception("Could not deliver isolated Supertrend signal notification key=%s", key)
                                 try:

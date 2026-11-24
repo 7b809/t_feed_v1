@@ -223,6 +223,12 @@ async def lifespan(app: FastAPI):
             logger.exception("Startup option-chain capture kickoff failed")
 
         try:
+            from services.live_gtt_execution_service import start_live_gtt_execution_service
+            logger.info("Startup live GTT execution service: %s", start_live_gtt_execution_service())
+        except Exception:
+            logger.exception("Live GTT execution service startup failed")
+
+        try:
             _scheduler = start_scheduler()
             logger.info(
                 "Scheduler running. Jobs: %s",
@@ -238,6 +244,12 @@ async def lifespan(app: FastAPI):
     # Shutdown
     # ------------------------------------------------------------------ #
     logger.info("Shutting down…")
+
+    try:
+        from services.live_gtt_execution_service import stop_live_gtt_execution_service
+        stop_live_gtt_execution_service()
+    except Exception:
+        logger.exception("Live GTT execution service shutdown failed")
 
     _stop_option_chain_capture_safe()
 

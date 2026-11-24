@@ -229,6 +229,10 @@ class IsolatedFeedManager:
                             dispatch_isolated_supertrend_signal(
                                 isolation_record, payload, received_at, role,
                             )
+                            from services.live_gtt_execution_service import dispatch_live_supertrend_signal
+                            dispatch_live_supertrend_signal(
+                                isolation_record, payload, received_at, role,
+                            )
                         if event == "supertrend_signal" or (indicator == "sr" and event == "sr_update"):
                             from services.isolation_telegram_service import notify_indicator_event
                             await asyncio.to_thread(notify_indicator_event, indicator, payload, symbol, role)
