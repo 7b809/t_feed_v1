@@ -1,1 +1,1 @@
-Use the upstox-gtt skill to place a GTT order for instrument $instrument_key, quantity $quantity, product $product, BUY entry trigger $entry_price, stop-loss $sl_price, and target $target_price. Return the API response as valid JSON only.
+Use the upstox-gtt skill to place a BUY GTT for instrument $instrument_key, $lot_label. Enter immediately at the current live market price; do not set an entry trigger price. Set stop-loss $sl_price and target $target_price. Return valid JSON only.
