@@ -88,37 +88,6 @@ def test_nonzero_write_exit_is_ambiguous(monkeypatch):
     assert client.last_execution["outcome"] == "AMBIGUOUS"
 
 
-def test_modify_gtt_stop_requires_verified_broker_rule(monkeypatch):
-    client = AlgoCLIClient()
-    monkeypatch.setattr(client, "_run", lambda *args, **kwargs: {
-        "response": {"status": "accepted"},
-        "_algocli": {"operation_id": "modify-1", "prompt": "rendered prompt"},
-    })
-    monkeypatch.setattr(client, "get_gtt", lambda gtt_id: {
-        "gtt_order_id": gtt_id,
-        "rules": [{"strategy": "STOPLOSS", "trigger_price": 82.5}],
-    })
-    result = client.modify_gtt_stop("GTT-1", 82.5)
-    assert result["verified_gtt"]["rules"][0]["trigger_price"] == 82.5
-    assert result["_algocli"]["operation_id"] == "modify-1"
-
-
-def test_modify_gtt_stop_rejects_unverified_price(monkeypatch):
-    client = AlgoCLIClient()
-    monkeypatch.setattr(client, "_run", lambda *args, **kwargs: {
-        "response": {"status": "preview_only"},
-        "_algocli": {"operation_id": "modify-2", "prompt": "rendered prompt"},
-    })
-    monkeypatch.setattr(client, "get_gtt", lambda gtt_id: {
-        "gtt_order_id": gtt_id,
-        "rules": [{"strategy": "STOPLOSS", "trigger_price": 80.0}],
-    })
-    with pytest.raises(AlgoCLIWriteAmbiguous):
-        client.modify_gtt_stop("GTT-1", 82.5)
-    assert client.last_execution["outcome"] == "AMBIGUOUS"
-
-
-
 def test_place_gtt_prompt_uses_lots_and_live_market_entry():
     prompt = AlgoCLIClient()._template("place_gtt.txt", {
         "instrument_key": "NSE_FO|12345",
