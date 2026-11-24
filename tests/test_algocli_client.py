@@ -116,3 +116,70 @@ def test_modify_gtt_stop_rejects_unverified_price(monkeypatch):
     with pytest.raises(AlgoCLIWriteAmbiguous):
         client.modify_gtt_stop("GTT-1", 82.5)
     assert client.last_execution["outcome"] == "AMBIGUOUS"
+
+
+
+def test_place_gtt_prompt_uses_lots_and_live_market_entry():
+    prompt = AlgoCLIClient()._template("place_gtt.txt", {
+        "instrument_key": "NSE_FO|12345",
+        "lots": 1,
+        "lot_label": "1 lot",
+        "sl_price": 70,
+        "target_price": 140,
+    })
+    assert "1 lot" in prompt
+    assert "current live market price" in prompt
+    assert "do not set an entry trigger price" in prompt
+    assert "stop-loss 70" in prompt
+    assert "target 140" in prompt
+    assert "product" not in prompt
+    assert "quantity" not in prompt
+
+
+def test_market_exit_prompt_uses_lots_without_product_or_quantity():
+    prompt = AlgoCLIClient()._template("place_market_exit.txt", {
+        "instrument_key": "NSE_FO|12345",
+        "lots": 2,
+        "lot_label": "2 lots",
+    })
+    assert "MARKET SELL 2 lots" in prompt
+    assert "NSE_FO|12345" in prompt
+    assert "product" not in prompt
+    assert "quantity" not in prompt
+
+
+def test_gtt_client_passes_only_instrument_lots_stop_and_target(monkeypatch):
+    client = AlgoCLIClient()
+    captured = {}
+    monkeypatch.setattr(
+        client, "_run",
+        lambda name, values, write=False: captured.update(
+            name=name, values=values, write=write
+        ) or {"response": {"gtt_order_id": "GTT-1"}},
+    )
+    client.place_gtt_bracket("NSE_FO|12345", 1, 70, 140, operation_id="op-1")
+    assert captured["name"] == "place_gtt.txt"
+    assert captured["write"] is True
+    assert captured["values"]["instrument_key"] == "NSE_FO|12345"
+    assert captured["values"]["lots"] == 1
+    assert captured["values"]["sl_price"] == 70
+    assert captured["values"]["target_price"] == 140
+    assert "product" not in captured["values"]
+    assert "quantity" not in captured["values"]
+
+
+def test_market_exit_client_passes_lots_without_product_quantity_or_tag(monkeypatch):
+    client = AlgoCLIClient()
+    captured = {}
+    monkeypatch.setattr(
+        client, "_run",
+        lambda name, values, write=False: captured.update(
+            name=name, values=values, write=write
+        ) or {"response": {"order_id": "ORD-1"}},
+    )
+    client.place_market_exit("NSE_FO|12345", 2)
+    assert captured["name"] == "place_market_exit.txt"
+    assert captured["values"]["lots"] == 2
+    assert "product" not in captured["values"]
+    assert "quantity" not in captured["values"]
+    assert "tag" not in captured["values"]
