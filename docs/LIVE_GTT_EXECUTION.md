@@ -35,12 +35,12 @@ The execution worker fails closed if the algoai executable is unavailable.
 
 Templates are fixed files; runtime code substitutes only named values:
 - `get_ltp.txt` — latest instrument LTP
-- `place_gtt.txt` — standard entry + stop-loss + target GTT
+- `place_gtt.txt` — immediate live-market entry with stop-loss and target only
 - `get_gtt.txt` — inspect one GTT
 - `cancel_gtt.txt` — cancel one GTT
 - `modify_gtt_stop.txt` — modify one GTT stop-loss
 - `get_positions.txt` — read current positions
-- `place_market_exit.txt` — market exit for a reconciled quantity
+- `place_market_exit.txt` — market exit expressed in lots
 - `get_order_details.txt` — inspect one normal order
 
 Prompts explicitly name the skill from the external skills catalog. The main project
@@ -65,13 +65,16 @@ target/stop rule and linked completed exit order before classifying a fill.
 
 - BULLISH buys the isolated option; BEARISH buys the opposite option.
 - Signal age, frame age and isolation lookback checks remain active.
-- Two separate one-lot GTT brackets are requested.
+- Two separate one-lot GTT brackets are requested. Each prompt identifies the instrument by its unique instrument key and expresses size in lots, not units or quantity.
+- Entry uses the current live market price (IMMEDIATE); only stop-loss and target prices are supplied as GTT price values. The live LTP fetched by the worker remains an internal input for risk and target calculations, not an entry trigger value.
 - Lot 1 uses the configured premium-band target; lot 2 uses the purchased contract's
   15-minute R3.
 - Initial stop uses the configured percentage adjusted by S1/S2/S3 support logic.
 - After confirmed lot-1 target fill, runner stop moves to the midpoint.
-- Opposite signals cancel existing GTTs, reconcile broker position, close the observed
-  net quantity and wait for zero before a reversal is considered.
+- Opposite signals cancel existing GTTs, reconcile broker position, convert the exact
+  net units into lots using the stored lot size, close that lot count at market and wait
+  for zero before a reversal is considered. Non-integral lot positions are blocked for
+  manual reconciliation.
 - Ambiguous or unresolved entries block subsequent automated actions.
 
 ## Audit
