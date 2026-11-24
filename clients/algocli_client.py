@@ -248,6 +248,23 @@ class AlgoCLIClient:
             "operation_id": operation_id,
         }, write=True)
 
+    def place_gtt_trailing_sl(
+        self, instrument_key, quantity, stop_loss_distance,
+        target_distance, trailing_jump, operation_id=None,
+    ):
+        quantity = int(quantity)
+        if quantity <= 0:
+            raise AlgoCLIError("Trailing GTT quantity must be a positive integer")
+        values = {
+            "instrument_key": instrument_key,
+            "quantity": quantity,
+            "sl_distance": stop_loss_distance,
+            "target_distance": target_distance,
+            "trailing_jump": trailing_jump,
+            "operation_id": operation_id,
+        }
+        return self._run("place_gtt_trailing_sl.txt", values, write=True)
+
     def get_gtt(self, gtt_id: str) -> dict:
         result = self._run("get_gtt.txt", {"gtt_order_id": gtt_id})
         data = self._data(result)
