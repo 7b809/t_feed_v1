@@ -24,7 +24,7 @@ from core.config import (
     LIVE_GTT_EARLY_ENTRY_START, LIVE_GTT_EARLY_ENTRY_END, LIVE_GTT_EARLY_MAX_ENTRIES,
     LIVE_GTT_LATE_ENTRY_START, LIVE_GTT_LATE_MAX_ENTRIES, LIVE_GTT_LATE_ALLOW_REVERSAL,
     LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR, LIVE_GTT_MAX_RISK_PER_TRADE_INR,
-    LIVE_GTT_ORDER_PRODUCT, LIVE_GTT_REVERSAL_CLOSE_TIMEOUT_SECONDS,
+    LIVE_GTT_REVERSAL_CLOSE_TIMEOUT_SECONDS,
     LIVE_GTT_MONITOR_INTERVAL_SECONDS, LIVE_GTT_STATE_COLLECTION, LIVE_GTT_STATE_DIR,
 )
 from core.logger import get_logger
@@ -367,12 +367,12 @@ def _plan(client, leg, day):
         "entry_price": entry, "stop_loss_price": stop, "raw_stop_loss_price": raw_stop,
         "stop_loss_context": stop_meta, "target_points": points, "target1_price": target1,
         "runner_target_price": runner, "quantity_lots": lots, "quantity_units": units,
-        "lot_size": lot, "tick_size": tick, "product": LIVE_GTT_ORDER_PRODUCT,
+        "lot_size": lot, "tick_size": tick,
         "estimated_notional_inr": round(notional, 2), "estimated_initial_risk_inr": round(risk, 2),
         "quote_fetched_at_ist": received.isoformat(), "quote_age_seconds": round(age, 3),
         "legs": [
-            {"name": "LOT_1_FIXED_TARGET", "quantity_units": lot, "target_price": target1},
-            {"name": "LOT_2_R3_RUNNER", "quantity_units": lot, "target_price": runner},
+            {"name": "LOT_1_FIXED_TARGET", "lots": 1, "quantity_units": lot, "target_price": target1},
+            {"name": "LOT_2_R3_RUNNER", "lots": 1, "quantity_units": lot, "target_price": runner},
         ],
     }
 
@@ -442,12 +442,26 @@ def _cancel_close(client, state, entry, isolation_id):
         _STORE.save(state)
         return False
     if qty > 0:
-        request = {"instrument_key": entry["instrument_key"], "quantity": qty,
-                   "product": entry.get("product", LIVE_GTT_ORDER_PRODUCT), "transaction_type": "SELL", "order_type": "MARKET"}
+        lot_size = int(entry.get("lot_size") or 0)
+        if lot_size <= 0 or qty % lot_size:
+            entry.update(
+                status="RECONCILIATION_REQUIRED",
+                last_error=f"Net position {qty} is not an exact multiple of known lot size {lot_size}",
+            )
+            _STORE.save(state)
+            return False
+        lots = qty // lot_size
+        request = {
+            "instrument_key": entry["instrument_key"],
+            "lots": lots,
+            "quantity_units": qty,
+            "transaction_type": "SELL",
+            "order_type": "MARKET",
+        }
         entry.update(status="REVERSAL_PENDING", close_intent=request)
         _STORE.save(state)
         try:
-            response = client.place_market_exit(entry["instrument_key"], qty, request["product"], "gtt-reversal")
+            response = client.place_market_exit(entry["instrument_key"], lots, "gtt-reversal")
             _prompt_audit("CLOSE_POSITION", isolation_id, request, request, response, "CLOSE_ORDER_SUBMITTED")
         except Exception as exc:
             entry.update(status="RECONCILIATION_REQUIRED", last_error=f"Close outcome ambiguous: {exc}")
@@ -474,7 +488,7 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
         "entry_id": entry_id, "signal_key": signal["signal_key"],
         "signal_direction": signal["direction"], "signal_time_ist": signal["signal_time"].isoformat(),
         "instrument_key": plan["instrument_key"], "trading_symbol": plan["trading_symbol"],
-        "product": plan["product"], "entry_price": plan["entry_price"],
+        "entry_price": plan["entry_price"],
         "stop_loss_price": plan["stop_loss_price"], "target1_price": plan["target1_price"],
         "runner_target_price": plan["runner_target_price"], "quantity_lots": plan["quantity_lots"],
         "quantity_units": plan["quantity_units"], "lot_size": plan["lot_size"],
@@ -488,18 +502,19 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
     for leg in plan["legs"]:
         request = {
             "type": "MULTIPLE", "instrument_token": plan["instrument_key"],
-            "product": plan["product"], "quantity": leg["quantity_units"],
+            "lots": leg["lots"], "quantity_units": leg["quantity_units"],
             "transaction_type": "BUY", "leg": leg["name"],
+            "entry_type": "IMMEDIATE_MARKET",
             "rules": [
-                {"strategy": "ENTRY", "trigger_type": "IMMEDIATE", "trigger_price": plan["entry_price"]},
+                {"strategy": "ENTRY", "trigger_type": "IMMEDIATE"},
                 {"strategy": "STOPLOSS", "trigger_type": "IMMEDIATE", "trigger_price": plan["stop_loss_price"]},
                 {"strategy": "TARGET", "trigger_type": "IMMEDIATE", "trigger_price": leg["target_price"]},
             ],
         }
         try:
             response = client.place_gtt_bracket(
-                plan["instrument_key"], leg["quantity_units"], plan["product"],
-                plan["entry_price"], plan["stop_loss_price"], leg["target_price"],
+                plan["instrument_key"], leg["lots"],
+                plan["stop_loss_price"], leg["target_price"],
                 operation_id=f"{entry_id}-{leg['name']}",
             )
             gid = _extract_id(response)
@@ -507,7 +522,8 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
                 raise RuntimeError("GTT response has no readable GTT ID; reconciliation required")
             entry["gtt_legs"].append({
                 "name": leg["name"], "gtt_order_id": gid,
-                "quantity_units": leg["quantity_units"], "target_price": leg["target_price"],
+                "lots": leg["lots"], "quantity_units": leg["quantity_units"],
+                "target_price": leg["target_price"],
                 "terminal": False, "status": "GTT_SUBMITTED",
             })
             _STORE.save(state)
