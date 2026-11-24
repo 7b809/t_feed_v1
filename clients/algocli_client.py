@@ -235,10 +235,16 @@ class AlgoCLIClient:
             raise AlgoCLIError(f"LTP response has no last_price for {instrument_key}")
         return {"last_price": float(price), "provider_timestamp": data.get("timestamp"), "raw": result}
 
-    def place_gtt_bracket(self, instrument_key, quantity, product, entry, stop, target, operation_id=None):
+    def place_gtt_bracket(self, instrument_key, lots, stop, target, operation_id=None):
+        lots = int(lots)
+        if lots <= 0:
+            raise AlgoCLIError("GTT lot count must be a positive integer")
         return self._run("place_gtt.txt", {
-            "instrument_key": instrument_key, "quantity": int(quantity), "product": product,
-            "entry_price": entry, "sl_price": stop, "target_price": target,
+            "instrument_key": instrument_key,
+            "lots": lots,
+            "lot_label": f"{lots} lot" if lots == 1 else f"{lots} lots",
+            "sl_price": stop,
+            "target_price": target,
             "operation_id": operation_id,
         }, write=True)
 
@@ -308,10 +314,15 @@ class AlgoCLIClient:
             raise AlgoCLIError("Positions response is not an array")
         return data
 
-    def place_market_exit(self, instrument_key, quantity, product, tag):
+    def place_market_exit(self, instrument_key, lots, tag):
+        lots = int(lots)
+        if lots <= 0:
+            raise AlgoCLIError("Market-exit lot count must be a positive integer")
         return self._run("place_market_exit.txt", {
-            "instrument_key": instrument_key, "quantity": int(quantity),
-            "product": product, "tag": tag,
+            "instrument_key": instrument_key,
+            "lots": lots,
+            "lot_label": f"{lots} lot" if lots == 1 else f"{lots} lots",
+            "tag": tag,
         }, write=True)
 
     def get_order_details(self, order_id):
