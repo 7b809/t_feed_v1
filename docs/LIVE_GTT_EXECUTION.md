@@ -35,7 +35,8 @@ The execution worker fails closed if the algoai executable is unavailable.
 
 Templates are fixed files; runtime code substitutes only named values:
 - `get_ltp.txt` — latest instrument LTP
-- `place_gtt.txt` — immediate live-market entry with stop-loss and target only
+- `place_gtt.txt` — one-lot immediate live-market entry with calculated stop-loss and normal target, product I
+- `place_gtt_trailing_sl.txt` — one-lot trailing-SL GTT using dynamic stop distance, extended target distance and trailing jump, product I
 - `get_gtt.txt` — inspect one GTT
 - `cancel_gtt.txt` — cancel one GTT
 - `modify_gtt_stop.txt` — modify one GTT stop-loss
@@ -52,10 +53,13 @@ The adapter captures stdout, stderr, exit code and duration. The prompt requests
 the adapter extracts a JSON object/array from stdout, allowing CLI status lines around it.
 A non-zero exit, invalid JSON, missing response fields or timeout fails closed.
 
-Write timeouts and non-zero exits are ambiguous: the broker may have accepted the write
-before the CLI failed. The state is marked `RECONCILIATION_REQUIRED`; the adapter
-never retries a write automatically. A deterministic local operation reference is
-recorded for traceability, but it is not represented as a broker-enforced idempotency key.
+Write timeouts and non-zero exits are ambiguous: the broker or skill workflow may have
+accepted or staged the write before the CLI failed. The state is marked
+`RECONCILIATION_REQUIRED`; the adapter never retries a write automatically. A
+deterministic local operation reference is recorded for traceability, but it is not
+represented as a broker-enforced idempotency key. Skill-level preview/confirmation
+remains inside AlgoCLI; the application stores the JSON returned by the subprocess and
+does not create a separate confirmation workflow.
 
 A GTT response ID is required before the service treats placement as submitted.
 GTT acceptance is not an exchange fill. The monitor continues to require a confirmed
@@ -65,12 +69,12 @@ target/stop rule and linked completed exit order before classifying a fill.
 
 - BULLISH buys the isolated option; BEARISH buys the opposite option.
 - Signal age, frame age and isolation lookback checks remain active.
-- Two separate one-lot GTT brackets are requested. Each prompt identifies the instrument by its unique instrument key and expresses size in lots, not units or quantity.
-- Entry uses the current live market price (IMMEDIATE); only stop-loss and target prices are supplied as GTT price values. The live LTP fetched by the worker remains an internal input for risk and target calculations, not an entry trigger value.
-- Lot 1 uses the configured premium-band target; lot 2 uses the purchased contract's
-  15-minute R3.
-- Initial stop uses the configured percentage adjusted by S1/S2/S3 support logic.
-- After confirmed lot-1 target fill, runner stop moves to the midpoint.
+- Exactly two separate GTT orders are requested on the same unique instrument key; each represents exactly one lot and receives its own broker GTT ID and independent state record.
+- The normal GTT uses the existing calculated stop-loss and premium-band target. It enters immediately at the live market price and includes product I (Intraday).
+- The trailing GTT uses the external `upstox-gtt-trailing-sl` skill and product I. Its quantity is one contract lot in units; its SL distance is `entry_price - calculated_stop_loss_price`, its target distance is the original premium-band target points multiplied by 5, and its trailing jump is half the original target points. Values are calculated dynamically and tick-rounded.
+- Initial stop uses the configured percentage adjusted by S1/S2/S3 support logic. That same final stop is used to derive the trailing GTT's stop distance.
+- The trailing skill owns its trailing behavior; the application does not apply the old runner midpoint stop modification.
+- Both GTT prompts request JSON. The complete rendered prompt and returned JSON are retained in the execution audit. The service extracts a GTT ID when present so each order can be tracked independently. A response without an identifiable GTT ID is retained and blocks further automated action pending reconciliation.
 - Opposite signals cancel existing GTTs, reconcile broker position, convert the exact
   net units into lots using the stored lot size, close that lot count at market and wait
   for zero before a reversal is considered. Non-integral lot positions are blocked for
