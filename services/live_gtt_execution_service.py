@@ -56,6 +56,16 @@ def _dt(value):
         return None
     if isinstance(value, datetime):
         parsed = value
+    elif isinstance(value, (int, float)):
+        stamp = float(value)
+        if not math.isfinite(stamp):
+            return None
+        if abs(stamp) >= 100_000_000_000:
+            stamp /= 1000.0
+        try:
+            return datetime.fromtimestamp(stamp, tz=IST)
+        except (OverflowError, OSError, ValueError):
+            return None
     else:
         raw = str(value).strip()
         if raw.endswith("Z"):
@@ -63,7 +73,13 @@ def _dt(value):
         try:
             parsed = datetime.fromisoformat(raw)
         except (TypeError, ValueError, OverflowError):
-            return None
+            try:
+                stamp = float(raw)
+                if abs(stamp) >= 100_000_000_000:
+                    stamp /= 1000.0
+                return datetime.fromtimestamp(stamp, tz=IST)
+            except (TypeError, ValueError, OverflowError, OSError):
+                return None
     return parsed.replace(tzinfo=IST) if parsed.tzinfo is None else parsed.astimezone(IST)
 
 
@@ -90,26 +106,45 @@ def _target_points(entry):
     return DUMMY_TARGET_POINTS_BELOW_LOWER
 
 
+def _find_value(payload, keys):
+    if isinstance(payload, dict):
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, ""):
+                return value
+        for value in payload.values():
+            found = _find_value(value, keys)
+            if found not in (None, ""):
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = _find_value(value, keys)
+            if found not in (None, ""):
+                return found
+    return None
+
+
 def _direction(payload):
-    for key in ("signal", "direction", "trend", "side", "signal_type", "signal_direction", "supertrend_direction", "action"):
-        value = payload.get(key)
-        if isinstance(value, dict):
-            value = value.get("direction") or value.get("trend") or value.get("type") or value.get("value")
-        text = str(value or "").upper().replace("-", "_").replace(" ", "_")
-        if any(x in text for x in ("BULL", "BUY", "UPTREND", "UP", "LONG")):
-            return "BULLISH"
-        if any(x in text for x in ("BEAR", "SELL", "DOWNTREND", "DOWN", "SHORT")):
-            return "BEARISH"
+    value = _find_value(payload, (
+        "signal", "direction", "trend", "side", "signal_type",
+        "signal_direction", "supertrend_direction", "action",
+    ))
+    if isinstance(value, dict):
+        value = value.get("direction") or value.get("trend") or value.get("type") or value.get("value")
+    text = str(value or "").upper().replace("-", "_").replace(" ", "_")
+    if any(x in text for x in ("BULL", "BUY", "UPTREND", "UP", "LONG")):
+        return "BULLISH"
+    if any(x in text for x in ("BEAR", "SELL", "DOWNTREND", "DOWN", "SHORT")):
+        return "BEARISH"
     return None
 
 
 def _signal_time(payload, received):
-    for key in ("signal_time", "signal_timestamp", "signal_generated_at", "generated_at",
-                "candle_timestamp", "bar_time", "timestamp", "time", "created_at", "datetime", "ts"):
-        parsed = _dt(payload.get(key))
-        if parsed:
-            return parsed
-    return _dt(received)
+    value = _find_value(payload, (
+        "signal_time", "signal_timestamp", "signal_generated_at", "generated_at",
+        "candle_timestamp", "bar_time", "timestamp", "time", "created_at", "datetime", "ts",
+    ))
+    return _dt(value) or _dt(received)
 
 
 def _pivot_levels(key, day):
