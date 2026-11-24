@@ -62,6 +62,12 @@ def run_deferred_startup_sequence() -> None:
     except Exception:
         logger.exception("[STARTUP-GATE] Option-chain capture kickoff failed.")
 
+    try:
+        from services.live_gtt_execution_service import start_live_gtt_execution_service
+        logger.info("[STARTUP-GATE] Live GTT execution service: %s", start_live_gtt_execution_service())
+    except Exception:
+        logger.exception("[STARTUP-GATE] Live GTT execution service startup failed.")
+
     logger.warning(
         "[STARTUP-GATE] Deferred startup sequence fully complete."
     )
