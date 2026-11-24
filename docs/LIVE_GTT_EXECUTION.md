@@ -6,18 +6,18 @@ The isolation project owns signal qualification, instrument selection, strategy 
 risk checks, entry limits, local/Mongo state, monitoring decisions and audit records.
 It does not create an Upstox SDK client and does not retrieve broker credentials.
 
-All broker operations are sent as short, predefined prompt templates under
-`prompts/algocli/` to a separate AlgoCLI project through the Python launcher.
-The external AlgoCLI project owns its authentication, token retrieval, skill execution
-and broker API access. This repository does not modify that external project.
+All broker operations are sent through the installed command-line executable using
+exactly this invocation pattern:
 
-Configure `ALGOCLI_PROJECT_DIR` to the independent checkout. The default launcher
-filename is `launch_upstox_agy.py`; override it with `ALGOCLI_LAUNCHER_PATH`
-if the external project uses a different launcher. Set `ALGOCLI_PYTHON` to the
-external project virtualenv interpreter when it differs from the isolation app
-interpreter (default: `python3`). The launcher is invoked with
-`--output-format json --prompt <rendered-template>`. `ALGOCLI_SKIP_PERMISSIONS`
-defaults to false and must not be treated as trade authorization.
+```bash
+algoai --skip-permissions --prompt "<rendered prompt template>"
+```
+
+The isolation project does not define or depend on an AlgoCLI project directory,
+launcher script, Python interpreter, custom working directory, or internal
+AlgoCLI implementation. The algoai executable must already be available on
+the host PATH. Authentication and broker access remain inside the CLI and its
+skills; this project does not read broker tokens or .env files for execution.
 
 ## Activation and safety
 
@@ -29,8 +29,7 @@ sandbox token, or broker credential setting.
 The kill switch must remain false only when deliberately enabling the worker.
 Both `LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR` and
 `LIVE_GTT_MAX_RISK_PER_TRADE_INR` must be positive before entries can be planned.
-The execution worker also fails closed when the independent AlgoCLI project path
-or launcher is missing.
+The execution worker fails closed if the algoai executable is unavailable.
 
 ## Prompt templates
 
@@ -49,8 +48,8 @@ does not generate new operational instructions or copy the external skill implem
 
 ## Subprocess and response handling
 
-The adapter captures stdout, stderr, exit code and duration. It requests JSON output
-and extracts a JSON object/array from stdout, allowing launcher timing lines around it.
+The adapter captures stdout, stderr, exit code and duration. The prompt requests valid JSON;
+the adapter extracts a JSON object/array from stdout, allowing CLI status lines around it.
 A non-zero exit, invalid JSON, missing response fields or timeout fails closed.
 
 Write timeouts and non-zero exits are ambiguous: the broker may have accepted the write
@@ -85,10 +84,7 @@ in CLI output.
 
 ## Important external dependency
 
-The external skill catalog includes preview/explicit-confirmation requirements
-for trading writes, including GTT placement/modification and normal orders. This
-project does not bypass those rules or treat --skip-permissions as trade approval.
-Before unattended operation is enabled, the external AlgoCLI team must provide a
-compatible, approved sandbox workflow and structured JSON responses for each
-required operation. No sandbox execution, broker submission or successful fill
-is claimed by this integration change.
+The external skill catalog includes preview/explicit-confirmation requirements for
+some trading writes. The CLI permission flag does not replace the skill-level
+confirmation rules. Keep execution disabled until the external team confirms the
+unattended sandbox workflow and structured JSON responses required by this worker.
