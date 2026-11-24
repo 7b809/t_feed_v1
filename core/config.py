@@ -409,11 +409,6 @@ def _live_float(name: str, default: float) -> float:
 
 LIVE_GTT_EXECUTION_ENABLED = _live_bool("LIVE_GTT_EXECUTION_ENABLED", "false")
 LIVE_GTT_KILL_SWITCH = _live_bool("LIVE_GTT_KILL_SWITCH", "false")
-# Path to the separate AlgoCLI checkout. It owns broker authentication and API access.
-LIVE_GTT_ORDER_PRODUCT = os.getenv("LIVE_GTT_ORDER_PRODUCT", "I").strip().upper()
-if LIVE_GTT_ORDER_PRODUCT not in {"I", "D", "MTF"}:
-    LIVE_GTT_ORDER_PRODUCT = "I"
-
 DUMMY_ORDER_QUANTITY = _live_int("DUMMY_ORDER_QUANTITY", 2)
 DUMMY_ORDER_STOP_LOSS_PERCENT = _live_float("DUMMY_ORDER_STOP_LOSS_PERCENT", 30.0)
 DUMMY_TARGET_UPPER_THRESHOLD = _live_float("DUMMY_TARGET_UPPER_THRESHOLD", 200.0)
