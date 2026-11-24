@@ -1,1 +1,0 @@
-Use the upstox-gtt-modify skill to set the STOPLOSS of GTT $gtt_order_id to $stop_price, preserving its other rules. Follow the skill's confirmation requirements. Return valid JSON only.
