@@ -501,7 +501,7 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
     for leg in plan["legs"]:
         request = {
             "type": "MULTIPLE", "instrument_token": plan["instrument_key"],
-            "lots": leg["lots"], "quantity_units": leg["quantity_units"],
+            "lots": leg["lots"],
             "transaction_type": "BUY", "leg": leg["name"],
             "entry_type": "IMMEDIATE_MARKET",
             "rules": [
