@@ -1,1 +1,1 @@
-Use the upstox-gtt skill to place a BUY GTT for instrument $instrument_key, $lot_label. Enter immediately at the current live market price; do not set an entry trigger price. Set stop-loss $sl_price and target $target_price. Return valid JSON only.
+Use the upstox-gtt skill to place a BUY GTT for instrument $instrument_key, $lot_label, product I (Intraday). Enter immediately at the current live market price; do not set an entry trigger price. Set stop-loss $sl_price and target $target_price. Return valid JSON only.
