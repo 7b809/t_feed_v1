@@ -55,7 +55,11 @@ class GTTExecutionAuditService:
     def __init__(self):
         self.root = Path(LIVE_GTT_AUDIT_DIR).expanduser()
 
-    def append(self, action, isolation_id, prompt, request, response, status, metadata=None):
+    def append(
+        self, action, isolation_id, prompt, request, response, status,
+        metadata=None, *, prompt_origin=None, execution_stage=None,
+        audit_contract=None,
+    ):
         now = datetime.now(IST)
         day = now.date().isoformat()
         event = {
@@ -64,8 +68,10 @@ class GTTExecutionAuditService:
             "trade_date_ist": day,
             "action": action,
             "isolation_id": isolation_id,
-            "prompt_origin": "algocli_template" if "Use the " in str(prompt) else "deterministic_execution_contract",
+            "prompt_origin": prompt_origin or ("algocli_template" if prompt else "not_available"),
             "prompt": prompt,
+            "audit_contract": audit_contract,
+            "execution_stage": execution_stage or (metadata or {}).get("algocli", {}).get("stage"),
             "request": _safe(request or {}),
             "response_kind": "broker_or_internal_json",
             "response": _safe(response or {}),
