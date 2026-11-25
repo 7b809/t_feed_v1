@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 
 from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from core.config import (
@@ -66,3 +67,28 @@ def test_place_gtt(
     except Exception as exc:
         logger.exception("AlgoCLI test API failed")
         raise HTTPException(status_code=500, detail="AlgoCLI test request could not be processed.") from exc
+
+
+@router.get("/get-positions")
+def test_get_positions(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+):
+    """Run the read-only get_positions prompt to verify live AlgoAI health."""
+    if not ALGOCLI_TEST_API_ENABLED:
+        raise HTTPException(status_code=404, detail="AlgoCLI test API is disabled.")
+    if not ALGOCLI_TEST_API_KEY:
+        raise HTTPException(status_code=503, detail="ALGOCLI_TEST_API_KEY is not configured.")
+    if not x_api_key or not hmac.compare_digest(x_api_key, ALGOCLI_TEST_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
+
+    try:
+        result = AlgoCLITestService().get_positions_health()
+        if result.get("status") != "HEALTHY":
+            return JSONResponse(status_code=502, content=result)
+        return result
+    except Exception as exc:
+        logger.exception("AlgoAI get-positions health check failed")
+        raise HTTPException(
+            status_code=500,
+            detail="AlgoAI get-positions health check could not be processed.",
+        ) from exc
