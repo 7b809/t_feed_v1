@@ -129,7 +129,7 @@ class AlgoCLITestService:
             "artifact_files": ["request.json", "prompt.txt", "response.json", "metadata.json"],
         }
         _write_json(output_dir / "request.json", request)
-        (output_dir / "prompt.txt").write_text(prompt + "\\n", encoding="utf-8")
+        (output_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
         _write_json(output_dir / "response.json", {
             "status": initial_metadata["status"],
             "executed": "UNKNOWN" if initial_metadata["status"] == "RUNNING" else False,
@@ -190,9 +190,6 @@ class AlgoCLITestService:
             "cli_execution": _redact(self.client.last_execution),
             "artifact_files": ["request.json", "prompt.txt", "response.json", "metadata.json"],
         }
-        output_dir.mkdir(parents=True, exist_ok=True)
-        _write_json(output_dir / "request.json", request)
-        (output_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
         _write_json(output_dir / "response.json", response)
         _write_json(output_dir / "metadata.json", metadata)
 
