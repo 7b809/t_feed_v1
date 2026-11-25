@@ -1,0 +1,13 @@
+Use the upstox-gtt skill to prepare a BUY GTT for the following contract:
+- Instrument key: $instrument_key
+- Trading symbol: $trading_symbol
+- Quantity: $lot_label
+- Product: I (Intraday)
+- Operation reference: $operation_id
+
+Entry instruction: $entry_instruction
+Do not set an entry trigger price. Enter immediately at the current live market price.
+Set stop-loss to $sl_price and target to $target_price.
+
+Do not invent or alter any supplied instrument, quantity, stop-loss or target values.
+Return valid JSON only. Include the broker GTT identifier and the resulting status when available.
