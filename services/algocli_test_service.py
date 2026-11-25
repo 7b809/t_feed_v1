@@ -39,8 +39,8 @@ def _redact(value: Any) -> Any:
         return [_redact(item) for item in value]
     if isinstance(value, str):
         return re.sub(
-            r"(?i)(bearer\\s+|(?:api|access|refresh)[_ -]?token\\s*[:=]\\s*)[^\\s,;]+",
-            r"\\1[REDACTED]", value,
+            r"(?i)(bearer\s+|(?:api|access|refresh)[_ -]?token\s*[:=]\s*)[^\s,;]+",
+            r"\1[REDACTED]",
         )
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
@@ -49,7 +49,7 @@ def _redact(value: Any) -> Any:
 
 def _write_json(path: Path, value: Any) -> None:
     path.write_text(
-        json.dumps(_redact(value), ensure_ascii=False, indent=2, default=str) + "\\n",
+        json.dumps(_redact(value), ensure_ascii=False, indent=2, default=str) + "\n",
         encoding="utf-8",
     )
 
@@ -174,7 +174,7 @@ class AlgoCLITestService:
         }
         output_dir.mkdir(parents=True, exist_ok=True)
         _write_json(output_dir / "request.json", request)
-        (output_dir / "prompt.txt").write_text(prompt + "\\n", encoding="utf-8")
+        (output_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
         _write_json(output_dir / "response.json", response)
         _write_json(output_dir / "metadata.json", metadata)
 
