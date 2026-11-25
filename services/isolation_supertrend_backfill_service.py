@@ -222,11 +222,12 @@ def evaluate_pre_isolation_price_trend(
             continue
         stamp = _parse_ist_datetime(item.get("confirmed_time"))
         price = _positive_number(item.get("confirmed_time_price"))
-        if stamp is None or stamp > isolation_dt or price is None:
+        signal_name = str(item.get("signal") or "").strip().lower()
+        if stamp is None or stamp > isolation_dt or price is None or signal_name not in {"buy", "sell"}:
             continue
         eligible.append({
             "index": index,
-            "signal": str(item.get("signal") or "").strip().lower(),
+            "signal": signal_name,
             "confirmed_time": stamp,
             "confirmed_time_price": price,
             "supertrend_line_price": _positive_number(item.get("price")),
