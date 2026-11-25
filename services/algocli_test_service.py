@@ -40,7 +40,7 @@ def _redact(value: Any) -> Any:
     if isinstance(value, str):
         return re.sub(
             r"(?i)(bearer\s+|(?:api|access|refresh)[_ -]?token\s*[:=]\s*)[^\s,;]+",
-            r"\1[REDACTED]",
+            r"\1[REDACTED]", value,
         )
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
