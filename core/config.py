@@ -353,9 +353,9 @@ API_PORT = int(os.getenv("API_PORT", "8001"))
 # ---------------------------------------------------------------------------
 # AlgoCLI test API (disabled by default; live broker writes require two gates)
 # ---------------------------------------------------------------------------
-ALGOCLI_TEST_API_ENABLED = _live_bool("ALGOCLI_TEST_API_ENABLED", "false")
+ALGOCLI_TEST_API_ENABLED = os.getenv("ALGOCLI_TEST_API_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 ALGOCLI_TEST_API_KEY = os.getenv("ALGOCLI_TEST_API_KEY", "").strip()
-ALGOCLI_TEST_LIVE_WRITES_ENABLED = _live_bool("ALGOCLI_TEST_LIVE_WRITES_ENABLED", "false")
+ALGOCLI_TEST_LIVE_WRITES_ENABLED = os.getenv("ALGOCLI_TEST_LIVE_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 ALGOCLI_TEST_DATA_DIR = os.getenv("ALGOCLI_TEST_DATA_DIR", "data/tests").strip() or "data/tests"
 
 # ---------------------------------------------------------------------------
