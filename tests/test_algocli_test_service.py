@@ -54,7 +54,7 @@ def test_dry_run_generates_prompt_and_saves_each_artifact(tmp_path, monkeypatch)
     assert result["status"] == "DRY_RUN"
     assert result["executed"] is False
     assert client.last_execution == {}
-    folder = tmp_path / result["artifact_directory"].split("/")[-1]
+    folder = tmp_path / "place_gtt" / result["artifact_directory"].split("/")[-1]
     request = json.loads((folder / "request.json").read_text(encoding="utf-8"))
     response = json.loads((folder / "response.json").read_text(encoding="utf-8"))
     prompt = (folder / "prompt.txt").read_text(encoding="utf-8")
@@ -162,28 +162,44 @@ class FakeHealthClient:
         }
 
 
-def test_get_positions_health_returns_full_response_and_archives(tmp_path, monkeypatch):
+def test_get_positions_health_is_queued_without_running_cli(tmp_path, monkeypatch):
     monkeypatch.setattr(service_module, "ALGOCLI_TEST_DATA_DIR", str(tmp_path))
-    result = AlgoCLITestService(FakeHealthClient()).get_positions_health()
+    client = FakeHealthClient()
+    service = AlgoCLITestService(client)
+    job = service.prepare_get_positions_health()
+    assert job["artifact_directory"].startswith(str(tmp_path / "get_positions"))
+    assert job["result_path"].endswith("/response.json")
+    assert client.last_execution == {}
+    queued = service.read_get_positions_health(job["operation_id"])
+    assert queued["status"] == "ACCEPTED"
+    folder = tmp_path / "get_positions" / job["artifact_directory"].split("/")[-1]
+    assert (folder / "prompt.txt").read_text(encoding="utf-8").startswith("Use the upstox-pnl")
 
+
+def test_get_positions_health_background_worker_saves_final_response(tmp_path, monkeypatch):
+    monkeypatch.setattr(service_module, "ALGOCLI_TEST_DATA_DIR", str(tmp_path))
+    client = FakeHealthClient()
+    service = AlgoCLITestService(client)
+    job = service.prepare_get_positions_health()
+    service.run_get_positions_health(job["operation_id"], job["artifact_directory"])
+    result = service.read_get_positions_health(job["operation_id"])
     assert result["status"] == "HEALTHY"
     assert result["healthy"] is True
     assert result["response"]["response"]["positions"][0]["quantity"] == 15
-    folder = tmp_path / result["artifact_directory"].split("/")[-1]
-    assert (folder / "prompt.txt").read_text(encoding="utf-8").startswith("Use the upstox-pnl")
-    saved = json.loads((folder / "response.json").read_text(encoding="utf-8"))
-    assert saved["status"] == "HEALTHY"
+    folder = tmp_path / "get_positions" / job["artifact_directory"].split("/")[-1]
     metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["cli_execution"]["stage"] == "GET_POSITIONS"
 
 
-def test_get_positions_health_archives_cli_failure(tmp_path, monkeypatch):
+def test_get_positions_health_background_worker_archives_cli_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(service_module, "ALGOCLI_TEST_DATA_DIR", str(tmp_path))
-    result = AlgoCLITestService(FakeHealthClient(fail=True)).get_positions_health()
-
+    client = FakeHealthClient(fail=True)
+    service = AlgoCLITestService(client)
+    job = service.prepare_get_positions_health()
+    service.run_get_positions_health(job["operation_id"], job["artifact_directory"])
+    result = service.read_get_positions_health(job["operation_id"])
     assert result["status"] == "UNHEALTHY"
     assert result["healthy"] is False
     assert "unavailable" in result["response"]["error"]
-    folder = tmp_path / result["artifact_directory"].split("/")[-1]
-    saved = json.loads((folder / "response.json").read_text(encoding="utf-8"))
-    assert saved["status"] == "UNHEALTHY"
+    with pytest.raises(ValueError, match="Invalid operation_id"):
+        service.read_get_positions_health("../escape")
