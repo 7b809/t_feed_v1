@@ -179,7 +179,10 @@ def execute(plan: dict) -> dict:
         gid = item["gtt_order_id"]
         try:
             response = cancel_gtt_order(gid)
-            result["cancelled"].append({"gtt_order_id": gid, "api_response": plain(response)})
+            latest = data_records(api.get_gtt_order_details(gtt_order_id=gid))
+            if not latest or _status(latest[0]) not in TERMINAL:
+                raise RuntimeError("GTT cancellation was not verified as terminal.")
+            result["cancelled"].append({"gtt_order_id": gid, "verified_status": _status(latest[0]), "api_response": plain(response)})
         except Exception as exc:
             result["failed"].append({"gtt_order_id": gid, "action": "cancel_gtt", "error": str(exc)})
     # For triggered GTTs, first cancel the GTT so its remaining TARGET/STOPLOSS
