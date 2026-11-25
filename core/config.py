@@ -180,6 +180,9 @@ ISOLATION_SUPERTREND_RECOVERY_ENABLED = (
 ISOLATION_SUPERTREND_MIN_MOVE_PERCENT = float(
     os.getenv("ISOLATION_SUPERTREND_MIN_MOVE_PERCENT", "0.0")
 )
+ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS = max(
+    1, int(os.getenv("ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS", "60"))
+)
 
 # Scan-window bounds. The start reads ISOLATION_SCAN_START_* first so a
 # deployment can delay the scan start (e.g. until 09:18, when OR levels
