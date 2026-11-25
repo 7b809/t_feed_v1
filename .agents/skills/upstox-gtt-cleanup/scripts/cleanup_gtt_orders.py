@@ -217,7 +217,13 @@ def execute(plan: dict) -> dict:
             })
         except Exception as exc:
             result["failed"].append({"gtt_order_id": gid, "action": "cancel_then_exit", "error": str(exc)})
-    result["status"] = "success" if not result["failed"] else "partial"
+    verification_ok = all(
+        check.get("verified", False)
+        for item in result["exited"]
+        for check in item.get("verification", [])
+    )
+    has_exits_without_ids = any(not item.get("exit_order_ids") for item in result["exited"])
+    result["status"] = "success" if not result["failed"] and verification_ok and not has_exits_without_ids else "partial"
     return result
 
 
