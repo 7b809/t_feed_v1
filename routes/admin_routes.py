@@ -772,10 +772,10 @@ def _run_full_refresh_sync(
 
     # ---- 6. Live feed ------------------------------------------------- #
     feed_ok = False
-    if not token_refresh_ok:
+    if not token_refresh_ok or not token_valid:
         logger.error(
-            "[%s] live-feed start/restart skipped — forced MongoDB token fetch failed; "
-            "keeping the existing worker state rather than reconnecting with a stale token",
+            "[%s] live-feed start/restart skipped — fresh MongoDB token fetch or "
+            "Upstox validation failed; keeping the existing worker state",
             reason,
         )
     else:
