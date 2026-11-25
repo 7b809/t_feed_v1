@@ -1,0 +1,32 @@
+curl -X POST "http://127.0.0.1:8000/api/external/v1/gtt/place-dual" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -H "Authorization: Bearer YOUR_EXTERNAL_API_TOKEN" \
+  -d '{
+    "api_token": "YOUR_EXTERNAL_API_TOKEN",
+    "instrument_key": "NSE_FO%7C64473",
+    "symbol": "NIFTY",
+    "order_configs": [
+      { "sl": 30, "target": 50 },
+      { "sl": 30, "target": 50, "trail_sl": 10 }
+    ]
+  }'
+
+
+
+  curl -X POST "http://127.0.0.1:8000/api/external/v1/gtt/place-dual" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -H "Authorization: Bearer YOUR_EXTERNAL_API_TOKEN" \
+  -d '{
+    "api_token": "YOUR_EXTERNAL_API_TOKEN",
+    "instrument_key": "BSE_FO|825123",
+    "symbol": "SENSEX",
+    "lot": 2,
+    "product": "I",
+    "transaction_type": "BUY",
+    "order_configs": [
+      { "sl": 40, "target": 100 },
+      { "sl": 40, "target": 100, "trail_sl": 15 }
+    ]
+  }'
