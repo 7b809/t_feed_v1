@@ -781,6 +781,13 @@ def _process(record, payload, received_at, role, *, historical=False, historical
         # Historical signals are intentionally older than the live freshness
         # window. They are accepted only through the separate recovery worker.
         if (now - isolation).total_seconds() > ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS:
+            state = _STORE.load(iso_id)
+            state.setdefault("historical_recovery", {}).update(
+                execution_status="NOT_REQUIRED",
+                status="expired",
+                reason="Historical recovery execution window expired before dispatch",
+            )
+            _STORE.save(state, require_mongo=False)
             logger.info("Historical Supertrend execution skipped: isolation recovery window expired | isolation=%s", iso_id)
             return
     key = _signal_key(source_key, direction, stamp)
