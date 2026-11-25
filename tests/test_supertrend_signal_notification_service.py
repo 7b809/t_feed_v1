@@ -200,6 +200,7 @@ def test_notification_wrapper_contains_unexpected_exceptions(monkeypatch):
 
 
 def test_supertrend_notification_adds_chart_links_and_defaults_timeframe(monkeypatch, tmp_path):
+    monkeypatch.delenv("SUPERTREND_TIMEFRAME", raising=False)
     sent = _setup(monkeypatch, tmp_path)
     from services import isolation_telegram_service as telegram
     monkeypatch.setattr(telegram, "CHART_BASE_URL", "https://ng7.up.railway.app")
