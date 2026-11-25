@@ -30,7 +30,7 @@ from core.config import (
 from core.logger import get_logger
 from core.mongo_client import get_mongo_db
 from services.gtt_execution_audit_service import GTTExecutionAuditService, build_action_prompt
-from services.isolation_telegram_service import send_html, send_group_html
+from services.isolation_telegram_service import send_html, send_isolation_html, format_chart_links
 
 logger = get_logger(__file__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -328,7 +328,7 @@ def send_private_audit(event):
         logger.exception("Private GTT audit Telegram send failed")
 
 
-def _group(status, plan, reason=None, ids=None):
+def _group(status, plan, reason=None, ids=None, chart_context=None):
     # Only the primary lifecycle milestones are sent to the official group.
     allowed = {"GTT_ENTRY_SUBMITTED", "POSITION_CLOSED", "REVERSAL_ENTRY_SUBMITTED",
                "GTT_TARGET_EXIT_CONFIRMED", "POSITION_COMPLETED",
@@ -361,8 +361,11 @@ def _group(status, plan, reason=None, ids=None):
     if reason:
         fields.append("Reason: " + html.escape(reason))
     fields.append("<i>GTT acceptance is not proof of exchange fill; fills are separately reconciled.</i>")
+    chart_links = format_chart_links(chart_context or plan.get("chart_context") or plan)
+    if chart_links:
+        fields += ["", "📊 <b>CHARTS</b>", *chart_links]
     try:
-        send_group_html("\n".join(fields))
+        send_isolation_html("\n".join(fields))
     except Exception:
         logger.exception("GTT group Telegram send failed")
 
@@ -590,7 +593,7 @@ def _cancel_close(client, state, entry, isolation_id):
     return True
 
 
-def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
+def _submit(client, state, plan, signal, isolation_id, is_reversal=False, chart_context=None):
     entry_id = hashlib.sha256(f"{isolation_id}|{signal['signal_key']}".encode()).hexdigest()[:24]
     entry = {
         "entry_id": entry_id, "signal_key": signal["signal_key"],
@@ -604,6 +607,16 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
         "combined_estimated_initial_risk_inr": plan["estimated_initial_risk_inr"],
         "status": "ENTRY_INTENT_PERSISTED", "created_at_ist": _now().isoformat(),
     }
+    if isinstance(chart_context, dict):
+        entry["chart_context"] = {
+            key: chart_context.get(key)
+            for key in (
+                "instrument_key", "trading_symbol", "opposite_leg",
+                "trigger_index", "trigger_index_canonical",
+                "related_instruments", "related_instrument_keys",
+            )
+            if chart_context.get(key) is not None
+        }
     for order in plan["gtt_orders"]:
         leg_state = {
             "name": order["name"], "strategy": order["strategy"],
@@ -681,7 +694,7 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
                 _STORE.save(state)
                 _group("GTT_RECONCILIATION_REQUIRED", entry, reason=reason, ids=[
                     x["gtt_order_id"] for x in entry["gtt_legs"] if x.get("gtt_order_id")
-                ])
+                ], chart_context=chart_context)
                 return entry
             logger.info("%s submitted | isolation=%s gtt_id=%s", order["name"], isolation_id, gid)
         except Exception as exc:
@@ -698,7 +711,7 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
             )
             _group("GTT_RECONCILIATION_REQUIRED", entry, reason=reason, ids=[
                 x["gtt_order_id"] for x in entry["gtt_legs"] if x.get("gtt_order_id")
-            ])
+            ], chart_context=chart_context)
             return entry
 
     entry.update(status="GTT_SUBMITTED", submitted_at_ist=_now().isoformat())
@@ -708,6 +721,7 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False):
         {**plan, "signal_direction": signal["direction"],
          "gtt_legs": entry["gtt_legs"]},
         ids=[x["gtt_order_id"] for x in entry["gtt_legs"] if x.get("gtt_order_id")],
+        chart_context=chart_context,
     )
     logger.info(
         "Both independent GTTs submitted | isolation=%s entry_id=%s ids=%s",
@@ -783,7 +797,7 @@ def _process(record, payload, received_at, role):
                 raise RuntimeError("A pre-existing position exists for the target instrument")
             signal = {"direction": direction, "signal_time": stamp, "signal_key": key,
                       "received_at_ist": received.isoformat(), "source_instrument_key": source_key}
-            _submit(client, state, plan, signal, iso_id, is_reversal=is_reversal)
+            _submit(client, state, plan, signal, iso_id, is_reversal=is_reversal, chart_context=record)
         except Exception as exc:
             logger.exception("Live GTT signal rejected/failed | isolation=%s", iso_id)
             prompt = build_action_prompt("EXECUTION_BLOCKED", {
