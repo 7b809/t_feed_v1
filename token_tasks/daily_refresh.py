@@ -61,12 +61,47 @@ def run_daily_refresh() -> None:
         # WebSocket publishing was wired at startup and persists
         # across feed restarts, so no re-wiring is required here.
         result = _run_full_refresh_sync(reason="daily")
-        logger.info("Daily refresh completed: %s", result)
-        # Record success so startup backfill won't re-run today.
-        # Only marked when _run_full_refresh_sync returns without
-        # raising — a failure leaves the marker absent so the next
-        # startup can retry.
+        logger.info("Daily refresh pipeline result: %s", result)
+
+        # The unified routine reports several failures in its result
+        # instead of raising. Treat token, provider validation, backup,
+        # and feed startup as critical gates; do not write the success
+        # marker when any of these stages failed.
+        critical_failures = []
+        if not result.get("token_refresh_ok"):
+            critical_failures.append("mongodb_token_fetch")
+        if not result.get("token_valid"):
+            critical_failures.append("upstox_token_validation")
+        if (result.get("backup") or {}).get("status") != "ok":
+            critical_failures.append("backup_refresh")
+        if not result.get("feed_restarted"):
+            critical_failures.append("live_feed_restart")
+
+        if critical_failures:
+            message = (
+                "08:00 IST application refresh finished with critical failures.\\n"
+                f"Failed stages: {', '.join(critical_failures)}\\n"
+                "The daily success marker was NOT written."
+            )
+            logger.error(
+                "[daily-refresh] critical stage(s) failed: %s",
+                critical_failures,
+            )
+            telegram_service.send_message(
+                "Daily Application Refresh · FAILED",
+                message,
+                level="ERROR",
+            )
+            return
+
+        # Record success only after all critical stages pass, so a later
+        # startup can distinguish a complete refresh from a partial run.
         mark_ran("daily_refresh", reason="scheduled", status="ok")
+        logger.info(
+            "[daily-refresh] completed successfully — token_valid=%s feed_restarted=%s",
+            result.get("token_valid"),
+            result.get("feed_restarted"),
+        )
     except Exception as exc:
         logger.exception("Daily refresh failed")
         telegram_service.send_message(
