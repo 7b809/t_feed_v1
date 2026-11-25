@@ -203,6 +203,12 @@ class IsolatedFeedManager:
                                 update_supertrend_snapshot_cache(key, payload, received_at)
                             except Exception:
                                 logger.exception("Could not update Supertrend snapshot cache key=%s", key)
+                        if indicator == "supertrend":
+                            try:
+                                from services.supertrend_snapshot_cache import update_supertrend_snapshot_cache
+                                update_supertrend_snapshot_cache(key, payload, received_at)
+                            except Exception:
+                                logger.exception("Could not update Supertrend snapshot cache key=%s", key)
                         row = {
                             "received_at_ist": received_at,
                             "indicator": indicator,
