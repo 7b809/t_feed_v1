@@ -33,11 +33,14 @@ def seed_option_chain_history(
     role: str,
     indicator: str,
     destination: str | Path,
+    interval: str = "1m",
 ) -> dict:
     """Merge option-chain rows into destination once; retry if source is not ready."""
+    selected_interval = str(interval or "1m").strip().lower()
     source_name = {
         "live_feed": "live_feed.jsonl",
-        "supertrend": "supertrend_feed.jsonl",
+        "supertrend": ("supertrend_feed.jsonl" if selected_interval == "1m"
+                       else f"supertrend_{selected_interval}_feed.jsonl"),
     }.get(str(indicator))
     if not source_name:
         return {"state": "unsupported_indicator", "rows": 0}
@@ -45,7 +48,7 @@ def seed_option_chain_history(
     destination = Path(destination)
     isolation_root = Path(os.getenv("ISOLATED_DATA_DIR", "data/isolated"))
     manifest_path = isolation_root / ".option_chain_history_seed.json"
-    seed_id = "|".join((str(trade_date), str(role), str(indicator), str(instrument_key)))
+    seed_id = "|".join((str(trade_date), str(role), str(indicator), str(instrument_key), selected_interval))
 
     with _LOCK:
         try:
@@ -94,6 +97,7 @@ def seed_option_chain_history(
                             parsed = {
                                 "received_at_ist": parsed.get("received_at_ist"),
                                 "indicator": "supertrend",
+                                "interval": selected_interval,
                                 "isolation_id": f"{trade_date}__{instrument_key}",
                                 "leg_role": str(role),
                                 "instrument_key": str(instrument_key),
@@ -127,6 +131,7 @@ def seed_option_chain_history(
             "trade_date_ist": str(trade_date),
             "role": str(role),
             "indicator": str(indicator),
+            "interval": selected_interval,
             "source": str(source),
             "destination": str(destination),
             "rows": len(rows),
@@ -135,5 +140,5 @@ def seed_option_chain_history(
         manifest_tmp = manifest_path.with_suffix(".json.tmp")
         manifest_tmp.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
         os.replace(manifest_tmp, manifest_path)
-        logger.info("Option-chain history seeded indicator=%s role=%s key=%s rows=%d", indicator, role, instrument_key, len(rows))
+        logger.info("Option-chain history seeded indicator=%s interval=%s role=%s key=%s rows=%d", indicator, selected_interval, role, instrument_key, len(rows))
         return {"state": "seeded", "rows": len(rows), "source": str(source), "destination": str(destination)}
