@@ -106,8 +106,18 @@ def active_gtt_keys(gtt_orders: list[dict]) -> set[tuple[str, str]]:
     return active
 
 
-def fingerprint(snapshot: dict, trades: dict[str, list[dict]], plan: dict) -> str:
-    payload = {"snapshot": snapshot, "trades": trades, "plan": plan}
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return plain(value)
+
+
+def fingerprint(snapshot: dict, trades: dict, plan: dict) -> str:
+    # Tuple keys are used internally for (instrument, product) trade groups;
+    # convert them to stable strings before canonical JSON serialization.
+    payload = _json_safe({"snapshot": snapshot, "trades": trades, "plan": plan})
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
     return hashlib.sha256(encoded).hexdigest()
 
