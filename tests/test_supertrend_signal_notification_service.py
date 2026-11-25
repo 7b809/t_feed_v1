@@ -41,7 +41,7 @@ def _setup(monkeypatch, tmp_path):
         "isolated": 123.45, "opposite": 98.76,
     })
     sent = []
-    monkeypatch.setattr(notifier, "send_group_html", lambda message: sent.append(message) or True)
+    monkeypatch.setattr(notifier, "send_isolation_html", lambda message: sent.append(message) or True)
     return sent
 
 
@@ -104,7 +104,7 @@ def test_failed_early_delivery_does_not_block_first_post_cutoff_fallback(monkeyp
         calls.append(message)
         return len(calls) > 1
 
-    monkeypatch.setattr(notifier, "send_group_html", flaky_send)
+    monkeypatch.setattr(notifier, "send_isolation_html", flaky_send)
     assert not notifier.notify_isolated_supertrend_signal(
         record, _signal("2026-11-23T09:30:00+05:30")
     )
@@ -197,3 +197,17 @@ def test_notification_wrapper_contains_unexpected_exceptions(monkeypatch):
     assert not notifier.notify_isolated_supertrend_signal(
         _record(), _signal("2026-11-23T09:20:00+05:30")
     )
+
+
+def test_supertrend_notification_adds_chart_links_and_defaults_timeframe(monkeypatch, tmp_path):
+    sent = _setup(monkeypatch, tmp_path)
+    from services import isolation_telegram_service as telegram
+    monkeypatch.setattr(telegram, "CHART_BASE_URL", "https://ng7.up.railway.app")
+    record = _record()
+    payload = {"event": "supertrend_signal", "signal": "BEARISH",
+               "timestamp": "2026-11-23T09:20:00+05:30"}
+    assert notifier.notify_isolated_supertrend_signal(record, payload)
+    message = sent[0]
+    assert "Supertrend timeframe: 1min" in message
+    assert "https://ng7.up.railway.app/chart/NSE_FO%7C64473" in message
+    assert "https://ng7.up.railway.app/chart/NSE_FO%7C64474" in message
