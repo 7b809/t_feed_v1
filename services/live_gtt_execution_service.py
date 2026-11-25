@@ -28,6 +28,7 @@ from core.config import (
     LIVE_GTT_MONITOR_INTERVAL_SECONDS, LIVE_GTT_STATE_COLLECTION, LIVE_GTT_STATE_DIR,
     ISOLATION_SUPERTREND_RECOVERY_ENABLED,
     ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS,
+    ISOLATION_SUPERTREND_SNAPSHOT_WAIT_SECONDS,
 )
 from core.logger import get_logger
 from core.mongo_client import get_mongo_db
@@ -973,12 +974,27 @@ def _process_pre_isolation_recovery(record: dict, access_token: str) -> None:
     try:
         from core.candle_fetcher import CandleFetcher
         from services.isolation_supertrend_backfill_service import evaluate_pre_isolation_price_trend
+        from services.supertrend_snapshot_cache import wait_for_supertrend_snapshot
 
+        remaining_seconds = max(
+            0.0,
+            ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS
+            - (_now() - isolation).total_seconds(),
+        )
+        snapshot_wait = min(
+            float(ISOLATION_SUPERTREND_SNAPSHOT_WAIT_SECONDS),
+            remaining_seconds,
+        )
+        websocket_backfill = wait_for_supertrend_snapshot(
+            source_key,
+            str(record.get("trade_date_ist") or isolation.date().isoformat()),
+            timeout_seconds=snapshot_wait,
+        )
         candles = CandleFetcher(access_token).fetch_intraday_candles(
             source_key, unit="minutes", interval="1"
         )
         evidence = evaluate_pre_isolation_price_trend(
-            record.get("supertrend_backfill") or {},
+            websocket_backfill,
             isolation,
             candles,
         )
