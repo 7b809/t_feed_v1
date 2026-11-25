@@ -63,8 +63,12 @@ def test_isolation_announcement_uses_group_chat_and_12_hour_ist(monkeypatch):
     monkeypatch.setattr(telegram, "TELEGRAM_GROUP_ENABLED", True)
     monkeypatch.setattr(telegram, "TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setattr(telegram, "TELEGRAM_GROUP_CHAT_ID", "-100123456789")
+    monkeypatch.setattr(telegram, "TELEGRAM_ENABLED", True)
+    monkeypatch.setattr(telegram, "TELEGRAM_CHAT_ID", "private-chat")
+    monkeypatch.setattr(telegram, "CHART_BASE_URL", "https://ng7.up.railway.app")
     monkeypatch.setattr(telegram, "TELEGRAM_CHAT_ID", "private-chat-must-not-be-used")
     captured = {}
+    delivered_chats = []
 
     class Response:
         def raise_for_status(self):
@@ -72,12 +76,13 @@ def test_isolation_announcement_uses_group_chat_and_12_hour_ist(monkeypatch):
 
     def fake_post(url, json, timeout):
         captured.update(url=url, payload=json, timeout=timeout)
+        delivered_chats.append(json["chat_id"])
         return Response()
 
     monkeypatch.setattr(telegram.requests, "post", fake_post)
 
     assert telegram.notify_isolation_created(_record()) is True
-    assert captured["payload"]["chat_id"] == "-100123456789"
+    assert delivered_chats == ["-100123456789", "private-chat"]
     assert "private-chat-must-not-be-used" not in str(captured["payload"])
     message = captured["payload"]["text"]
     assert "09:18:50 AM IST" in message
@@ -87,6 +92,10 @@ def test_isolation_announcement_uses_group_chat_and_12_hour_ist(monkeypatch):
     assert "NIFTY 25500 PE 23 NOV 26" in message
     assert "25485.10" in message
     assert "R3_Threshold" in message
+    assert "https://ng7.up.railway.app/chart/NSE_FO%7C64473" in message
+    assert "https://ng7.up.railway.app/chart/NSE_FO%7C64474" in message
+    assert "https://ng7.up.railway.app/chart/NSE_INDEX%7CNifty%2050" in message
+    assert len(captured) > 0
     assert captured["payload"]["parse_mode"] == "HTML"
 
 
