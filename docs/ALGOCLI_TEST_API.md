@@ -66,3 +66,34 @@ data/tests/20261125_092000_123456_test-order-001/
 
 Credential-like fields are removed before persistence. The response includes
 the artifact directory and individual file names.
+
+## Read-only AlgoAI health check
+
+### Endpoint
+
+`GET /api/algocli-test/get-positions`
+
+This endpoint requires no request body. Send only the configured `X-API-Key`
+header. It runs the existing `prompts/algocli/get_positions.txt` template
+through the installed AlgoAI CLI and returns the parsed response after the
+CLI finishes. It does not place, modify, or cancel orders.
+
+```bash
+curl -i "http://127.0.0.1:8001/api/algocli-test/get-positions" \
+  -H "X-API-Key: $ALGOCLI_TEST_API_KEY"
+```
+
+A successful CLI execution returns `status: HEALTHY`, `healthy: true`, the
+full parsed AlgoAI response, execution duration, and the artifact directory.
+A CLI launch, timeout, non-zero exit, or invalid JSON response returns
+`status: UNHEALTHY` with HTTP 502 and diagnostic details. Authentication
+and feature-flag behaviour is shared with the existing test API.
+
+Each run is archived under `ALGOCLI_TEST_DATA_DIR` with
+`request.json`, `prompt.txt`, `response.json`, and `metadata.json`.
+Credential-like values are redacted before artifacts are persisted.
+
+This check validates the configured AlgoAI executable and its ability to
+complete the positions prompt at that moment. It also depends on the
+configured AlgoAI/Upstox authentication and provider availability; it is
+not a guarantee that trading endpoints or order placement are healthy.
