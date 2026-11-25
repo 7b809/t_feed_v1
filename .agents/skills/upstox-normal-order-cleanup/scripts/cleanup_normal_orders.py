@@ -106,6 +106,17 @@ def execute(plan: dict) -> dict:
     # Re-fetch after cancellations; only exit if no still-live pending order and
     # the current position still reconciles with today's trade history.
     fresh = get_snapshot(include_gtt=True)
+    fresh_orders = {str(x.get("order_id") or ""): x for x in fresh["normal_orders"]}
+    for item in result["cancelled"]:
+        latest_order = fresh_orders.get(item["order_id"])
+        latest_status = _status(latest_order or {})
+        item["verified_cancelled"] = latest_status in {"cancelled", "canceled", "rejected", "expired"}
+        item["latest_status"] = latest_status or None
+        if not item["verified_cancelled"]:
+            result["failed"].append({
+                "order_id": item["order_id"], "action": "verify_cancel",
+                "error": f"Cancellation not verified; latest order status is {latest_status or 'not found'}.",
+            })
     grouped = _trades_by_key()
     fresh_plan = build_plan(fresh, grouped)
     cancelled_ids = {x["order_id"] for x in result["cancelled"]}
@@ -127,7 +138,13 @@ def execute(plan: dict) -> dict:
             result["exited"].append({"instrument_token": key[0], "product": key[1], "exit_order_ids": ids, "verification": checks, "api_response": plain(response)})
         except Exception as exc:
             result["failed"].append({"instrument_token": key[0], "product": key[1], "action": "market_exit", "error": str(exc)})
-    result["status"] = "success" if not result["failed"] else "partial"
+    verification_ok = all(
+        check.get("verified", False)
+        for item in result["exited"]
+        for check in item.get("verification", [])
+    )
+    has_exits_without_ids = any(not item.get("exit_order_ids") for item in result["exited"])
+    result["status"] = "success" if not result["failed"] and verification_ok and not has_exits_without_ids else "partial"
     return result
 
 
