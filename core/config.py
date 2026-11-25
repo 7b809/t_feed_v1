@@ -166,6 +166,16 @@ ISOLATION_OPTION_LTP_WAIT_SECONDS = int(
     os.getenv("ISOLATION_OPTION_LTP_WAIT_SECONDS", "5")
 )
 
+# Supertrend feeds run independently for each configured candle interval.
+# Keep 1m enabled for legacy recovery/trading compatibility.
+SUPERTREND_INTERVALS = [
+    item.strip().lower() if item.strip().lower().endswith("m") else f"{item.strip()}m"
+    for item in os.getenv("SUPERTREND_INTERVALS", "1m,15m").split(",")
+    if item.strip()
+]
+if "1m" not in SUPERTREND_INTERVALS:
+    raise ValueError("SUPERTREND_INTERVALS must include 1m")
+
 # Price-based pre-isolation Supertrend recovery. Historical decisions are
 # informational unless LIVE_GTT_EXECUTION_ENABLED is also enabled.
 ISOLATION_SUPERTREND_RECOVERY_ENABLED = (
