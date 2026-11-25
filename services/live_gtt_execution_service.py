@@ -624,6 +624,8 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False, chart_
     entry = {
         "entry_id": entry_id, "signal_key": signal["signal_key"],
         "signal_direction": signal["direction"], "signal_time_ist": signal["signal_time"].isoformat(),
+        "trigger_signal_direction": signal.get("trigger_direction", signal["direction"]),
+        "direction_source": signal.get("direction_source", "one_minute_signal"),
         "signal_source": signal.get("source", "live_supertrend"),
         "historical_recovery": signal.get("historical_recovery"),
         "instrument_key": plan["instrument_key"], "trading_symbol": plan["trading_symbol"],
@@ -774,7 +776,9 @@ def _process(record, payload, received_at, role, *, historical=False, historical
     if str(record.get("trade_date_ist") or "") != now.date().isoformat():
         return
     if not historical:
-        if stamp < isolation - timedelta(seconds=LIVE_GTT_ISOLATION_LOOKBACK_SECONDS):
+        # Entry triggers must be genuinely post-isolation 1m signals. A
+        # pre-isolation signal inside the legacy lookback is not an entry trigger.
+        if stamp <= isolation:
             return
         signal_age = (now - stamp).total_seconds()
         frame_age = (now - received).total_seconds()
@@ -795,7 +799,8 @@ def _process(record, payload, received_at, role, *, historical=False, historical
             _STORE.save(state, require_mongo=False)
             logger.info("Historical Supertrend execution skipped: isolation recovery window expired | isolation=%s", iso_id)
             return
-    key = _signal_key(source_key, direction, stamp)
+    trigger_direction = direction
+    key = _signal_key(source_key, trigger_direction, stamp)
     with _lock(iso_id):
         state = _STORE.load(iso_id)
         state.setdefault("isolation_id", iso_id)
@@ -804,6 +809,47 @@ def _process(record, payload, received_at, role, *, historical=False, historical
         state.setdefault("processed_signal_keys", [])
         if key in state["processed_signal_keys"]:
             return
+
+        # The 1m signal is only the execution trigger. Select CE/PE from the
+        # latest confirmed 15m direction available at the trigger timestamp.
+        # If 15m has no usable signal, use the isolation-time 1m validation;
+        # if that is also unavailable, fall back to the triggering 1m signal.
+        trend_context = state.get("trend_context") or {}
+        trade_direction = None
+        direction_source = None
+        try:
+            from services.supertrend_snapshot_cache import get_supertrend_snapshot
+            fifteen_snapshot = get_supertrend_snapshot(
+                source_key, str(record.get("trade_date_ist") or now.date().isoformat()),
+                interval="15m",
+            )
+            latest_15m = _latest_confirmed_snapshot_direction(fifteen_snapshot, stamp)
+            if latest_15m:
+                trade_direction = latest_15m["direction"]
+                direction_source = "live_15m_supertrend"
+                trend_context["latest_15m_signal"] = latest_15m
+        except Exception:
+            logger.exception("Could not read 15m Supertrend direction; using stored fallback | isolation=%s", iso_id)
+
+        if trade_direction is None and trend_context.get("initial_15m_direction") in {"BULLISH", "BEARISH"}:
+            trade_direction = trend_context["initial_15m_direction"]
+            direction_source = "initial_15m_supertrend"
+        if trade_direction is None and trend_context.get("one_minute_direction") in {"BULLISH", "BEARISH"}:
+            trade_direction = trend_context["one_minute_direction"]
+            direction_source = "validated_1m_historical_fallback"
+        if trade_direction is None:
+            trade_direction = trigger_direction
+            direction_source = "triggering_1m_signal_fallback"
+
+        direction = trade_direction
+        state["trend_context"] = trend_context
+        state["trend_context"]["last_execution_decision"] = {
+            "trigger_signal_direction": trigger_direction,
+            "selected_trade_direction": trade_direction,
+            "direction_source": direction_source,
+            "trigger_signal_time_ist": stamp.isoformat(),
+            "evaluated_at_ist": now.isoformat(),
+        }
         try:
             from clients.algocli_client import AlgoCLIClient
             client = AlgoCLIClient()
@@ -853,7 +899,9 @@ def _process(record, payload, received_at, role, *, historical=False, historical
             client.current_stage = "CHECK_EXISTING_POSITION"
             if _position_qty(client, plan["instrument_key"]) != 0:
                 raise RuntimeError("A pre-existing position exists for the target instrument")
-            signal = {"direction": direction, "signal_time": stamp, "signal_key": key,
+            signal = {"direction": direction, "trigger_direction": trigger_direction,
+                      "direction_source": direction_source,
+                      "signal_time": stamp, "signal_key": key,
                       "received_at_ist": received.isoformat(), "source_instrument_key": source_key,
                       "source": "historical_price_recovery" if historical else "live_supertrend"}
             if historical and isinstance(historical_evidence, dict):
@@ -928,138 +976,201 @@ def _process(record, payload, received_at, role, *, historical=False, historical
 
 
 
+def _latest_confirmed_snapshot_direction(snapshot: dict, at_time=None) -> dict | None:
+    """Return the latest confirmed buy/sell direction at or before at_time."""
+    if not isinstance(snapshot, dict) or snapshot.get("status") != "loaded":
+        return None
+    document = snapshot.get("data")
+    signals = document.get("signals") if isinstance(document, dict) else None
+    if not isinstance(signals, list):
+        return None
+    cutoff = _dt(at_time) if at_time is not None else None
+    eligible = []
+    for index, item in enumerate(signals):
+        if not isinstance(item, dict):
+            continue
+        raw_signal = str(item.get("signal") or "").strip().lower()
+        if raw_signal not in {"buy", "sell"}:
+            continue
+        confirmed = _dt(item.get("confirmed_time"))
+        if confirmed is None or (cutoff is not None and confirmed > cutoff):
+            continue
+        eligible.append((confirmed, index, {
+            "direction": "BULLISH" if raw_signal == "buy" else "BEARISH",
+            "signal": raw_signal,
+            "confirmed_time_ist": confirmed.isoformat(),
+            "confirmed_time_price": _num(item.get("confirmed_time_price")),
+        }))
+    if not eligible:
+        return None
+    return max(eligible, key=lambda row: (row[0], row[1]))[2]
+
+
 def _process_pre_isolation_recovery(record: dict, access_token: str) -> None:
-    """Evaluate pre-isolation price direction and submit at most one historical entry attempt."""
+    """Build isolation-time trend context; never submit an order from history."""
     if not ISOLATION_SUPERTREND_RECOVERY_ENABLED:
         return
     if not LIVE_GTT_EXECUTION_ENABLED or LIVE_GTT_KILL_SWITCH:
-        logger.info("Historical Supertrend recovery evaluated only when live GTT execution is enabled")
+        logger.info("Isolation trend context evaluated only when live GTT execution is enabled")
         return
 
     isolation = _dt(record.get("isolation_touch_time") or record.get("isolation_created_at"))
     source_key = str(record.get("instrument_key") or "")
     if isolation is None or not source_key:
         return
-    if str(record.get("trade_date_ist") or "") != _now().date().isoformat():
+    trade_date = str(record.get("trade_date_ist") or isolation.date().isoformat())
+    if trade_date != _now().date().isoformat():
         return
     iso_id = _iso_id(record)
 
     with _lock(iso_id):
         state = _STORE.load(iso_id)
         state.setdefault("isolation_id", iso_id)
-        existing = state.get("historical_recovery")
-        if isinstance(existing, dict) and existing.get("execution_status") in {
-            "DISPATCH_INTENT_PERSISTED", "SUBMITTED", "BLOCKED", "NOT_REQUIRED",
+        existing = state.get("historical_recovery") or {}
+        if existing.get("execution_status") in {
+            "BIAS_READY", "SUBMITTED", "BLOCKED", "NOT_REQUIRED",
             "ALREADY_ACTIVE_SAME_DIRECTION", "CLOSED_ONLY_LATE_REVERSAL_DISABLED",
             "BLOCKED_ENTRY_LIMIT", "RECONCILIATION_REQUIRED", "ATTEMPTED",
         }:
             return
         if (_now() - isolation).total_seconds() > ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS:
             state["historical_recovery"] = {
-                "status": "expired",
-                "execution_status": "NOT_REQUIRED",
-                "reason": "Historical recovery execution delay exceeded configured safety window",
+                "status": "expired", "execution_status": "NOT_REQUIRED",
+                "reason": "Isolation trend-context collection exceeded configured safety window",
+                "isolation_time_ist": isolation.isoformat(),
+            }
+            state["trend_context"] = {
+                "status": "fallback_to_first_live_1m",
+                "initial_15m_direction": None,
+                "one_minute_direction": None,
+                "direction_source": "triggering_1m_signal_fallback",
                 "isolation_time_ist": isolation.isoformat(),
             }
             _STORE.save(state)
             return
         state["historical_recovery"] = {
-            "status": "evaluating",
-            "execution_status": "EVALUATING",
+            "status": "evaluating", "execution_status": "EVALUATING",
             "started_at_ist": _now().isoformat(),
             "isolation_time_ist": isolation.isoformat(),
         }
         _STORE.save(state)
 
+    one_minute_snapshot = {"status": "snapshot_unavailable"}
+    fifteen_minute_snapshot = {"status": "snapshot_unavailable"}
+    one_minute_evidence = {
+        "status": "data_unavailable", "direction": None,
+        "reason": "1m snapshot has not been loaded",
+    }
+    fifteen_minute_direction = None
     try:
         from core.candle_fetcher import CandleFetcher
         from services.isolation_supertrend_backfill_service import evaluate_pre_isolation_price_trend
         from services.supertrend_snapshot_cache import wait_for_supertrend_snapshot
 
-        remaining_seconds = max(
+        remaining = max(
             0.0,
             ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS
             - (_now() - isolation).total_seconds(),
         )
-        snapshot_wait = min(
-            float(ISOLATION_SUPERTREND_SNAPSHOT_WAIT_SECONDS),
-            remaining_seconds,
+        wait_each = min(float(ISOLATION_SUPERTREND_SNAPSHOT_WAIT_SECONDS), remaining)
+        # Prefer 15m directional context, but always retain the existing 1m
+        # historical validation as the fallback when 15m has no signal.
+        fifteen_minute_snapshot = wait_for_supertrend_snapshot(
+            source_key, trade_date, timeout_seconds=wait_each, interval="15m",
         )
-        websocket_backfill = wait_for_supertrend_snapshot(
-            source_key,
-            str(record.get("trade_date_ist") or isolation.date().isoformat()),
-            timeout_seconds=snapshot_wait,
+        remaining = max(
+            0.0,
+            ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS
+            - (_now() - isolation).total_seconds(),
+        )
+        one_minute_snapshot = wait_for_supertrend_snapshot(
+            source_key, trade_date,
+            timeout_seconds=min(wait_each, remaining), interval="1m",
+        )
+        fifteen_minute_direction = _latest_confirmed_snapshot_direction(
+            fifteen_minute_snapshot, isolation,
         )
         candles = CandleFetcher(access_token).fetch_intraday_candles(
-            source_key, unit="minutes", interval="1"
+            source_key, unit="minutes", interval="1",
         )
-        evidence = evaluate_pre_isolation_price_trend(
-            websocket_backfill,
-            isolation,
-            candles,
+        one_minute_evidence = evaluate_pre_isolation_price_trend(
+            one_minute_snapshot, isolation, candles,
         )
     except Exception as exc:
-        logger.exception("Historical Supertrend recovery data unavailable; live flow remains active | isolation=%s", iso_id)
-        evidence = {
-            "status": "data_unavailable",
-            "direction": None,
-            "reason": str(exc),
+        logger.exception(
+            "Isolation Supertrend trend-context collection incomplete; live 1m fallback remains available | isolation=%s",
+            iso_id,
+        )
+        one_minute_evidence = {
+            "status": "data_unavailable", "direction": None, "reason": str(exc),
             "isolation_time_ist": isolation.isoformat(),
-            "evaluated_at_ist": _now().isoformat(),
         }
+        # Still use a 15m snapshot if it was obtained before a later 1m failure.
+        if fifteen_minute_direction is None:
+            fifteen_minute_direction = _latest_confirmed_snapshot_direction(
+                fifteen_minute_snapshot, isolation,
+            )
+
+    one_minute_direction = (
+        one_minute_evidence.get("direction")
+        if one_minute_evidence.get("direction") in {"BULLISH", "BEARISH"}
+        else None
+    )
+    if fifteen_minute_direction:
+        selected_direction = fifteen_minute_direction["direction"]
+        direction_source = "15m_historical_supertrend"
+        context_status = "15m_bias_ready"
+    elif one_minute_direction:
+        selected_direction = one_minute_direction
+        direction_source = "validated_1m_historical_fallback"
+        context_status = "1m_fallback_bias_ready"
+    else:
+        selected_direction = None
+        direction_source = "triggering_1m_signal_fallback"
+        context_status = "waiting_for_first_live_1m_direction"
+
+    trend_context = {
+        "status": context_status,
+        "selected_direction": selected_direction,
+        "initial_15m_direction": (
+            fifteen_minute_direction.get("direction") if fifteen_minute_direction else None
+        ),
+        "initial_15m_signal": fifteen_minute_direction,
+        "one_minute_direction": one_minute_direction,
+        "one_minute_validation": one_minute_evidence,
+        "direction_source": direction_source,
+        "isolation_time_ist": isolation.isoformat(),
+        "ready_at_ist": _now().isoformat(),
+        "execution_policy": "first_post_isolation_1m_signal_triggers_entry",
+    }
 
     with _lock(iso_id):
         state = _STORE.load(iso_id)
         current = state.get("historical_recovery") or {}
-        if current.get("execution_status") == "DISPATCH_INTENT_PERSISTED":
+        if current.get("execution_status") == "BIAS_READY":
             return
-        evidence["execution_status"] = "NOT_REQUIRED"
-        state["historical_recovery"] = evidence
+        state["trend_context"] = trend_context
+        state["historical_recovery"] = {
+            **one_minute_evidence,
+            "execution_status": "BIAS_READY",
+            "status": context_status,
+            "initial_15m_signal": fifteen_minute_direction,
+            "selected_direction": selected_direction,
+            "direction_source": direction_source,
+            "isolation_time_ist": isolation.isoformat(),
+            "evaluated_at_ist": _now().isoformat(),
+            "note": "Historical evidence establishes direction only; no historical order is submitted.",
+        }
         _STORE.save(state)
-
-        direction = evidence.get("direction")
-        if direction not in {"BULLISH", "BEARISH"}:
-            logger.info(
-                "Historical Supertrend recovery fallback to live signals | isolation=%s status=%s reason=%s",
-                iso_id, evidence.get("status"), evidence.get("reason"),
-            )
-            return
-        if (_now() - isolation).total_seconds() > ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS:
-            evidence["execution_status"] = "NOT_REQUIRED"
-            evidence["status"] = "expired"
-            evidence["reason"] = "Recovery data retrieval exceeded the configured execution delay"
-            _STORE.save(state)
-            return
-
-        baseline = evidence.get("baseline") or {}
-        signal_stamp = _dt(baseline.get("confirmed_time_ist"))
-        if signal_stamp is None:
-            evidence["execution_status"] = "NOT_REQUIRED"
-            evidence["status"] = "invalid_signal_timestamp"
-            _STORE.save(state)
-            return
-
-        # Persist dispatch intent before entering the broker execution path.
-        evidence["execution_status"] = "DISPATCH_INTENT_PERSISTED"
-        evidence["dispatch_intent_at_ist"] = _now().isoformat()
-        state["historical_recovery"] = evidence
-        _STORE.save(state)
-
-    payload = {
-        "event": "supertrend_signal",
-        "signal": "buy" if direction == "BULLISH" else "sell",
-        "signal_time": signal_stamp.isoformat(),
-        "historical_recovery": True,
-    }
-    _process(
-        record,
-        payload,
-        _now().isoformat(),
-        "isolated",
-        historical=True,
-        historical_evidence=evidence,
+    logger.info(
+        "Isolation trend context ready; waiting for first post-isolation 1m trigger | isolation=%s "
+        "15m=%s 1m_fallback=%s selected=%s source=%s",
+        iso_id,
+        (fifteen_minute_direction or {}).get("direction"),
+        one_minute_direction,
+        selected_direction,
+        direction_source,
     )
-
 
 def dispatch_pre_isolation_supertrend_recovery(record: dict, access_token: str) -> bool:
     """Queue historical evaluation after isolation persistence; never block feed callbacks."""
