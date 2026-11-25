@@ -91,16 +91,18 @@ class SchedulerService:
             kwargs={"send_success_message": False},
         )
 
-        # -- daily refresh ---------------------------------------------- #
-        if config.DAILY_REFRESH_ENABLED:
-            scheduler.add_job(
-                run_daily_refresh, "cron",
-                day_of_week=config.DAILY_REFRESH_DAYS,
-                hour=config.DAILY_REFRESH_HOUR,
-                minute=config.DAILY_REFRESH_MINUTE,
-                id="daily_refresh",
-                replace_existing=True, misfire_grace_time=300,
-            )
+        # -- mandatory daily application refresh ----------------------- #
+        # In full-engine mode this refresh is not optional: it force-reads
+        # the token from MongoDB, validates it, refreshes backup/registry
+        # state, reconnects the live feed, and re-ensures core services.
+        scheduler.add_job(
+            run_daily_refresh, "cron",
+            day_of_week=config.DAILY_REFRESH_DAYS,
+            hour=config.DAILY_REFRESH_HOUR,
+            minute=config.DAILY_REFRESH_MINUTE,
+            id="daily_refresh",
+            replace_existing=True, misfire_grace_time=300,
+        )
 
         # -- first candle (09:16:10) ----------------------------------- #
         if getattr(config, "FIRST_CANDLE_ENABLED", True):
