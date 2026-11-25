@@ -88,7 +88,7 @@ def test_isolation_announcement_uses_group_chat_and_12_hour_ist(monkeypatch):
     assert "NIFTY 25500 CE 23 NOV 26" in message
     assert "NSE_FO|64473" in message
     assert "NIFTY 25500 PE 23 NOV 26" in message
-    assert "25485.10" in message
+    assert "25,485.10" in message
     assert "R3_Threshold" in message
     assert "https://ng7.up.railway.app/chart/NSE_FO%7C64473" in message
     assert "https://ng7.up.railway.app/chart/NSE_FO%7C64474" in message
@@ -101,6 +101,8 @@ def test_group_notification_is_skipped_without_group_chat_id(monkeypatch):
     monkeypatch.setattr(telegram, "TELEGRAM_GROUP_ENABLED", True)
     monkeypatch.setattr(telegram, "TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setattr(telegram, "TELEGRAM_GROUP_CHAT_ID", "")
+    monkeypatch.setattr(telegram, "TELEGRAM_ENABLED", False)
+    monkeypatch.setattr(telegram, "TELEGRAM_CHAT_ID", "")
     called = []
     monkeypatch.setattr(telegram.requests, "post", lambda *args, **kwargs: called.append(True))
 
