@@ -197,6 +197,12 @@ class IsolatedFeedManager:
                         if self.require_today_scope and payload.get("data_scope") != "today_only":
                             logger.warning("%s frame rejected: data_scope=%s key=%s", indicator.upper(), payload.get("data_scope"), key)
                             continue
+                        if indicator == "supertrend":
+                            try:
+                                from services.supertrend_snapshot_cache import update_supertrend_snapshot_cache
+                                update_supertrend_snapshot_cache(key, payload, received_at)
+                            except Exception:
+                                logger.exception("Could not update Supertrend snapshot cache key=%s", key)
                         row = {
                             "received_at_ist": received_at,
                             "indicator": indicator,
