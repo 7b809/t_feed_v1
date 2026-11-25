@@ -170,3 +170,47 @@ def test_price_recovery_rejects_future_only_signals():
     )
     assert result["status"] == "no_pre_isolation_signals"
     assert result["direction"] is None
+
+
+
+def test_price_recovery_uses_net_move_not_signal_majority_or_last_signal():
+    result = evaluate_pre_isolation_price_trend(
+        _loaded_backfill([
+            {
+                "signal": "buy",
+                "confirmed_time": "2026-11-25T09:15:00+05:30",
+                "confirmed_time_price": 246.75,
+            },
+            {
+                "signal": "sell",
+                "confirmed_time": "2026-11-25T09:35:00+05:30",
+                "confirmed_time_price": 250.0,
+            },
+            {
+                "signal": "sell",
+                "confirmed_time": "2026-11-25T09:48:00+05:30",
+                "confirmed_time_price": 255.0,
+            },
+        ]),
+        "2026-11-25T10:00:00+05:30",
+        [{"timestamp": "2026-11-25T09:59:00+05:30", "close": 260.0}],
+    )
+    assert result["eligible_signal_count"] == 3
+    assert result["latest_signal_direction"] == "sell"
+    assert result["direction"] == "BULLISH"
+    assert result["price_change"] == 13.25
+
+
+def test_price_recovery_neutral_threshold_blocks_small_move():
+    result = evaluate_pre_isolation_price_trend(
+        _loaded_backfill([{
+            "signal": "buy",
+            "confirmed_time": "2026-11-25T09:15:00+05:30",
+            "confirmed_time_price": 250.0,
+        }]),
+        "2026-11-25T10:00:00+05:30",
+        [{"timestamp": "2026-11-25T09:59:00+05:30", "close": 250.2}],
+        min_move_percent=0.1,
+    )
+    assert result["status"] == "no_valid_signal"
+    assert result["direction"] is None
