@@ -7,14 +7,11 @@ ignored; AlgoCLI owns its own authentication and credentials.
 from __future__ import annotations
 
 import json
-import os
 import re
-import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from clients.algocli_client import AlgoCLIClient, AlgoCLIError, AlgoCLIWriteAmbiguous
@@ -109,7 +106,7 @@ class AlgoCLITestService:
             "target_price": float(target),
             "operation_id": operation_id,
         }
-        prompt = self.client._template("place_gtt.txt", values)
+        prompt = self.client._template("test_place_gtt.txt", values)
         request = {
             "operation_id": operation_id,
             "instrument_key": values["instrument_key"],
@@ -137,7 +134,7 @@ class AlgoCLITestService:
             outcome = "DRY_RUN"
         else:
             try:
-                result = self.client._run("place_gtt.txt", values, write=True)
+                result = self.client._run("test_place_gtt.txt", values, write=True)
                 response = _redact(result)
                 outcome = "COMPLETED"
             except AlgoCLIWriteAmbiguous as exc:
@@ -171,7 +168,7 @@ class AlgoCLITestService:
             "operation_id": operation_id,
             "created_at_ist": now.isoformat(),
             "status": outcome,
-            "prompt_template": "prompts/algocli/place_gtt.txt",
+            "prompt_template": "prompts/algocli/test_place_gtt.txt",
             "cli_execution": _redact(self.client.last_execution),
             "artifact_files": ["request.json", "prompt.txt", "response.json", "metadata.json"],
         }
