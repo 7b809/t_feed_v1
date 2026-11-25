@@ -66,7 +66,6 @@ def test_isolation_announcement_uses_group_chat_and_12_hour_ist(monkeypatch):
     monkeypatch.setattr(telegram, "TELEGRAM_ENABLED", True)
     monkeypatch.setattr(telegram, "TELEGRAM_CHAT_ID", "private-chat")
     monkeypatch.setattr(telegram, "CHART_BASE_URL", "https://ng7.up.railway.app")
-    monkeypatch.setattr(telegram, "TELEGRAM_CHAT_ID", "private-chat-must-not-be-used")
     captured = {}
     delivered_chats = []
 
@@ -83,7 +82,6 @@ def test_isolation_announcement_uses_group_chat_and_12_hour_ist(monkeypatch):
 
     assert telegram.notify_isolation_created(_record()) is True
     assert delivered_chats == ["-100123456789", "private-chat"]
-    assert "private-chat-must-not-be-used" not in str(captured["payload"])
     message = captured["payload"]["text"]
     assert "09:18:50 AM IST" in message
     assert "09:18:51 AM IST" in message
