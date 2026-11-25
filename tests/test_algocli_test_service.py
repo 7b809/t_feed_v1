@@ -90,7 +90,7 @@ def test_confirmed_live_write_calls_algocli_and_archives_response(tmp_path, monk
     )
     assert result["status"] == "COMPLETED"
     assert result["response"]["response"]["gtt_order_id"] == "GTT-TEST-123"
-    folder = tmp_path / result["artifact_directory"].split("/")[-1]
+    folder = tmp_path / "place_gtt" / result["artifact_directory"].split("/")[-1]
     saved = json.loads((folder / "response.json").read_text(encoding="utf-8"))
     assert saved["response"]["gtt_order_id"] == "GTT-TEST-123"
     assert client.last_execution["template"] == "test_place_gtt.txt"
