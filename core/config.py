@@ -171,6 +171,16 @@ ISOLATION_SUPERTREND_BACKFILL_DIR = os.getenv(
     "ISOLATION_SUPERTREND_BACKFILL_DIR", ""
 ).strip()
 
+# Price-based pre-isolation Supertrend recovery. Historical decisions are
+# informational unless LIVE_GTT_EXECUTION_ENABLED is also enabled.
+ISOLATION_SUPERTREND_RECOVERY_ENABLED = (
+    os.getenv("ISOLATION_SUPERTREND_RECOVERY_ENABLED", "true").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+ISOLATION_SUPERTREND_MIN_MOVE_PERCENT = float(
+    os.getenv("ISOLATION_SUPERTREND_MIN_MOVE_PERCENT", "0.0")
+)
+
 # Scan-window bounds. The start reads ISOLATION_SCAN_START_* first so a
 # deployment can delay the scan start (e.g. until 09:18, when OR levels
 # are actually ready) without moving MARKET_OPEN_*. Falls back to
