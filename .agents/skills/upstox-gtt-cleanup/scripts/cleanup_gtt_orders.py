@@ -55,21 +55,22 @@ def _is_triggered(gtt: dict) -> bool | None:
 
 
 def _linked_order_ids(gtt: dict) -> list[str]:
+    # Only entry fills define the position opened by this GTT. Do not aggregate
+    # TARGET/STOPLOSS order IDs into the entry fill quantity.
     found: list[str] = []
-    for key in ("triggered_order_id", "order_id", "exchange_order_id"):
+    for key in ("entry_order_id", "triggered_order_id", "order_id"):
         value = gtt.get(key)
         if value:
             found.append(str(value))
-    for rule in gtt.get("rules") or []:
+    entry_rules = [
+        r for r in (gtt.get("rules") or [])
+        if str(r.get("strategy") or "").upper() == "ENTRY"
+    ]
+    for rule in entry_rules:
         for key in ("order_id", "triggered_order_id", "exchange_order_id"):
             value = rule.get(key)
             if value:
                 found.append(str(value))
-    for item in gtt.get("orders") or []:
-        if isinstance(item, dict):
-            for key in ("order_id", "id"):
-                if item.get(key):
-                    found.append(str(item[key]))
     return list(dict.fromkeys(found))
 
 
@@ -130,6 +131,9 @@ def build_plan(snapshot: dict) -> tuple[dict, dict[str, list[dict]]]:
             plan["skip"].append({"gtt_order_id": gid, "reason": "Linked trade direction does not match GTT entry direction."})
             continue
         pos = positions.get((instrument, product))
+        if pos and pos.get("_ambiguous"):
+            plan["skip"].append({"gtt_order_id": gid, "reason": "Multiple position records share this instrument/product; refusing an ambiguous exit."})
+            continue
         net_qty = position_quantity(pos)
         if net_qty != signed_fill:
             plan["skip"].append({
@@ -190,13 +194,14 @@ def execute(plan: dict) -> dict:
     for item in plan["exit"]:
         gid = item["gtt_order_id"]
         try:
-            cancel_gtt_order(gid)
-            latest = data_records(api.get_gtt_order_details(gtt_order_id=gid))
-            if not latest:
-                raise RuntimeError("Could not verify GTT state after cancellation.")
-            state = _status(latest[0])
-            if state not in TERMINAL:
-                raise RuntimeError(f"GTT is not verified terminal after cancellation (status={state or 'unknown'}); position not exited.")
+            if item["cancel_gtt_before_exit"]:
+                cancel_gtt_order(gid)
+                latest = data_records(api.get_gtt_order_details(gtt_order_id=gid))
+                if not latest:
+                    raise RuntimeError("Could not verify GTT state after cancellation.")
+                state = _status(latest[0])
+                if state not in TERMINAL:
+                    raise RuntimeError(f"GTT is not verified terminal after cancellation (status={state or 'unknown'}); position not exited.")
             response = market_exit(
                 item["instrument_token"], item["product"], item["quantity"],
                 item["net_position_quantity"], f"gtt-cleanup-{gid}",
