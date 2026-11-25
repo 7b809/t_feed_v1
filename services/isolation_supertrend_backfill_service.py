@@ -1,4 +1,4 @@
-"""Read-only loader for precomputed Supertrend data of a newly isolated option."""
+"""Evaluate pre-isolation Supertrend price movement from a supplied feed snapshot."""
 
 from __future__ import annotations
 
