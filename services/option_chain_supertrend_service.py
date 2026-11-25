@@ -189,14 +189,16 @@ class OptionChainSupertrendCapture:
                                         dispatch_live_supertrend_signal(sink["record"], payload, received, sink["role"])
                                     except Exception:
                                         logger.exception("Could not deliver isolated Supertrend signal key=%s", key)
-                                if interval == "1m":
-                                    try:
-                                        from services.option_chain_history import seed_option_chain_history
-                                        seed_result = await asyncio.to_thread(seed_option_chain_history, key, day, sink["role"], "supertrend", sink["path"])
-                                        if seed_result.get("state") == "seeded":
-                                            continue
-                                    except Exception:
-                                        logger.exception("Could not retry 1m Supertrend archive seed key=%s", key)
+                                try:
+                                    from services.option_chain_history import seed_option_chain_history
+                                    seed_result = await asyncio.to_thread(
+                                        seed_option_chain_history, key, day, sink["role"],
+                                        "supertrend", sink["path"], interval=interval,
+                                    )
+                                    if seed_result.get("state") == "seeded":
+                                        continue
+                                except Exception:
+                                    logger.exception("Could not retry Supertrend archive seed key=%s interval=%s", key, interval)
                                 archive_row = {"received_at_ist": received, "indicator": "supertrend",
                                     "interval": interval, "isolation_id": sink["isolation_id"],
                                     "leg_role": sink["role"], "instrument_key": key,
