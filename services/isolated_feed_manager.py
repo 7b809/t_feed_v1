@@ -61,6 +61,8 @@ class IsolatedFeedManager:
         self.base_url = os.getenv("EMA_WS_BASE_URL", "wss://ema.novag7.in").strip().rstrip("/")
         self.sr_config = os.getenv("EMA_SR_CONFIG", "all").strip() or "all"
         self.require_today_scope = os.getenv("REQUIRE_TODAY_ONLY_SCOPE", "true").lower() == "true"
+        from services.option_chain_supertrend_service import configured_supertrend_intervals
+        self.supertrend_intervals = configured_supertrend_intervals()
         self.root = Path(os.getenv("ISOLATED_DATA_DIR", "data/isolated"))
         self._loop = None
         self._thread = None
@@ -103,34 +105,40 @@ class IsolatedFeedManager:
         trade_date = str(record.get("trade_date_ist") or _now().date())
         isolation_id = f"{trade_date}__{record.get('instrument_key') or 'unknown'}"
         for role, key, symbol in valid:
-            supertrend_shared = False
+            shared_intervals = set()
             if self.enabled_st:
-                try:
-                    from services.option_chain_history import seed_option_chain_history
-                    destination = self._file_path(trade_date, role, key, "supertrend")
-                    result = seed_option_chain_history(key, trade_date, role, "supertrend", destination)
-                    if result.get("state") == "seeded":
-                        logger.info("Seeded pre-isolation Supertrend history role=%s key=%s rows=%s", role, key, result.get("rows"))
-                    # Reuse the already-running option-chain Supertrend socket
-                    # and fan its frames into this isolation archive. Fall back
-                    # to the isolation-owned socket if no shared task is active.
-                    from services.option_chain_supertrend_service import register_option_chain_supertrend_archive
-                    supertrend_shared = register_option_chain_supertrend_archive(
-                        key, destination, isolation_id, role, symbol or key, record=record
-                    )
-                except Exception:
-                    logger.exception("Could not seed/register option-chain Supertrend history role=%s key=%s", role, key)
+                for interval in self.supertrend_intervals:
+                    try:
+                        destination = self._file_path(trade_date, role, key, "supertrend", interval=interval)
+                        if interval == "1m":
+                            from services.option_chain_history import seed_option_chain_history
+                            result = seed_option_chain_history(key, trade_date, role, "supertrend", destination)
+                            if result.get("state") == "seeded":
+                                logger.info("Seeded pre-isolation 1m Supertrend history role=%s key=%s rows=%s", role, key, result.get("rows"))
+                        from services.option_chain_supertrend_service import register_option_chain_supertrend_archive
+                        shared = register_option_chain_supertrend_archive(
+                            key, destination, isolation_id, role, symbol or key, record=record, interval=interval
+                        )
+                        if shared:
+                            shared_intervals.add(interval)
+                    except Exception:
+                        logger.exception("Could not seed/register Supertrend history role=%s key=%s interval=%s", role, key, interval)
             for indicator, enabled in (("sr", self.enabled_sr), ("supertrend", self.enabled_st)):
-                if not enabled or (indicator == "supertrend" and supertrend_shared):
+                if not enabled:
                     continue
-                task_key = (isolation_id, role, indicator, key)
-                if task_key in self._tasks and not self._tasks[task_key].done():
-                    continue
-                coro = self._run_feed(isolation_id, trade_date, role, key, symbol or key, indicator, record)
-                future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-                self._tasks[task_key] = future
-                self._status["|".join(task_key)] = {"state": "starting", "instrument_key": key}
-        logger.info("SR/Supertrend capture scheduled isolation=%s legs=%d shared_supertrend=%s", isolation_id, len(valid), self.enabled_st)
+                intervals = self.supertrend_intervals if indicator == "supertrend" else [None]
+                for interval in intervals:
+                    if indicator == "supertrend" and interval in shared_intervals:
+                        continue
+                    task_key = (isolation_id, role, indicator, key, interval) if interval else (isolation_id, role, indicator, key)
+                    if task_key in self._tasks and not self._tasks[task_key].done():
+                        continue
+                    coro = self._run_feed(isolation_id, trade_date, role, key, symbol or key, indicator, record, interval=interval)
+                    future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+                    self._tasks[task_key] = future
+                    status_key = "|".join(str(part) for part in task_key)
+                    self._status[status_key] = {"state": "starting", "instrument_key": key, "interval": interval}
+        logger.info("SR/Supertrend capture scheduled isolation=%s legs=%d shared_supertrend_intervals=%s", isolation_id, len(valid), self.supertrend_intervals)
 
         # Replay a signal already written to the option-chain Supertrend feed
         # for this same IST minute. Run outside the isolation caller so file
@@ -154,19 +162,22 @@ class IsolatedFeedManager:
                 record.get("instrument_key"),
             )
 
-    def _file_path(self, trade_date, role, key, indicator):
+    def _file_path(self, trade_date, role, key, indicator, interval=None):
         folder = self.root / indicator
         folder.mkdir(parents=True, exist_ok=True)
-        return folder / f"{trade_date}_{role}_{_safe(key)}.jsonl"
+        suffix = f"_{interval}" if indicator == "supertrend" and interval and interval != "1m" else ""
+        return folder / f"{trade_date}_{role}_{_safe(key)}{suffix}.jsonl"
 
-    async def _run_feed(self, isolation_id, trade_date, role, key, symbol, indicator, isolation_record):
+    async def _run_feed(self, isolation_id, trade_date, role, key, symbol, indicator, isolation_record, interval=None):
         encoded = quote(key, safe="")
         if indicator == "sr":
             url = f"{self.base_url}/ws/sr/{encoded}?config={self.sr_config}"
-        else:
+        elif interval == "1m":
             url = f"{self.base_url}/ws/supertrend/{encoded}"
-        task_key = "|".join((isolation_id, role, indicator, key))
-        path = self._file_path(trade_date, role, key, indicator)
+        else:
+            url = f"{self.base_url}/ws/supertrend/interval/{interval}/{encoded}"
+        task_key = "|".join(str(part) for part in (isolation_id, role, indicator, key, interval) if part)
+        path = self._file_path(trade_date, role, key, indicator, interval=interval)
         backoff = 1
         while True:
             if not _inside_session():
@@ -198,11 +209,16 @@ class IsolatedFeedManager:
                             logger.warning("%s frame rejected: data_scope=%s key=%s", indicator.upper(), payload.get("data_scope"), key)
                             continue
                         if indicator == "supertrend":
+                            body = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+                            frame_interval = body.get("interval") or payload.get("interval")
+                            if frame_interval and str(frame_interval).lower() != interval:
+                                logger.warning("Supertrend interval mismatch expected=%s received=%s key=%s", interval, frame_interval, key)
+                                continue
                             try:
                                 from services.supertrend_snapshot_cache import update_supertrend_snapshot_cache
-                                update_supertrend_snapshot_cache(key, payload, received_at)
+                                update_supertrend_snapshot_cache(key, payload, received_at, interval=interval)
                             except Exception:
-                                logger.exception("Could not update Supertrend snapshot cache key=%s", key)
+                                logger.exception("Could not update Supertrend snapshot cache key=%s interval=%s", key, interval)
                         row = {
                             "received_at_ist": received_at,
                             "indicator": indicator,
@@ -210,14 +226,15 @@ class IsolatedFeedManager:
                             "leg_role": role,
                             "instrument_key": key,
                             "trading_symbol": symbol,
+                            "interval": interval,
                             "payload": payload,
                         }
-                        if indicator == "supertrend":
+                        if indicator == "supertrend" and interval == "1m":
                             try:
                                 from services.option_chain_history import seed_option_chain_history
                                 await asyncio.to_thread(seed_option_chain_history, key, trade_date, role, "supertrend", path)
                             except Exception:
-                                logger.exception("Could not retry Supertrend history seed key=%s", key)
+                                logger.exception("Could not retry 1m Supertrend history seed key=%s", key)
                         await asyncio.to_thread(self._append_jsonl, path, row)
                         event = payload.get("event")
                         if event == "connection_ack":
@@ -230,7 +247,7 @@ class IsolatedFeedManager:
                                 "%s WS initial snapshot received | role=%s | instrument=%s",
                                 indicator.upper(), role, symbol,
                             )
-                        if indicator == "supertrend" and event == "supertrend_signal" and role == "isolated":
+                        if indicator == "supertrend" and interval == "1m" and event == "supertrend_signal" and role == "isolated":
                             from services.supertrend_signal_notification_service import dispatch_isolated_supertrend_signal
                             dispatch_isolated_supertrend_signal(
                                 isolation_record, payload, received_at, role,
@@ -239,7 +256,7 @@ class IsolatedFeedManager:
                             dispatch_live_supertrend_signal(
                                 isolation_record, payload, received_at, role,
                             )
-                        if event == "supertrend_signal" or (indicator == "sr" and event == "sr_update"):
+                        if (indicator == "supertrend" and interval == "1m" and event == "supertrend_signal") or (indicator == "sr" and event == "sr_update"):
                             from services.isolation_telegram_service import notify_indicator_event
                             await asyncio.to_thread(notify_indicator_event, indicator, payload, symbol, role)
                         self._status[task_key] = {
@@ -268,7 +285,7 @@ class IsolatedFeedManager:
 
     def status(self):
         return {"enabled": {"sr": self.enabled_sr, "supertrend": self.enabled_st},
-                "base_url": self.base_url, "connections": dict(self._status)}
+                "base_url": self.base_url, "supertrend_intervals": list(self.supertrend_intervals), "connections": dict(self._status)}
 
     def stop(self):
         if not self._loop or not self._loop.is_running():
