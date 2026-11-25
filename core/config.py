@@ -217,9 +217,12 @@ LIVE_CROSSES_FILENAME = _str("LIVE_CROSSES_FILENAME", "live_crosses.json")
 # ---------------------------------------------------------------------------
 # Daily refresh scheduler
 # ---------------------------------------------------------------------------
-DAILY_REFRESH_ENABLED = _bool("DAILY_REFRESH_ENABLED", True)
+# The full-engine daily refresh is a mandatory pre-market maintenance run.
+# DAILY_REFRESH_ENABLED is retained for backward-compatible .env parsing;
+# the scheduler always registers the job when the full engine is enabled.
+DAILY_REFRESH_ENABLED = True
 DAILY_REFRESH_HOUR = _int("DAILY_REFRESH_HOUR", 8)
-DAILY_REFRESH_MINUTE = _int("DAILY_REFRESH_MINUTE", 30)
+DAILY_REFRESH_MINUTE = _int("DAILY_REFRESH_MINUTE", 0)
 DAILY_REFRESH_DAYS = _str("DAILY_REFRESH_DAYS", "mon,tue,wed,thu,fri")
 
 # ---------------------------------------------------------------------------
