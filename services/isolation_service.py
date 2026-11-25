@@ -306,7 +306,7 @@ class IsolationService:
             nifty_ltp_source=nifty_ltp_source,
             trend_result=trend_result,
             option_ltp=snapshot_ltp,
-            option_ltp_source=option_ltp_source,
+            option_ltp_source=snapshot_source,
             mode_payload=mode_payload,
             touch_time=touch_time,
             backfilled=backfilled,
@@ -535,6 +535,7 @@ class IsolationService:
             "isolation_backfilled": backfilled,
             "opposite_leg": opposite_leg,
         }
+        record["isolation_id"] = f"{record['trade_date_ist']}__{record['instrument_key'] or 'unknown'}"
         if backfilled:
             record["backfilled_at"] = now
 
