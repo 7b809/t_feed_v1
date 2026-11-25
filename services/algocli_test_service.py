@@ -201,3 +201,82 @@ class AlgoCLITestService:
             "files": metadata["artifact_files"],
             "response": response,
         }
+
+
+    def get_positions_health(self) -> dict:
+        """Execute the read-only get_positions prompt and archive the health check."""
+        operation_id = uuid.uuid4().hex
+        started_at = datetime.now(IST)
+        started_monotonic = __import__("time").monotonic()
+        output_dir = self.root / (
+            f"{started_at.strftime('%Y%m%d_%H%M%S_%f')}_get-positions_{operation_id[:8]}"
+        )
+        template_name = "get_positions.txt"
+        prompt_path = "prompts/algocli/get_positions.txt"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        request = {
+            "operation_id": operation_id,
+            "method": "GET",
+            "endpoint": "/api/algocli-test/get-positions",
+            "prompt_template": prompt_path,
+            "read_only": True,
+        }
+        _write_json(output_dir / "request.json", request)
+        (output_dir / "prompt.txt").write_text(
+            self.client._template(template_name, {}) + "\\n",
+            encoding="utf-8",
+        )
+        _write_json(output_dir / "response.json", {
+            "status": "RUNNING",
+            "operation_id": operation_id,
+        })
+
+        response: dict[str, Any]
+        outcome = "UNHEALTHY"
+        try:
+            # Use _run directly so the API returns the full parsed AlgoAI
+            # response and execution metadata, rather than only a positions
+            # list extracted by the convenience client method.
+            result = self.client._run(template_name, {"operation_id": operation_id})
+            response = _redact(result)
+            outcome = "HEALTHY"
+        except Exception as exc:
+            logger.exception("AlgoAI health check execution failed | operation=%s", operation_id)
+            response = {
+                "error": _redact(str(exc)),
+                "cli_execution": _redact(getattr(self.client, "last_execution", {})),
+            }
+
+        duration = round(__import__("time").monotonic() - started_monotonic, 3)
+        completed_at = datetime.now(IST)
+        execution = _redact(getattr(self.client, "last_execution", {}))
+        metadata = {
+            "operation_id": operation_id,
+            "status": outcome,
+            "prompt_template": prompt_path,
+            "started_at_ist": started_at.isoformat(),
+            "completed_at_ist": completed_at.isoformat(),
+            "duration_seconds": duration,
+            "cli_execution": execution,
+            "artifact_files": ["request.json", "prompt.txt", "response.json", "metadata.json"],
+        }
+        archived_response = {
+            "status": outcome,
+            "operation_id": operation_id,
+            "healthy": outcome == "HEALTHY",
+            "duration_seconds": duration,
+            "response": response,
+        }
+        _write_json(output_dir / "response.json", archived_response)
+        _write_json(output_dir / "metadata.json", metadata)
+
+        logger.info(
+            "AlgoAI get-positions health check %s | operation=%s | duration=%.3fs | cli_outcome=%s",
+            outcome, operation_id, duration, execution.get("outcome", "UNKNOWN"),
+        )
+        return {
+            **archived_response,
+            "artifact_directory": output_dir.as_posix(),
+            "files": metadata["artifact_files"],
+        }
