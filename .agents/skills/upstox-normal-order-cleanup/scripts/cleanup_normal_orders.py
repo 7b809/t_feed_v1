@@ -63,6 +63,9 @@ def build_plan(snapshot: dict, grouped_trades: dict[tuple[str, str], list[dict]]
             active_gtt_keys.add((str(gtt.get("instrument_token") or ""), str(gtt.get("product") or "").upper()))
 
     for key, position in positions.items():
+        if position.get("_ambiguous"):
+            plan["skip"].append({"instrument_token": key[0], "product": key[1], "reason": "Multiple position records share this instrument/product; refusing an ambiguous exit."})
+            continue
         net_qty = position_quantity(position)
         if net_qty == 0:
             continue
