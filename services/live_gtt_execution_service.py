@@ -825,9 +825,14 @@ def _process(record, payload, received_at, role, *, historical=False, historical
                         state["processed_signal_keys"].append(key)
                         if historical:
                             state.setdefault("historical_recovery", {})["execution_status"] = "CLOSED_ONLY_LATE_REVERSAL_DISABLED"
-                        _STORE.save(state)
+                    elif historical:
+                        state.setdefault("historical_recovery", {})["execution_status"] = "RECONCILIATION_REQUIRED"
+                    _STORE.save(state)
                     return
                 if not _cancel_close(client, state, current, iso_id):
+                    if historical:
+                        state.setdefault("historical_recovery", {})["execution_status"] = "RECONCILIATION_REQUIRED"
+                        _STORE.save(state)
                     return
                 is_reversal = True
             limit = _entry_limit(now)
