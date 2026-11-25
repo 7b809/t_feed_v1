@@ -26,7 +26,8 @@ def test_cleanup_targets_reject_traversal_and_source_directories(monkeypatch):
 
     names = {path.name for path in _configured_targets()}
 
-    assert names == {"data", "logs"}
+    # DATA_DIR remains protected until a verified MEGA backup completes.
+    assert names == {"logs"}
 
 
 def test_cleanup_can_be_explicitly_disabled(monkeypatch):
