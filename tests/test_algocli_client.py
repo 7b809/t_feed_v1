@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from clients.algocli_client import AlgoCLIClient, AlgoCLIError, AlgoCLIWriteAmbiguous
+from clients.algocli_client import ALGOAI_BIN, AlgoCLIClient, AlgoCLIError, AlgoCLIWriteAmbiguous
 
 
 def test_json_parser_accepts_cli_status_lines():
@@ -60,18 +60,33 @@ def test_invokes_only_algoai_cli_with_skip_permissions(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
     result = client._run("get_ltp.txt", {})
     assert captured["command"] == [
-        "algoai", "--skip-permissions", "--prompt", "Use skill. Return JSON."
+        ALGOAI_BIN, "--skip-permissions", "--prompt", "Use skill. Return JSON."
     ]
     assert "cwd" not in captured["kwargs"]
     result_data = result["response"]
     assert result_data == {"data": {"last_price": 123.4}}
 
 
-def test_missing_algoai_command_fails_closed(monkeypatch):
+def test_missing_algoai_command_records_template_prompt_executable_and_stage(monkeypatch):
     client = AlgoCLIClient()
-    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError()))
-    with pytest.raises(AlgoCLIError, match="algoai"):
-        client._run("get_ltp.txt", {})
+    rendered = "Use the upstox skill to fetch LTP for NSE_FO|12345."
+    monkeypatch.setattr(client, "_template", lambda name, values: rendered)
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        lambda *a, **k: (_ for _ in ()).throw(FileNotFoundError("executable not found")),
+    )
+
+    with pytest.raises(AlgoCLIError, match="Could not launch AlgoAI"):
+        client._run("get_ltp.txt", {"instrument_key": "NSE_FO|12345"})
+
+    assert client.last_execution["template"] == "get_ltp.txt"
+    assert client.last_execution["prompt"] == rendered
+    assert client.last_execution["executable"] == ALGOAI_BIN
+    assert client.last_execution["stage"] == "GET_LTP"
+    assert client.last_execution["launch_attempted"] is True
+    assert client.last_execution["process_started"] is False
+    assert client.last_execution["outcome"] == "LAUNCH_FAILED"
+    assert "FileNotFoundError" in client.last_execution["error"]
 
 
 def test_nonzero_write_exit_is_ambiguous(monkeypatch):
