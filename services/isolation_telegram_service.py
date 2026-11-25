@@ -378,7 +378,7 @@ def send_existing_isolation_test(record: dict) -> bool:
     try:
         message = _build_isolation_message(record)
         message = "🧪 <b>TEST MESSAGE · EXISTING ISOLATION DATA</b>\n\n" + message
-        return send_isolation_html(message)
+        return send_group_html(message)
     except Exception:
         logger.exception("Could not format existing-isolation Telegram test")
         return False
