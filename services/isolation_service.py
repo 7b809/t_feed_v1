@@ -342,6 +342,19 @@ class IsolationService:
             archive_path = self.archive.save_isolation(record)
         except Exception:
             logger.exception("Local isolation archive failed; Mongo record remains saved")
+        # Historical Supertrend recovery is queued only after the isolation
+        # record is durable. It uses a dedicated worker and the same GTT
+        # safeguards as live signals; failures never block live feed startup.
+        try:
+            from services.live_gtt_execution_service import (
+                dispatch_pre_isolation_supertrend_recovery,
+            )
+            dispatch_pre_isolation_supertrend_recovery(record, self.access_token)
+        except Exception:
+            logger.exception(
+                "Could not queue pre-isolation Supertrend recovery; live flow remains active"
+            )
+
         # Optional live-feed archive is strictly best-effort. It must never
         # block or roll back the already-persisted isolation.
         try:
