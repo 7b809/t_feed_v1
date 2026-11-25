@@ -313,23 +313,23 @@ class IsolationService:
             opposite_leg=opposite_leg,
         )
 
-        # Load the already-computed Supertrend document for this exact isolated
-        # option contract. This is metadata/data only: it does not dispatch or
-        # execute historical signals.
+        # Attach any snapshot already retained by the live WebSocket manager.
+        # Recovery also waits briefly for the exact instrument's snapshot.
         try:
-            from services.isolation_supertrend_backfill_service import (
-                load_isolated_supertrend_backfill,
+            from services.supertrend_snapshot_cache import get_supertrend_snapshot
+            record["supertrend_backfill"] = get_supertrend_snapshot(
+                record.get("instrument_key"),
+                record.get("trade_date_ist"),
             )
-            record["supertrend_backfill"] = load_isolated_supertrend_backfill(record)
         except Exception:
             logger.exception(
-                "Supertrend backfill load failed; isolation continues | instrument=%s",
+                "Supertrend WebSocket snapshot lookup failed; isolation continues | instrument=%s",
                 record.get("instrument_key"),
             )
             record["supertrend_backfill"] = {
-                "status": "error",
+                "status": "snapshot_unavailable",
                 "is_backfill": True,
-                "source": "mega_supertrend_json",
+                "source": "supertrend_websocket_snapshot",
                 "signal_count": 0,
                 "data": None,
             }
