@@ -1,11 +1,12 @@
 """Telegram notifications for isolation lifecycle events.
 
 General runtime notifications continue to use TELEGRAM_CHAT_ID.
-New isolation announcements are routed only to TELEGRAM_GROUP_CHAT_ID.
+Isolation announcements and Supertrend alerts are sent to each enabled Telegram destination.
 """
 from __future__ import annotations
 
 import html
+from urllib.parse import quote
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,9 @@ from core.config import (
     TELEGRAM_GROUP_ENABLED,
     TELEGRAM_GROUP_CHAT_ID,
     TIMEZONE,
+    CHART_BASE_URL,
+    INSTRUMENT_KEYS,
+    INDEX_METADATA,
 )
 from core.logger import get_logger
 
@@ -91,6 +95,33 @@ def send_group_html(message: str) -> bool:
     return _post_html(TELEGRAM_GROUP_CHAT_ID, message, "isolation-group")
 
 
+def send_isolation_html(message: str) -> bool:
+    """Send an isolation-related message to every configured Telegram destination.
+
+    The official group and legacy/private chat are independent opt-ins.
+    Duplicate chat IDs are delivered only once.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        return False
+
+    destinations = []
+    if TELEGRAM_GROUP_ENABLED and TELEGRAM_GROUP_CHAT_ID:
+        destinations.append((TELEGRAM_GROUP_CHAT_ID, "isolation-group"))
+    if TELEGRAM_ENABLED and TELEGRAM_CHAT_ID:
+        destinations.append((TELEGRAM_CHAT_ID, "isolation-chat"))
+
+    delivered = False
+    seen = set()
+    for chat_id, label in destinations:
+        if chat_id in seen:
+            continue
+        seen.add(chat_id)
+        delivered = _post_html(chat_id, message, label) or delivered
+    if not destinations:
+        logger.warning("Isolation Telegram notification skipped: no enabled destination is configured")
+    return delivered
+
+
 def _post_html(chat_id: str, message: str, label: str) -> bool:
     try:
         response = requests.post(
@@ -135,13 +166,61 @@ def _format_leg(title: str, leg: dict, *, isolated: bool = False) -> list[str]:
             f"{_safe(leg.get('segment'))}"
         ),
     ]
-    ltp = _first(leg.get("ltp_at_isolation"), leg.get("ltp"))
+    ltp = _first(leg.get("ltp_at_isolation"), leg.get("isolated_option_ltp"), leg.get("ltp"))
     if isolated:
         lines.append(
             f"Option LTP at isolation: <b>{_number(ltp)}</b> "
             f"({_safe(_first(leg.get('ltp_source'), leg.get('option_ltp_source')))})"
         )
     return lines
+
+
+def format_chart_links(record: dict) -> list[str]:
+    """Build safe chart links for both option legs, trigger index and configured main indexes."""
+    if not CHART_BASE_URL:
+        return []
+
+    archive = record if isinstance(record, dict) else {}
+    is_archive = isinstance(archive.get("source_record"), dict)
+    source = archive.get("source_record") if is_archive else archive
+    source = source if isinstance(source, dict) else {}
+    instruments = archive.get("instruments") if is_archive else {}
+    instruments = instruments if isinstance(instruments, dict) else {}
+    isolated = instruments.get("isolated") if instruments else source
+    opposite = instruments.get("opposite") if instruments else source.get("opposite_leg")
+    trigger = archive.get("trigger") if is_archive else {}
+    trigger = trigger if isinstance(trigger, dict) else {}
+    trigger_key = trigger.get("index") or source.get("trigger_index")
+
+    items = []
+    def add(key, label):
+        key = str(key or "").strip()
+        if key and all(existing[0] != key for existing in items):
+            items.append((key, label))
+
+    if isinstance(isolated, dict):
+        add(isolated.get("instrument_key"), "Isolated instrument")
+    if isinstance(opposite, dict):
+        add(opposite.get("instrument_key"), "Opposite instrument")
+    if trigger_key:
+        canonical = (
+            trigger.get("canonical")
+            or source.get("trigger_index_canonical")
+            or INDEX_METADATA.get(trigger_key, {}).get("canonical")
+            or trigger_key
+        )
+        add(trigger_key, f"Trigger index ({canonical})")
+
+    # Include every configured main index so recipients can compare the
+    # isolated contract with the wider index context.
+    for key in INSTRUMENT_KEYS:
+        meta = INDEX_METADATA.get(key, {})
+        add(key, f"Main index ({meta.get('canonical') or key})")
+
+    return [
+        f'<a href="{html.escape(CHART_BASE_URL + "/chart/" + quote(key, safe=""), quote=True)}">📈 {html.escape(label)}</a>'
+        for key, label in items
+    ]
 
 
 def _build_isolation_message(record: dict) -> str:
@@ -268,21 +347,24 @@ def _build_isolation_message(record: dict) -> str:
         f"Status: <b>{_safe(_first(source.get('status'), archive_doc.get('status'), 'ACTIVE'))}</b>",
         f"Isolation ID: <code>{_safe(_first(archive_doc.get('isolation_id'), source.get('isolation_id')))}</code>",
     ]
+    chart_links = format_chart_links(archive_doc)
+    if chart_links:
+        lines += ["", "📊 <b>CHARTS</b>", *chart_links]
     return "\n".join(lines)
 
 
 def notify_isolation_created(record: dict, archive_path: str | None = None) -> bool:
-    """Send a full isolation announcement only to TELEGRAM_GROUP_CHAT_ID."""
+    """Send the isolation announcement to all enabled Telegram destinations."""
     try:
         message = _build_isolation_message(record)
-        return send_group_html(message)
+        return send_isolation_html(message)
     except Exception:
         logger.exception("Could not format isolation group notification")
         return False
 
 
 def send_existing_isolation_test(record: dict) -> bool:
-    """Send the saved isolation snapshot as a clearly labelled group-only test."""
+    """Send the saved isolation snapshot as a clearly labelled test."""
     try:
         message = _build_isolation_message(record)
         message = "🧪 <b>TEST MESSAGE · EXISTING ISOLATION DATA</b>\n\n" + message
