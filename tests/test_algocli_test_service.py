@@ -50,7 +50,7 @@ def _call(tmp_path, monkeypatch, **overrides):
 
 
 def test_dry_run_generates_prompt_and_saves_each_artifact(tmp_path, monkeypatch):
-    result, client = _call(tmp_path, monkeypatch, api_token="DO_NOT_SAVE")
+    result, client = _call(tmp_path, monkeypatch)
     assert result["status"] == "DRY_RUN"
     assert result["executed"] is False
     assert client.last_execution == {}
