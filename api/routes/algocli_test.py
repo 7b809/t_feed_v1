@@ -81,7 +81,7 @@ def test_get_positions(background_tasks: BackgroundTasks, x_api_key: str | None 
         service = AlgoCLITestService()
         job = service.prepare_get_positions_health()
         background_tasks.add_task(AlgoCLITestService().run_get_positions_health, job["operation_id"], job["artifact_directory"])
-        return {"status": "ACCEPTED", "message": "AlgoAI positions health check accepted and queued.", **job}
+        return {"status": "success", "job_status": "ACCEPTED", "message": "AlgoAI positions health check accepted and queued.", **job}
     except Exception as exc:
         logger.exception("Could not queue AlgoAI get-positions health check")
         raise HTTPException(status_code=500, detail="AlgoAI get-positions health check could not be queued.") from exc
