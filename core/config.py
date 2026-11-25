@@ -356,7 +356,7 @@ API_PORT = int(os.getenv("API_PORT", "8001"))
 ALGOCLI_TEST_API_ENABLED = os.getenv("ALGOCLI_TEST_API_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 ALGOCLI_TEST_API_KEY = os.getenv("ALGOCLI_TEST_API_KEY", "").strip()
 ALGOCLI_TEST_LIVE_WRITES_ENABLED = os.getenv("ALGOCLI_TEST_LIVE_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-ALGOCLI_TEST_DATA_DIR = os.getenv("ALGOCLI_TEST_DATA_DIR", "data/tests").strip() or "data/tests"
+ALGOCLI_TEST_DATA_DIR = os.getenv("ALGOCLI_TEST_DATA_DIR", "data/algocli_tests").strip() or "data/algocli_tests"
 
 # ---------------------------------------------------------------------------
 # Daily MEGA data backup
