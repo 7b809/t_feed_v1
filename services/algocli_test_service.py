@@ -224,7 +224,7 @@ class AlgoCLITestService:
         }
         _write_json(output_dir / "request.json", request)
         (output_dir / "prompt.txt").write_text(
-            self.client._template(template_name, {}) + "\\n",
+            self.client._template(template_name, {}) + "\n",
             encoding="utf-8",
         )
         _write_json(output_dir / "response.json", {
