@@ -77,7 +77,13 @@ def position_index(positions: list[dict]) -> dict[tuple[str, str], dict]:
             str(position.get("instrument_token") or ""),
             str(position.get("product") or "").upper(),
         )
-        if key[0]:
+        if not key[0]:
+            continue
+        if key in result:
+            # Upstox may expose both day/net records for a key. Never choose
+            # one silently; mark it ambiguous so no automatic square-off occurs.
+            result[key] = {"_ambiguous": True}
+        else:
             result[key] = position
     return result
 
