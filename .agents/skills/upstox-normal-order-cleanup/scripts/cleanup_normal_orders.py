@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT / "upstox" / "scripts"))
 
 from order_cleanup_helpers import (
     cancel_normal_order, fingerprint, get_snapshot, market_exit, plain,
-    position_index, position_quantity, signed_trade_quantity, data_records,
+    position_index, position_quantity, signed_trade_quantity, data_records, verify_order,
 )
 from upstox_helpers import order_api
 
@@ -110,8 +110,8 @@ def execute(plan: dict) -> dict:
     for item in plan["exit"]:
         key = (item["instrument_token"], item["product"])
         still_planned = next((x for x in fresh_plan["exit"] if (x["instrument_token"], x["product"]) == key), None)
-        if not still_planned:
-            result["skipped"].append({"instrument_token": key[0], "product": key[1], "reason": "Position no longer passes fresh post-cancellation reconciliation; no exit submitted."})
+        if not still_planned or still_planned["quantity"] != item["quantity"] or still_planned["net_position_quantity"] != item["net_position_quantity"]:
+            result["skipped"].append({"instrument_token": key[0], "product": key[1], "reason": "Position no longer matches the exact approved quantity after cancellations; no exit submitted."})
             continue
         # Do not square off if a cancellation for this key failed.
         if any(x.get("order_id") in failed_ids and (x.get("instrument_token"), x.get("product")) == key for x in plan["cancel"]):
@@ -120,7 +120,8 @@ def execute(plan: dict) -> dict:
         try:
             response = market_exit(key[0], key[1], still_planned["quantity"], still_planned["net_position_quantity"], "normal-order-cleanup")
             ids = list(getattr(getattr(response, "data", None), "order_ids", []) or [])
-            result["exited"].append({"instrument_token": key[0], "product": key[1], "exit_order_ids": ids, "api_response": plain(response)})
+            checks = [verify_order(str(oid)) for oid in ids]
+            result["exited"].append({"instrument_token": key[0], "product": key[1], "exit_order_ids": ids, "verification": checks, "api_response": plain(response)})
         except Exception as exc:
             result["failed"].append({"instrument_token": key[0], "product": key[1], "action": "market_exit", "error": str(exc)})
     result["status"] = "success" if not result["failed"] else "partial"
