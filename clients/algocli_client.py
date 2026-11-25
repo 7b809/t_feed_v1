@@ -7,7 +7,7 @@ credentials are configured or accessed by this application.
 """
 from __future__ import annotations
 
-import json
+import json,os
 import re
 import signal
 import subprocess
@@ -22,6 +22,10 @@ from core.logger import get_logger
 logger = get_logger(__file__)
 CLI_TIMEOUT_SECONDS = 180
 
+ALGOAI_BIN = os.getenv(
+    "ALGOAI_BIN",
+    "/home/ubuntu/.local/bin/algoai",
+)
 
 def _redact_text(value: str) -> str:
     value = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]+=*", r"\1[REDACTED]", value)
@@ -108,7 +112,12 @@ class AlgoCLIClient:
 
         # Invoke only the installed CLI. No project path, script, interpreter,
         # custom working directory, or broker credential is passed.
-        command = ["algoai", "--skip-permissions", "--prompt", prompt]
+        command = [
+            ALGOAI_BIN,
+            "--skip-permissions",
+            "--prompt",
+            prompt,
+        ]
         started = time.monotonic()
         try:
             proc = subprocess.Popen(
