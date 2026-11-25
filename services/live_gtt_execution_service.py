@@ -186,17 +186,21 @@ def _adjust_stop(entry, raw, levels):
 
 
 def _adjust_trailing_stop(entry, raw, levels):
-    """GTT 2: nearest S-level below entry, but never place SL above the 30% stop."""
+    """GTT 2: use the nearest support strictly below the percentage SL.
+
+    A support above the percentage stop must not widen the permitted loss.
+    If no valid support is below the percentage stop, retain the percentage SL.
+    """
     supports = [
         (name, value)
         for name in ("S1", "S2", "S3")
         if (value := _num(levels.get(name))) is not None
         and 0 < value < entry
+        and value < raw
     ]
     if supports:
         level_name, level_value = max(supports, key=lambda item: item[1])
-        stop = min(raw, level_value)
-        selected = level_name if stop == level_value else "PERCENTAGE"
+        stop, selected = level_value, level_name
     else:
         level_name, level_value = None, None
         stop, selected = raw, "PERCENTAGE"
@@ -208,7 +212,7 @@ def _adjust_trailing_stop(entry, raw, levels):
         "selected_level": selected,
         "pivot_levels": levels,
         "support_adjustment_applied": selected != "PERCENTAGE",
-        "rule": "min(30_percent_stop, nearest_support_below_entry)",
+        "rule": "nearest_support_below_percentage_stop_or_percentage_fallback",
     }
 
 
