@@ -48,7 +48,10 @@ def seed_option_chain_history(
     destination = Path(destination)
     isolation_root = Path(os.getenv("ISOLATED_DATA_DIR", "data/isolated"))
     manifest_path = isolation_root / ".option_chain_history_seed.json"
-    seed_id = "|".join((str(trade_date), str(role), str(indicator), str(instrument_key), selected_interval))
+    seed_parts = (str(trade_date), str(role), str(indicator), str(instrument_key))
+    if indicator == "supertrend" and selected_interval != "1m":
+        seed_parts += (selected_interval,)
+    seed_id = "|".join(seed_parts)
 
     with _LOCK:
         try:
