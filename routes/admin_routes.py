@@ -696,10 +696,16 @@ def _run_full_refresh_sync(
 
     # ---- 2. Token cache refresh --------------------------------------- #
     token_refresh_ok = True
+    token_changed = False
     try:
-        token_service.refresh_tokens()
+        token_changed = token_service.force_refresh_tokens()
+        logger.info(
+            "[%s] forced MongoDB token fetch completed — changed=%s",
+            reason,
+            token_changed,
+        )
     except Exception:
-        logger.exception("[%s] token refresh failed", reason)
+        logger.exception("[%s] forced MongoDB token fetch failed", reason)
         token_refresh_ok = False
 
     # ---- 3. Token validity check -------------------------------------- #
@@ -766,14 +772,21 @@ def _run_full_refresh_sync(
 
     # ---- 6. Live feed ------------------------------------------------- #
     feed_ok = False
-    try:
-        feed_running = bool(live_feed_service.status().get("running"))
-        if feed_running:
-            feed_ok = live_feed_service.restart()
-        else:
-            feed_ok = live_feed_service.start()
-    except Exception:
-        logger.exception("[%s] live feed start/restart failed", reason)
+    if not token_refresh_ok:
+        logger.error(
+            "[%s] live-feed start/restart skipped — forced MongoDB token fetch failed; "
+            "keeping the existing worker state rather than reconnecting with a stale token",
+            reason,
+        )
+    else:
+        try:
+            feed_running = bool(live_feed_service.status().get("running"))
+            if feed_running:
+                feed_ok = live_feed_service.restart()
+            else:
+                feed_ok = live_feed_service.start()
+        except Exception:
+            logger.exception("[%s] live feed start/restart failed", reason)
 
     # ---- 6a. External EMA V2 S/R for the four core indexes ----------- #
     # Independent of option isolation: always maintain index S/R streams.
