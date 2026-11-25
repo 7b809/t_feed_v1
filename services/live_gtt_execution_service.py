@@ -403,7 +403,10 @@ def _extract_id(value, names=("gtt_order_id", "gtt_id", "order_id", "id")):
 
 
 def _position_qty(client, key):
-    rows = [x for x in client.get_positions()
+    client.current_stage = "GET_POSITIONS"
+    positions = client.get_positions()
+    client.current_stage = "VALIDATE_POSITION"
+    rows = [x for x in positions
             if str(x.get("instrument_token") or x.get("instrument_key") or "") == key]
     if len(rows) > 1:
         raise RuntimeError("Multiple position rows for one instrument; manual reconciliation required")
@@ -809,6 +812,7 @@ def _process(record, payload, received_at, role):
             leg = _leg(record, direction)
             plan = _plan(client, leg, now.date().isoformat())
             # Never combine this strategy with an unrelated/manual position.
+            client.current_stage = "CHECK_EXISTING_POSITION"
             if _position_qty(client, plan["instrument_key"]) != 0:
                 raise RuntimeError("A pre-existing position exists for the target instrument")
             signal = {"direction": direction, "signal_time": stamp, "signal_key": key,
@@ -819,20 +823,29 @@ def _process(record, payload, received_at, role):
             client_obj = locals().get("client")
             cli_meta = getattr(client_obj, "last_execution", {}) if client_obj else {}
             stage = (
-                cli_meta.get("stage")
-                or getattr(client_obj, "current_stage", None)
+                getattr(client_obj, "current_stage", None)
+                or cli_meta.get("stage")
                 or "PRE_ALGOCLI"
+            )
+            rendered_prompt = (
+                cli_meta.get("prompt")
+                if cli_meta.get("stage") == stage
+                else None
             )
             audit_contract = build_action_prompt("EXECUTION_BLOCKED", {
                 "isolation_id": iso_id, "signal_direction": direction,
                 "signal_time_ist": stamp.isoformat(), "reason": str(exc),
                 "execution_stage": stage,
             })
-            rendered_prompt = cli_meta.get("prompt")
             response = {
                 "accepted": False,
                 "reason": str(exc),
-                "cli_error": cli_meta.get("error") or str(exc),
+                "error": str(exc),
+                "cli_error": (
+                    cli_meta.get("error")
+                    if cli_meta.get("outcome") in {"LAUNCH_FAILED", "FAILED", "AMBIGUOUS"}
+                    else None
+                ),
                 "failed_stage": stage,
                 "executable": cli_meta.get("executable"),
                 "template": cli_meta.get("template"),
