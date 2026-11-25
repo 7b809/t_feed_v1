@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import hmac
 
-from fastapi import APIRouter, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from core.config import (
@@ -69,26 +68,38 @@ def test_place_gtt(
         raise HTTPException(status_code=500, detail="AlgoCLI test request could not be processed.") from exc
 
 
-@router.get("/get-positions")
-def test_get_positions(
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-):
-    """Run the read-only get_positions prompt to verify live AlgoAI health."""
+@router.get("/get-positions", status_code=202)
+def test_get_positions(background_tasks: BackgroundTasks, x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    """Queue a read-only AlgoAI positions check and return without waiting for CLI."""
     if not ALGOCLI_TEST_API_ENABLED:
         raise HTTPException(status_code=404, detail="AlgoCLI test API is disabled.")
     if not ALGOCLI_TEST_API_KEY:
         raise HTTPException(status_code=503, detail="ALGOCLI_TEST_API_KEY is not configured.")
     if not x_api_key or not hmac.compare_digest(x_api_key, ALGOCLI_TEST_API_KEY):
         raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
-
     try:
-        result = AlgoCLITestService().get_positions_health()
-        if result.get("status") != "HEALTHY":
-            return JSONResponse(status_code=502, content=result)
-        return result
+        service = AlgoCLITestService()
+        job = service.prepare_get_positions_health()
+        background_tasks.add_task(AlgoCLITestService().run_get_positions_health, job["operation_id"], job["artifact_directory"])
+        return {"status": "ACCEPTED", "message": "AlgoAI positions health check accepted and queued.", **job}
     except Exception as exc:
-        logger.exception("AlgoAI get-positions health check failed")
-        raise HTTPException(
-            status_code=500,
-            detail="AlgoAI get-positions health check could not be processed.",
-        ) from exc
+        logger.exception("Could not queue AlgoAI get-positions health check")
+        raise HTTPException(status_code=500, detail="AlgoAI get-positions health check could not be queued.") from exc
+
+
+@router.get("/get-positions/{operation_id}")
+def get_positions_health_result(operation_id: str, x_api_key: str | None = Header(default=None, alias="X-API-Key")):
+    """Read a queued health-check result without starting another CLI run."""
+    if not ALGOCLI_TEST_API_ENABLED:
+        raise HTTPException(status_code=404, detail="AlgoCLI test API is disabled.")
+    if not ALGOCLI_TEST_API_KEY:
+        raise HTTPException(status_code=503, detail="ALGOCLI_TEST_API_KEY is not configured.")
+    if not x_api_key or not hmac.compare_digest(x_api_key, ALGOCLI_TEST_API_KEY):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key.")
+    try:
+        result = AlgoCLITestService().read_get_positions_health(operation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Health-check operation was not found.")
+    return result
