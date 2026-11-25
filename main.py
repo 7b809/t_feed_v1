@@ -236,8 +236,10 @@ Admin surfaces mounted by this module:
 
 import asyncio
 import time
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
@@ -679,6 +681,7 @@ def _register_and_reconcile_sandbox(
 async def app_lifespan(app: FastAPI):
     loop = asyncio.get_running_loop()
     token_refresh_task: asyncio.Task | None = None
+    daily_viewer_refresh_task: asyncio.Task | None = None
 
     # Wire live-feed worker callbacks to the running FastAPI event loop
     # in every operating mode before any feed can be started.
@@ -695,6 +698,94 @@ async def app_lifespan(app: FastAPI):
                     await asyncio.to_thread(live_feed_service.restart, skip_sr_backfill=True)
                 except Exception:
                     logger.exception("[token-refresh] live-feed reconnect failed; worker will retry")
+
+    async def _daily_viewer_refresh() -> None:
+        """Mandatory weekday 08:00 refresh for read-only viewer deployments.
+
+        Viewer mode intentionally does not start the full engine scheduler.
+        It still needs a fresh MongoDB token read, provider validation, and
+        a clean Upstox feed reconnect before the market session.
+        """
+        try:
+            market_tz = ZoneInfo(getattr(config, "MARKET_TIMEZONE", "Asia/Kolkata"))
+        except Exception:
+            market_tz = ZoneInfo("Asia/Kolkata")
+
+        refresh_hour = int(getattr(config, "DAILY_REFRESH_HOUR", 8))
+        refresh_minute = int(getattr(config, "DAILY_REFRESH_MINUTE", 0))
+
+        while True:
+            now = datetime.now(market_tz)
+            next_run = now.replace(
+                hour=refresh_hour,
+                minute=refresh_minute,
+                second=0,
+                microsecond=0,
+            )
+            if next_run <= now:
+                next_run += timedelta(days=1)
+            while next_run.weekday() >= 5:
+                next_run += timedelta(days=1)
+
+            await asyncio.sleep(max(1.0, (next_run - now).total_seconds()))
+            logger.info(
+                "[daily-refresh][performance-viewer] starting mandatory refresh at %s",
+                datetime.now(market_tz).isoformat(),
+            )
+
+            try:
+                token_changed = await asyncio.to_thread(
+                    token_service.force_refresh_tokens
+                )
+                from token_tasks.token_monitor import check_upstox_token_validity
+
+                validation = await asyncio.to_thread(
+                    check_upstox_token_validity,
+                    send_success_message=False,
+                )
+                if not validation.get("valid"):
+                    logger.error(
+                        "[daily-refresh][performance-viewer] token validation failed; "
+                        "live-feed reconnect skipped"
+                    )
+                    telegram_service.send_message(
+                        "Daily Application Refresh Failed",
+                        "MongoDB token was fetched, but Upstox validation failed. "
+                        "The existing live-feed worker was not restarted.",
+                        level="ERROR",
+                    )
+                    continue
+
+                feed_ok = await asyncio.to_thread(
+                    live_feed_service.restart,
+                    skip_sr_backfill=True,
+                )
+                logger.info(
+                    "[daily-refresh][performance-viewer] completed "
+                    "token_changed=%s token_valid=%s feed_restarted=%s",
+                    token_changed,
+                    validation.get("valid"),
+                    feed_ok,
+                )
+                telegram_service.send_message(
+                    "Daily Application Refresh Complete",
+                    (
+                        "08:00 IST viewer-mode refresh completed.\n"
+                        f"MongoDB token changed: {token_changed}\n"
+                        f"Upstox token valid: {bool(validation.get('valid'))}\n"
+                        f"Live feed restarted: {bool(feed_ok)}"
+                    ),
+                    level="SUCCESS" if feed_ok else "WARNING",
+                )
+            except Exception as exc:
+                logger.exception(
+                    "[daily-refresh][performance-viewer] mandatory refresh failed"
+                )
+                telegram_service.send_message(
+                    "Daily Application Refresh Failed",
+                    f"{type(exc).__name__}: {exc}",
+                    level="ERROR",
+                )
 
 
     # The V5 performance viewer is a consumer of upstream daily snapshots.
@@ -719,6 +810,17 @@ async def app_lifespan(app: FastAPI):
         token_refresh_task = asyncio.create_task(
             _periodic_token_refresh(), name="upstox-token-cache-refresh"
         )
+        if config.PERFORMANCE_VIEWER_MODE:
+            daily_viewer_refresh_task = asyncio.create_task(
+                _daily_viewer_refresh(),
+                name="daily-viewer-application-refresh",
+            )
+            logger.info(
+                "[daily-refresh] viewer-mode mandatory refresh scheduled for %02d:%02d %s (weekdays)",
+                int(getattr(config, "DAILY_REFRESH_HOUR", 8)),
+                int(getattr(config, "DAILY_REFRESH_MINUTE", 0)),
+                config.MARKET_TIMEZONE,
+            )
 
         if not config.PERFORMANCE_VIEWER_MODE:
             # Full strategy/market-engine startup remains available only
@@ -999,12 +1101,13 @@ async def app_lifespan(app: FastAPI):
         yield
 
     finally:
-        if token_refresh_task is not None:
-            token_refresh_task.cancel()
-            try:
-                await token_refresh_task
-            except asyncio.CancelledError:
-                pass
+        for task in (token_refresh_task, daily_viewer_refresh_task):
+            if task is not None:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
         # ---- Shutdown handling ----------------------------------------- #
         telegram_service.send_message(
             "Application Stopping",
