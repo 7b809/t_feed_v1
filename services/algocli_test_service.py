@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -83,7 +84,7 @@ class AlgoCLITestService:
         now = datetime.now(IST)
         timestamp = now.strftime("%Y%m%d_%H%M%S_%f")
         folder_name = f"{timestamp}_{operation_id}"
-        output_dir = self.root / folder_name
+        output_dir = self.root / "place_gtt" / folder_name
 
         # The current place_gtt prompt intentionally supports immediate market
         # entry only. Refuse unsupported limit/trigger-entry semantics.
@@ -203,80 +204,66 @@ class AlgoCLITestService:
         }
 
 
-    def get_positions_health(self) -> dict:
-        """Execute the read-only get_positions prompt and archive the health check."""
+    def prepare_get_positions_health(self) -> dict:
+        """Persist a queued job and return immediately without launching AlgoAI."""
         operation_id = uuid.uuid4().hex
-        started_at = datetime.now(IST)
-        started_monotonic = __import__("time").monotonic()
-        output_dir = self.root / (
-            f"{started_at.strftime('%Y%m%d_%H%M%S_%f')}_get-positions_{operation_id[:8]}"
-        )
+        created_at = datetime.now(IST)
+        folder_name = f"{created_at.strftime('%Y%m%d_%H%M%S_%f')}_{operation_id}"
+        output_dir = self.root / "get_positions" / folder_name
+        output_dir.mkdir(parents=True, exist_ok=False)
         template_name = "get_positions.txt"
         prompt_path = "prompts/algocli/get_positions.txt"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        request = {
-            "operation_id": operation_id,
-            "method": "GET",
-            "endpoint": "/api/algocli-test/get-positions",
-            "prompt_template": prompt_path,
-            "read_only": True,
-        }
+        prompt = self.client._template(template_name, {})
+        artifact_files = ["request.json", "prompt.txt", "response.json", "metadata.json"]
+        request = {"operation_id": operation_id, "method": "GET", "endpoint": "/api/algocli-test/get-positions", "prompt_template": prompt_path, "read_only": True, "created_at_ist": created_at.isoformat()}
+        metadata = {"operation_id": operation_id, "status": "ACCEPTED", "prompt_template": prompt_path, "created_at_ist": created_at.isoformat(), "artifact_files": artifact_files}
         _write_json(output_dir / "request.json", request)
-        (output_dir / "prompt.txt").write_text(
-            self.client._template(template_name, {}) + "\n",
-            encoding="utf-8",
-        )
-        _write_json(output_dir / "response.json", {
-            "status": "RUNNING",
-            "operation_id": operation_id,
-        })
+        (output_dir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
+        _write_json(output_dir / "response.json", {"status": "ACCEPTED", "operation_id": operation_id, "message": "Queued; AlgoAI execution has not completed yet."})
+        _write_json(output_dir / "metadata.json", metadata)
+        result_path = (output_dir / "response.json").as_posix()
+        logger.info("AlgoAI get-positions health check accepted | operation=%s | result=%s", operation_id, result_path)
+        return {"operation_id": operation_id, "artifact_directory": output_dir.as_posix(), "result_path": result_path, "status_url": f"/api/algocli-test/get-positions/{operation_id}", "files": artifact_files}
 
-        response: dict[str, Any]
+    def run_get_positions_health(self, operation_id: str, artifact_directory: str) -> None:
+        """Background worker: execute AlgoAI and replace the queued result with final output."""
+        output_dir = Path(artifact_directory)
+        response_path = output_dir / "response.json"
+        metadata_path = output_dir / "metadata.json"
+        started_at = datetime.now(IST)
+        started_monotonic = time.monotonic()
+        template_name = "get_positions.txt"
+        prompt_path = "prompts/algocli/get_positions.txt"
         outcome = "UNHEALTHY"
         try:
-            # Use _run directly so the API returns the full parsed AlgoAI
-            # response and execution metadata, rather than only a positions
-            # list extracted by the convenience client method.
-            result = self.client._run(template_name, {"operation_id": operation_id})
+            _write_json(response_path, {"status": "RUNNING", "operation_id": operation_id, "message": "AlgoAI is processing the get-positions prompt."})
+            _write_json(metadata_path, {"operation_id": operation_id, "status": "RUNNING", "prompt_template": prompt_path, "started_at_ist": started_at.isoformat(), "artifact_files": ["request.json", "prompt.txt", "response.json", "metadata.json"]})
+            result = self.client._run(template_name, {"operation_id": operation_id}, write=False)
             response = _redact(result)
             outcome = "HEALTHY"
         except Exception as exc:
             logger.exception("AlgoAI health check execution failed | operation=%s", operation_id)
-            response = {
-                "error": _redact(str(exc)),
-                "cli_execution": _redact(getattr(self.client, "last_execution", {})),
-            }
-
-        duration = round(__import__("time").monotonic() - started_monotonic, 3)
+            response = {"error": _redact(str(exc)), "cli_execution": _redact(getattr(self.client, "last_execution", {}))}
+        duration = round(time.monotonic() - started_monotonic, 3)
         completed_at = datetime.now(IST)
         execution = _redact(getattr(self.client, "last_execution", {}))
-        metadata = {
-            "operation_id": operation_id,
-            "status": outcome,
-            "prompt_template": prompt_path,
-            "started_at_ist": started_at.isoformat(),
-            "completed_at_ist": completed_at.isoformat(),
-            "duration_seconds": duration,
-            "cli_execution": execution,
-            "artifact_files": ["request.json", "prompt.txt", "response.json", "metadata.json"],
-        }
-        archived_response = {
-            "status": outcome,
-            "operation_id": operation_id,
-            "healthy": outcome == "HEALTHY",
-            "duration_seconds": duration,
-            "response": response,
-        }
-        _write_json(output_dir / "response.json", archived_response)
-        _write_json(output_dir / "metadata.json", metadata)
+        final_response = {"status": outcome, "operation_id": operation_id, "healthy": outcome == "HEALTHY", "duration_seconds": duration, "response": response}
+        final_metadata = {"operation_id": operation_id, "status": outcome, "prompt_template": prompt_path, "started_at_ist": started_at.isoformat(), "completed_at_ist": completed_at.isoformat(), "duration_seconds": duration, "cli_execution": execution, "artifact_files": ["request.json", "prompt.txt", "response.json", "metadata.json"]}
+        _write_json(response_path, final_response)
+        _write_json(metadata_path, final_metadata)
+        logger.info("AlgoAI get-positions health check finished | status=%s | operation=%s | duration=%.3fs", outcome, operation_id, duration)
 
-        logger.info(
-            "AlgoAI get-positions health check %s | operation=%s | duration=%.3fs | cli_outcome=%s",
-            outcome, operation_id, duration, execution.get("outcome", "UNKNOWN"),
-        )
-        return {
-            **archived_response,
-            "artifact_directory": output_dir.as_posix(),
-            "files": metadata["artifact_files"],
-        }
+    def read_get_positions_health(self, operation_id: str) -> dict | None:
+        """Return the saved status/result for an operation; never launches AlgoAI."""
+        if not re.fullmatch(r"[0-9a-f]{32}", operation_id or ""):
+            raise ValueError("Invalid operation_id.")
+        parent = self.root / "get_positions"
+        matches = list(parent.glob(f"*_{operation_id}"))
+        if not matches:
+            return None
+        output_dir = matches[0]
+        response_path = output_dir / "response.json"
+        if not response_path.is_file():
+            return None
+        result = json.loads(response_path.read_text(encoding="utf-8"))
+        return {**result, "artifact_directory": output_dir.as_posix(), "result_path": response_path.as_posix()}
