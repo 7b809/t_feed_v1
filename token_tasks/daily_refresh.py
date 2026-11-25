@@ -79,8 +79,8 @@ def run_daily_refresh() -> None:
 
         if critical_failures:
             message = (
-                "08:00 IST application refresh finished with critical failures.\\n"
-                f"Failed stages: {', '.join(critical_failures)}\\n"
+                "08:00 IST application refresh finished with critical failures.\n"
+                f"Failed stages: {', '.join(critical_failures)}\n"
                 "The daily success marker was NOT written."
             )
             logger.error(
