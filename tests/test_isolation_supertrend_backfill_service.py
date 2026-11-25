@@ -124,3 +124,19 @@ def test_price_recovery_neutral_threshold_blocks_small_move():
     )
     assert result["status"] == "no_valid_signal"
     assert result["direction"] is None
+
+
+def test_websocket_snapshot_cache_exact_key_and_deduplication():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from services.supertrend_snapshot_cache import clear_supertrend_snapshot_cache, get_supertrend_snapshot, update_supertrend_snapshot_cache
+    clear_supertrend_snapshot_cache()
+    day = datetime.now(ZoneInfo('Asia/Kolkata')).date().isoformat()
+    snap = {'event':'snapshot','instrument_key':'NSE_FO|1','indicator':'supertrend','data_scope':'today_only','today_ist_date':day,'signals':[{'signal':'buy','confirmed_time':day+'T09:15:00+05:30','confirmed_time_price':100}]}
+    assert update_supertrend_snapshot_cache('NSE_FO|1', snap)
+    sig = {'event':'supertrend_signal','instrument_key':'NSE_FO|1','data_scope':'today_only','today_ist_date':day,'signal':'sell','confirmed_time':day+'T09:20:00+05:30','confirmed_time_price':110}
+    update_supertrend_snapshot_cache('NSE_FO|1', sig)
+    update_supertrend_snapshot_cache('NSE_FO|1', sig)
+    assert get_supertrend_snapshot('NSE_FO|1',day)['signal_count'] == 2
+    assert get_supertrend_snapshot('NSE_FO|2',day)['status'] == 'snapshot_unavailable'
+    clear_supertrend_snapshot_cache()
