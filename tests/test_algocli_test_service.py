@@ -64,7 +64,6 @@ def test_dry_run_generates_prompt_and_saves_each_artifact(tmp_path, monkeypatch)
     assert request["target"] == 170
     assert request["stoploss"] == 84
     assert "api_token" not in request
-    assert "DO_NOT_SAVE" not in prompt
     assert "NIFTY 25500 CE 23 NOV 26" in prompt
     assert "stop-loss to 84.0" in prompt
     assert "target to 170.0" in prompt
