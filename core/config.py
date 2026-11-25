@@ -166,11 +166,6 @@ ISOLATION_OPTION_LTP_WAIT_SECONDS = int(
     os.getenv("ISOLATION_OPTION_LTP_WAIT_SECONDS", "5")
 )
 
-# Read-only Supertrend history loaded when an instrument is first isolated.
-ISOLATION_SUPERTREND_BACKFILL_DIR = os.getenv(
-    "ISOLATION_SUPERTREND_BACKFILL_DIR", ""
-).strip()
-
 # Price-based pre-isolation Supertrend recovery. Historical decisions are
 # informational unless LIVE_GTT_EXECUTION_ENABLED is also enabled.
 ISOLATION_SUPERTREND_RECOVERY_ENABLED = (
@@ -182,6 +177,9 @@ ISOLATION_SUPERTREND_MIN_MOVE_PERCENT = float(
 )
 ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS = max(
     1, int(os.getenv("ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS", "60"))
+)
+ISOLATION_SUPERTREND_SNAPSHOT_WAIT_SECONDS = max(
+    0, int(os.getenv("ISOLATION_SUPERTREND_SNAPSHOT_WAIT_SECONDS", "15"))
 )
 
 # Scan-window bounds. The start reads ISOLATION_SCAN_START_* first so a
