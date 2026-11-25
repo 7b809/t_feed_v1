@@ -11,7 +11,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from core.logger import get_logger
-from services.isolation_telegram_service import send_group_html
+from services.isolation_telegram_service import send_isolation_html, format_chart_links
 
 logger = get_logger(__file__)
 IST = ZoneInfo("Asia/Kolkata")
@@ -224,8 +224,11 @@ def _message(record, direction, signal_time, prices, payload, now=None):
         f"Instrument key: <code>{instrument_key}</code>",
     ]
     timeframe = _find_value(payload, ("timeframe", "interval", "candle_interval"))
-    timeframe = timeframe or record.get("supertrend_timeframe") or os.getenv("SUPERTREND_TIMEFRAME") or "Not provided"
+    timeframe = timeframe or record.get("supertrend_timeframe") or os.getenv("SUPERTREND_TIMEFRAME") or "1min"
     lines.append(f"Supertrend timeframe: {_safe_text(timeframe)}")
+    chart_links = format_chart_links(record)
+    if chart_links:
+        lines += ["", "📊 <b>CHARTS</b>", *chart_links]
     return "\n".join(lines)
 
 
@@ -333,7 +336,7 @@ def _notify_isolated_supertrend_signal(record, payload, received_at=None, role="
 
         prices = _latest_prices(record, payload)
         message = _message(record, direction, signal_time, prices, payload, now=now)
-        if not send_group_html(message):
+        if not send_isolation_html(message):
             logger.error(
                 "Supertrend Telegram delivery failed | kind=%s | symbol=%s | signal_time=%s",
                 delivery_kind, record.get("trading_symbol"), signal_time.isoformat(),
