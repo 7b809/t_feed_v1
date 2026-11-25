@@ -114,7 +114,8 @@ def test_failed_early_delivery_does_not_block_first_post_cutoff_fallback(monkeyp
     assert not notifier.notify_isolated_supertrend_signal(
         record, _signal("2026-11-23T09:42:00+05:30")
     )
-    assert len(calls) == 3
+    # The successful first post-cutoff fallback suppresses later retries.
+    assert len(calls) == 2
 
 
 def test_duplicate_signal_is_not_sent_twice(monkeypatch, tmp_path):
@@ -139,7 +140,7 @@ def test_current_minute_archive_signal_before_isolation_is_sent_with_age(monkeyp
         '{"received_at_ist":"2026-11-23T09:21:02+05:30",'
         '"instrument_key":"NSE_FO|64473",'
         '"payload":{"event":"supertrend_signal","signal":"BULLISH",'
-        '"timestamp":"2026-11-23T09:21:00+05:30","timeframe":"1m"}}\\n',
+        '"timestamp":"2026-11-23T09:21:00+05:30","timeframe":"1m"}}' + "\n",
         encoding="utf-8",
     )
 
@@ -176,7 +177,7 @@ def test_current_minute_catchup_does_not_replay_previous_minute(monkeypatch, tmp
         '{"received_at_ist":"2026-11-23T09:20:59+05:30",'
         '"instrument_key":"NSE_FO|64473",'
         '"payload":{"event":"supertrend_signal","signal":"BULLISH",'
-        '"timestamp":"2026-11-23T09:20:00+05:30","timeframe":"1m"}}\\n',
+        '"timestamp":"2026-11-23T09:20:00+05:30","timeframe":"1m"}}' + "\n",
         encoding="utf-8",
     )
 
