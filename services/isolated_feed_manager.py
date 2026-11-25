@@ -110,11 +110,12 @@ class IsolatedFeedManager:
                 for interval in self.supertrend_intervals:
                     try:
                         destination = self._file_path(trade_date, role, key, "supertrend", interval=interval)
-                        if interval == "1m":
-                            from services.option_chain_history import seed_option_chain_history
-                            result = seed_option_chain_history(key, trade_date, role, "supertrend", destination)
-                            if result.get("state") == "seeded":
-                                logger.info("Seeded pre-isolation 1m Supertrend history role=%s key=%s rows=%s", role, key, result.get("rows"))
+                        from services.option_chain_history import seed_option_chain_history
+                        result = seed_option_chain_history(
+                            key, trade_date, role, "supertrend", destination, interval=interval,
+                        )
+                        if result.get("state") == "seeded":
+                            logger.info("Seeded pre-isolation Supertrend history role=%s key=%s interval=%s rows=%s", role, key, interval, result.get("rows"))
                         from services.option_chain_supertrend_service import register_option_chain_supertrend_archive
                         shared = register_option_chain_supertrend_archive(
                             key, destination, isolation_id, role, symbol or key, record=record, interval=interval
@@ -229,12 +230,15 @@ class IsolatedFeedManager:
                             "interval": interval,
                             "payload": payload,
                         }
-                        if indicator == "supertrend" and interval == "1m":
+                        if indicator == "supertrend":
                             try:
                                 from services.option_chain_history import seed_option_chain_history
-                                await asyncio.to_thread(seed_option_chain_history, key, trade_date, role, "supertrend", path)
+                                await asyncio.to_thread(
+                                    seed_option_chain_history, key, trade_date, role,
+                                    "supertrend", path, interval=interval,
+                                )
                             except Exception:
-                                logger.exception("Could not retry 1m Supertrend history seed key=%s", key)
+                                logger.exception("Could not retry Supertrend history seed key=%s interval=%s", key, interval)
                         await asyncio.to_thread(self._append_jsonl, path, row)
                         event = payload.get("event")
                         if event == "connection_ack":
