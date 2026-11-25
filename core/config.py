@@ -87,6 +87,9 @@ TELEGRAM_GROUP_ENABLED = (
 )
 TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID", "")
 
+# Public chart page base URL. Instrument keys are URL-encoded per notification.
+CHART_BASE_URL = os.getenv("CHART_BASE_URL", "").strip().rstrip("/")
+
 # ---------------------------------------------------------------------------
 # Upstox
 # ---------------------------------------------------------------------------
