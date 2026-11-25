@@ -25,7 +25,7 @@ GET  /api/v1/isolation/history              recent isolation history
 POST /api/v1/isolation/trigger              manual isolation scan
 POST /api/v1/isolation/backfill             manual startup backfill
 
-POST /api/isolation-test                    send a static dummy isolation
+POST /api/algocli-test/place-gtt              generate/execute a guarded AlgoCLI GTT test\nPOST /api/isolation-test                    send a static dummy isolation
                                             payload to each client URL and
                                             return per-URL HTTP result
 
@@ -53,6 +53,7 @@ from api.routes.isolation import (
     router as isolation_router,
     test_router as isolation_test_router,
 )
+from api.routes.algocli_test import router as algocli_test_router
 from api.routes.search import router as search_router
 from api.routes.market_feed import router as market_feed_router, shutdown_websocket_feeds
 from scheduler import start_scheduler
@@ -298,6 +299,7 @@ app = FastAPI(
 
 app.include_router(isolation_router)
 app.include_router(isolation_test_router)
+app.include_router(algocli_test_router)
 app.include_router(search_router)
 app.include_router(market_feed_router)
 
