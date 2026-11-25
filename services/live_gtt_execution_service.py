@@ -801,15 +801,23 @@ def _process(record, payload, received_at, role, *, historical=False, historical
                 if current.get("status") in {"ENTRY_INTENT_PERSISTED", "RECONCILIATION_REQUIRED", "REVERSAL_PENDING"}:
                     # An earlier write may have reached the broker. Reconcile manually; do not
                     # submit, cancel, close, or reverse automatically from an ambiguous state.
+                    if historical:
+                        state.setdefault("historical_recovery", {})["execution_status"] = "RECONCILIATION_REQUIRED"
+                        state["historical_recovery"]["execution_reason"] = "An existing entry is in an ambiguous state"
+                        _STORE.save(state)
                     return
                 if current.get("signal_direction") == direction:
                     state["processed_signal_keys"].append(key)
+                    if historical:
+                        state.setdefault("historical_recovery", {})["execution_status"] = "ALREADY_ACTIVE_SAME_DIRECTION"
                     _STORE.save(state)
                     return
                 late = now.time().replace(tzinfo=None) >= dt_time.fromisoformat(LIVE_GTT_LATE_ENTRY_START)
                 if late and not LIVE_GTT_LATE_ALLOW_REVERSAL:
                     if _cancel_close(client, state, current, iso_id):
                         state["processed_signal_keys"].append(key)
+                        if historical:
+                            state.setdefault("historical_recovery", {})["execution_status"] = "CLOSED_ONLY_LATE_REVERSAL_DISABLED"
                         _STORE.save(state)
                     return
                 if not _cancel_close(client, state, current, iso_id):
@@ -818,6 +826,8 @@ def _process(record, payload, received_at, role, *, historical=False, historical
             limit = _entry_limit(now)
             if limit <= 0 or int(state.get("entry_count", 0)) >= limit:
                 state["processed_signal_keys"].append(key)
+                if historical:
+                    state.setdefault("historical_recovery", {})["execution_status"] = "BLOCKED_ENTRY_LIMIT"
                 _STORE.save(state)
                 return
             leg = _leg(record, direction)
@@ -831,9 +841,25 @@ def _process(record, payload, received_at, role, *, historical=False, historical
                       "source": "historical_price_recovery" if historical else "live_supertrend"}
             if historical and isinstance(historical_evidence, dict):
                 signal["historical_recovery"] = historical_evidence
-            _submit(client, state, plan, signal, iso_id, is_reversal=is_reversal, chart_context=record)
+            submitted_entry = _submit(client, state, plan, signal, iso_id, is_reversal=is_reversal, chart_context=record)
+            if historical:
+                recovery = state.setdefault("historical_recovery", {})
+                recovery["execution_status"] = (
+                    "SUBMITTED" if submitted_entry.get("status") == "GTT_SUBMITTED"
+                    else "RECONCILIATION_REQUIRED" if submitted_entry.get("status") == "RECONCILIATION_REQUIRED"
+                    else "ATTEMPTED"
+                )
+                recovery["entry_id"] = submitted_entry.get("entry_id")
+                _STORE.save(state)
         except Exception as exc:
             logger.exception("Live GTT signal rejected/failed | isolation=%s", iso_id)
+            if historical:
+                state.setdefault("historical_recovery", {})["execution_status"] = "BLOCKED"
+                state["historical_recovery"]["execution_reason"] = str(exc)
+                try:
+                    _STORE.save(state, require_mongo=False)
+                except Exception:
+                    logger.exception("Could not persist historical recovery block state | isolation=%s", iso_id)
             client_obj = locals().get("client")
             cli_meta = getattr(client_obj, "last_execution", {}) if client_obj else {}
             stage = (
@@ -907,6 +933,8 @@ def _process_pre_isolation_recovery(record: dict, access_token: str) -> None:
         existing = state.get("historical_recovery")
         if isinstance(existing, dict) and existing.get("execution_status") in {
             "DISPATCH_INTENT_PERSISTED", "SUBMITTED", "BLOCKED", "NOT_REQUIRED",
+            "ALREADY_ACTIVE_SAME_DIRECTION", "CLOSED_ONLY_LATE_REVERSAL_DISABLED",
+            "BLOCKED_ENTRY_LIMIT", "RECONCILIATION_REQUIRED", "ATTEMPTED",
         }:
             return
         if (_now() - isolation).total_seconds() > ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS:
