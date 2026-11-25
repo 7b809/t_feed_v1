@@ -296,10 +296,14 @@ _STORE = _StateStore()
 
 def _prompt_audit(action, isolation_id, context, request, response, status):
     cli_meta = response.get("_algocli", {}) if isinstance(response, dict) else {}
-    prompt = cli_meta.get("prompt") or build_action_prompt(action, context)
+    prompt = cli_meta.get("prompt")
+    audit_contract = build_action_prompt(action, context)
     event = _AUDIT.append(
         action, isolation_id, prompt, request, response, status,
         metadata={"algocli": cli_meta} if cli_meta else {},
+        prompt_origin="algocli_template" if prompt else "not_available",
+        execution_stage=cli_meta.get("stage"),
+        audit_contract=audit_contract,
     )
     # Detailed prompt/JSON response goes to normal chat only.
     send_private_audit(event)
@@ -310,14 +314,25 @@ def send_private_audit(event):
     def clip(s, n):
         return s if len(s) <= n else s[:n-30] + "\n...[truncated; full copy is in audit storage]"
     # Keep the combined HTML message below Telegram's message-size limit.
-    prompt = html.escape(clip(event.get("prompt", ""), 700))
+    prompt_text = event.get("prompt") or event.get("audit_contract") or ""
+    prompt = html.escape(clip(str(prompt_text), 700))
     request = html.escape(clip(json.dumps(event.get("request", {}), ensure_ascii=False, indent=2, default=str), 600))
     response = html.escape(clip(json.dumps(event.get("response", {}), ensure_ascii=False, indent=2, default=str), 1500))
+    metadata = event.get("metadata", {}).get("algocli", {})
+    details = [
+        f"Prompt origin: <code>{html.escape(str(event.get('prompt_origin') or 'not_available'))}</code>",
+        f"Execution stage: <code>{html.escape(str(event.get('execution_stage') or 'unknown'))}</code>",
+    ]
+    if metadata.get("executable"):
+        details.append(f"Executable: <code>{html.escape(str(metadata['executable']))}</code>")
+    if metadata.get("error"):
+        details.append(f"CLI error: <code>{html.escape(str(metadata['error']))}</code>")
     msg = (
         f"<b>LIVE GTT · {html.escape(str(event.get('action')))}</b>\n"
         f"Time: <code>{html.escape(str(event.get('timestamp_ist')))}</code>\n"
-        f"Isolation: <code>{html.escape(str(event.get('isolation_id')))}</code>\n\n"
-        f"<b>Prompt / execution contract</b>\n<pre>{prompt}</pre>\n"
+        f"Isolation: <code>{html.escape(str(event.get('isolation_id')))}</code>\n"
+        + "\n".join(details) + "\n\n"
+        f"<b>Predefined prompt / audit contract</b>\n<pre>{prompt}</pre>\n"
         f"<b>Request</b>\n<pre>{request}</pre>\n"
         f"<b>JSON response</b>\n<pre>{response}</pre>\n"
         f"<i>Deterministic Python strategy; not an LLM-generated trade decision.</i>"
@@ -405,6 +420,7 @@ def _plan(client, leg, day):
         raise ValueError("Instrument key, verified lot size and tick size are mandatory")
     started = _now()
     quote = client.get_ltp(key)
+    client.current_stage = "BUILD_EXECUTION_PLAN"
     received = _now()
     age = (received - started).total_seconds()
     if age > LIVE_GTT_QUOTE_MAX_AGE_SECONDS:
@@ -800,14 +816,42 @@ def _process(record, payload, received_at, role):
             _submit(client, state, plan, signal, iso_id, is_reversal=is_reversal, chart_context=record)
         except Exception as exc:
             logger.exception("Live GTT signal rejected/failed | isolation=%s", iso_id)
-            prompt = build_action_prompt("EXECUTION_BLOCKED", {
+            client_obj = locals().get("client")
+            cli_meta = getattr(client_obj, "last_execution", {}) if client_obj else {}
+            stage = (
+                cli_meta.get("stage")
+                or getattr(client_obj, "current_stage", None)
+                or "PRE_ALGOCLI"
+            )
+            audit_contract = build_action_prompt("EXECUTION_BLOCKED", {
                 "isolation_id": iso_id, "signal_direction": direction,
                 "signal_time_ist": stamp.isoformat(), "reason": str(exc),
+                "execution_stage": stage,
             })
+            rendered_prompt = cli_meta.get("prompt")
+            response = {
+                "accepted": False,
+                "reason": str(exc),
+                "cli_error": cli_meta.get("error") or str(exc),
+                "failed_stage": stage,
+                "executable": cli_meta.get("executable"),
+                "template": cli_meta.get("template"),
+                "process_started": cli_meta.get("process_started", False),
+            }
             event = _AUDIT.append(
-                "EXECUTION_BLOCKED", iso_id, prompt, {},
-                {"accepted": False, "reason": str(exc)}, "BLOCKED",
-                metadata={"algocli": getattr(locals().get("client"), "last_execution", {})},
+                "EXECUTION_BLOCKED", iso_id, rendered_prompt,
+                {
+                    "instrument_key": source_key,
+                    "signal_direction": direction,
+                    "signal_time_ist": stamp.isoformat(),
+                    "failed_stage": stage,
+                    "template": cli_meta.get("template"),
+                },
+                response, "BLOCKED",
+                metadata={"algocli": cli_meta} if cli_meta else {},
+                prompt_origin="algocli_template" if rendered_prompt else "not_available",
+                execution_stage=stage,
+                audit_contract=audit_contract,
             )
             send_private_audit(event)
 
