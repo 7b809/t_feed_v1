@@ -5,7 +5,7 @@
 `POST /api/algocli-test/place-gtt`
 
 The endpoint generates the dedicated `prompts/algocli/test_place_gtt.txt`
-prompt and stores one isolated test run under `data/tests/`.
+prompt and stores one isolated test run under `data/algocli_tests/place_gtt/`.
 
 ## Server configuration
 
@@ -13,7 +13,7 @@ prompt and stores one isolated test run under `data/tests/`.
 ALGOCLI_TEST_API_ENABLED=true
 ALGOCLI_TEST_API_KEY=replace-with-a-long-random-secret
 ALGOCLI_TEST_LIVE_WRITES_ENABLED=false
-ALGOCLI_TEST_DATA_DIR=data/tests
+ALGOCLI_TEST_DATA_DIR=data/algocli_tests
 ```
 
 Keep `ALGOCLI_TEST_LIVE_WRITES_ENABLED=false` for prompt-generation tests.
@@ -57,7 +57,7 @@ authentication.
 Each request creates a unique directory such as:
 
 ```text
-data/tests/20261125_092000_123456_test-order-001/
+data/algocli_tests/place_gtt/20261125_092000_123456_test-order-001/
     request.json
     prompt.txt
     response.json
@@ -67,33 +67,54 @@ data/tests/20261125_092000_123456_test-order-001/
 Credential-like fields are removed before persistence. The response includes
 the artifact directory and individual file names.
 
-## Read-only AlgoAI health check
+## Read-only AlgoAI health check (asynchronous)
 
-### Endpoint
+### Queue a check
 
-`GET /api/algocli-test/get-positions`
-
-This endpoint requires no request body. Send only the configured `X-API-Key`
-header. It runs the existing `prompts/algocli/get_positions.txt` template
-through the installed AlgoAI CLI and returns the parsed response after the
-CLI finishes. It does not place, modify, or cancel orders.
+`GET /api/algocli-test/get-positions` requires no request body. Send only
+`X-API-Key`. The API creates the job folder and prompt files, queues the
+AlgoAI process as a FastAPI background task, and immediately returns HTTP
+`202 Accepted`. It does not wait for AlgoAI to finish.
 
 ```bash
 curl -i "http://127.0.0.1:8001/api/algocli-test/get-positions" \
   -H "X-API-Key: $ALGOCLI_TEST_API_KEY"
 ```
 
-A successful CLI execution returns `status: HEALTHY`, `healthy: true`, the
-full parsed AlgoAI response, execution duration, and the artifact directory.
-A CLI launch, timeout, non-zero exit, or invalid JSON response returns
-`status: UNHEALTHY` with HTTP 502 and diagnostic details. Authentication
-and feature-flag behaviour is shared with the existing test API.
+Example immediate response:
 
-Each run is archived under `ALGOCLI_TEST_DATA_DIR` with
-`request.json`, `prompt.txt`, `response.json`, and `metadata.json`.
-Credential-like values are redacted before artifacts are persisted.
+```json
+{
+  "status": "ACCEPTED",
+  "operation_id": "generated-32-character-id",
+  "artifact_directory": "data/algocli_tests/get_positions/...",
+  "result_path": "data/algocli_tests/get_positions/.../response.json",
+  "status_url": "/api/algocli-test/get-positions/generated-32-character-id",
+  "files": ["request.json", "prompt.txt", "response.json", "metadata.json"]
+}
+```
+
+### Poll for the result
+
+Call the returned `status_url` with the same API key. It returns `ACCEPTED`
+or `RUNNING` while the CLI is working, then `HEALTHY` with the parsed AlgoAI
+response or `UNHEALTHY` with error details. Polling never starts another CLI run.
+
+### Artifact layout
+
+All AlgoAI test artifacts are stored separately under `data/algocli_tests/`:
+
+```text
+data/algocli_tests/
+    place_gtt/<timestamp>_<operation-id>/{request.json,prompt.txt,response.json,metadata.json}
+    get_positions/<timestamp>_<operation-id>/{request.json,prompt.txt,response.json,metadata.json}
+```
+
+The initial `response.json` is written as `ACCEPTED` before the HTTP response.
+The background worker updates it to `RUNNING`, then writes the final result.
+Credential-like values are redacted before persistence.
 
 This check validates the configured AlgoAI executable and its ability to
-complete the positions prompt at that moment. It also depends on the
-configured AlgoAI/Upstox authentication and provider availability; it is
-not a guarantee that trading endpoints or order placement are healthy.
+complete the positions prompt at that moment. It also depends on configured
+AlgoAI/Upstox authentication and provider availability; it is not a guarantee
+that trading endpoints or order placement are healthy.
