@@ -139,6 +139,11 @@ class OptionChainSupertrendCapture:
                             if not isinstance(payload, dict): continue
                             if self.require_today_scope and payload.get("data_scope") != "today_only":
                                 logger.warning("Option-chain Supertrend rejected frame scope=%s key=%s", payload.get("data_scope"), key); continue
+                            try:
+                                from services.supertrend_snapshot_cache import update_supertrend_snapshot_cache
+                                update_supertrend_snapshot_cache(key, payload, received)
+                            except Exception:
+                                logger.exception("Could not update option-chain Supertrend snapshot cache key=%s", key)
                             event = {"received_at_ist": received, "trade_date_ist": day,
                                 "index_instrument_key": meta.get("index_instrument_key"), "index_canonical": meta.get("index_canonical"),
                                 "expiry": meta.get("expiry"), "strike_price": meta.get("strike_price"),
