@@ -42,14 +42,27 @@ def test_signal_direction():
 
 
 
-def test_gtt2_stop_uses_nearest_support_but_never_above_percentage_stop():
+def test_gtt2_stop_uses_nearest_support_strictly_below_percentage_stop():
     stop, meta = _adjust_trailing_stop(100, 70, {"S1": 85, "S2": 65, "S3": 55})
     assert stop == 65
     assert meta["selected_level"] == "S2"
+    assert meta["nearest_support_name"] == "S2"
+    assert meta["nearest_support_value"] == 65
+    assert meta["final_stop_loss"] == 65
+    assert meta["support_adjustment_applied"] is True
 
+    # All supports are above the percentage stop, so none may widen the stop.
     stop, meta = _adjust_trailing_stop(100, 70, {"S1": 85, "S2": 75, "S3": 72})
     assert stop == 70
     assert meta["selected_level"] == "PERCENTAGE"
+    assert meta["nearest_support_name"] is None
+    assert meta["nearest_support_value"] is None
+    assert meta["support_adjustment_applied"] is False
+
+    # A support exactly at the percentage stop is not a strictly lower support.
+    stop, meta = _adjust_trailing_stop(100, 70, {"S1": 70, "S2": 60, "S3": 50})
+    assert stop == 60
+    assert meta["selected_level"] == "S2"
 
 
 def test_gtt2_trailing_step_uses_initial_entry_stop_and_target():
