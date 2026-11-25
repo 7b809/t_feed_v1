@@ -118,6 +118,24 @@ class AlgoCLITestService:
             "confirm_live_order": bool(confirm_live_order),
         }
 
+        # Persist intent before invoking the CLI. If the process stops while a
+        # broker write is in flight, the prompt and request remain auditable.
+        output_dir.mkdir(parents=True, exist_ok=True)
+        initial_metadata = {
+            "operation_id": operation_id,
+            "created_at_ist": now.isoformat(),
+            "status": "RUNNING" if confirm_live_order and live_writes_enabled else "PREPARED",
+            "prompt_template": "prompts/algocli/test_place_gtt.txt",
+            "artifact_files": ["request.json", "prompt.txt", "response.json", "metadata.json"],
+        }
+        _write_json(output_dir / "request.json", request)
+        (output_dir / "prompt.txt").write_text(prompt + "\\n", encoding="utf-8")
+        _write_json(output_dir / "response.json", {
+            "status": initial_metadata["status"],
+            "executed": "UNKNOWN" if initial_metadata["status"] == "RUNNING" else False,
+        })
+        _write_json(output_dir / "metadata.json", initial_metadata)
+
         if confirm_live_order and not live_writes_enabled:
             response = {
                 "status": "BLOCKED",
