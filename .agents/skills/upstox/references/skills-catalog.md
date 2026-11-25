@@ -15,6 +15,8 @@ This document describes the Upstox agent skills currently present in this reposi
 | `upstox-gtt-trailing-sl` | Enter at market, protect with SL-M, manage a fixed target and step-trailing stop | Writes live orders; local manager must remain running | `.agents/skills/upstox-gtt-trailing-sl/SKILL.md` |
 | `upstox-gtt-modify` | Inspect and modify one or multiple trigger legs on an existing GTT in one modification request | Read first; modification requires explicit confirmation | `.agents/skills/upstox-gtt-modify/SKILL.md` |
 | `upstox-orders-fetch` | Fetch normal orders, GTT orders, or a specific order; filter results | Read-only | `.agents/skills/upstox-orders-fetch/SKILL.md` |
+| `upstox-gtt-cleanup` | Cancel untriggered GTTs and exit positions only when triggered-entry fills reconcile exactly | Writes cancellations and market exits; preview + exact fingerprint confirmation | `.agents/skills/upstox-gtt-cleanup/SKILL.md` |
+| `upstox-normal-order-cleanup` | Cancel pending normal orders and exit positions only when today's trades reconcile exactly | Writes cancellations and market exits; preview + exact fingerprint confirmation | `.agents/skills/upstox-normal-order-cleanup/SKILL.md` |
 | `upstox-pnl` | Fetch today's positions and P&L | Read-only | `.agents/skills/upstox-pnl/SKILL.md` |
 
 The named skills after the general `upstox` skill are focused workflows. The general skill also contains shared API guidance and reference documents; it is not limited to a single script.
@@ -248,7 +250,67 @@ Filtered orders:
 algoai --skip-permissions --prompt "Use the upstox-orders-fetch skill with --kind all --symbol NIFTY --segment NSE_FO to fetch matching normal and GTT orders. Return valid JSON only and do not omit available fields. Do not read .env. This is read-only."
 ```
 
-## 9. Today's P&L and positions
+## 9. GTT order cleanup
+
+### `upstox-gtt-cleanup`
+
+**Use it for:** Canceling active GTTs whose entry has not triggered, and exiting positions from triggered GTT entries when linked trade fills match the current position exactly.
+
+**Script:** `.agents/skills/upstox-gtt-cleanup/scripts/cleanup_gtt_orders.py`
+
+**Shared helper:** `.agents/skills/upstox/scripts/order_cleanup_helpers.py`
+
+**Safety behavior:**
+- Preview lists every GTT cancellation, eligible position exit, and skipped/ambiguous GTT.
+- Triggered GTT exits require linked order IDs, retrievable trade fills, and exact signed-quantity reconciliation against the live position.
+- Remaining GTT rules are cancelled and verified terminal before a market exit is sent, preventing an old target/stop rule from reversing the position.
+- Unmatched, duplicate, partial, or unknown states are skipped; the script does not guess.
+- Execute only with the exact approved `state_fingerprint`.
+
+**Commands:**
+```bash
+# Read-only preview
+python3 .agents/skills/upstox-gtt-cleanup/scripts/cleanup_gtt_orders.py
+
+# Execute only after explicit approval of the exact preview
+python3 .agents/skills/upstox-gtt-cleanup/scripts/cleanup_gtt_orders.py --confirm --expected-state-hash "<state_fingerprint>"
+```
+
+**Sample prompt:**
+```bash
+algoai --skip-permissions --prompt "Use upstox-gtt-cleanup to preview all available GTT orders. Plan cancellation of untriggered active GTTs and exit only triggered GTT positions whose linked fills reconcile exactly with the live position. Show every skip reason and return valid JSON with state_fingerprint. Do not execute until I approve that exact preview. Never read .env or expose credentials."
+```
+
+## 10. Normal order cleanup
+
+### `upstox-normal-order-cleanup`
+
+**Use it for:** Canceling today's pending normal orders and exiting positions only when today's signed trade history exactly matches the current position for the same instrument and product.
+
+**Script:** `.agents/skills/upstox-normal-order-cleanup/scripts/cleanup_normal_orders.py`
+
+**Safety behavior:**
+- Only recognized pending states are cancelled; unknown lifecycle states are skipped.
+- A position is not exited while a pending normal order or active GTT exists for the same instrument/product.
+- After cancellation, the script fetches fresh orders, GTTs, positions and trades and rechecks the exact approved exit quantity.
+- Carry-forward positions and any ambiguous or non-reconciling trades are skipped.
+- Execute only with the exact approved `state_fingerprint`.
+
+**Commands:**
+```bash
+# Read-only preview
+python3 .agents/skills/upstox-normal-order-cleanup/scripts/cleanup_normal_orders.py
+
+# Execute only after explicit approval of the exact preview
+python3 .agents/skills/upstox-normal-order-cleanup/scripts/cleanup_normal_orders.py --confirm --expected-state-hash "<state_fingerprint>"
+```
+
+**Sample prompt:**
+```bash
+algoai --skip-permissions --prompt "Use upstox-normal-order-cleanup to preview today's normal order cancellations and any position exits whose today's trade quantities reconcile exactly with live positions. Do not exit positions protected by active GTTs or pending orders. Return valid JSON with every skip reason and state_fingerprint. Do not execute until I approve the exact preview. Never read .env or expose credentials."
+```
+
+## 11. Today's P&L and positions
 
 ### `upstox-pnl`
 
@@ -268,7 +330,7 @@ algoai --skip-permissions --prompt "Use the upstox-pnl skill to fetch today's P&
 algoai --skip-permissions --prompt "Use the upstox-pnl skill to fetch today's positions and P&L. Include all fields returned by the script, including available realised/unrealised P&L and position details. Do not calculate or invent missing values. Return JSON only. Do not read .env."
 ```
 
-## 10. Core Upstox reference documents
+## 12. Core Upstox reference documents
 
 The general `upstox` skill contains reference documents under `.agents/skills/upstox/references/`. These are topic guides loaded by the general skill when relevant; they are not separate standalone skill directories.
 
@@ -285,7 +347,7 @@ The general `upstox` skill contains reference documents under `.agents/skills/up
 | `instruments.md` | Instrument lookup, instrument keys and lot-size information |
 | `errors.md` | HTTP/API errors, Upstox error codes and rate-limit troubleshooting |
 
-## 11. Shared execution and security rules
+## 13. Shared execution and security rules
 
 Apply these rules across the Upstox workflows:
 
@@ -300,7 +362,7 @@ Apply these rules across the Upstox workflows:
 9. **Do not make extra API calls** when a focused skill says to run its script once, unless the user explicitly requests additional retrieval or verification. The GTT modification workflow has its own required re-fetch/verification sequence.
 10. **Treat `--skip-permissions` as a CLI execution flag, not as user approval** for a live financial action. Explicit confirmation is still required by the trading safety rules.
 
-## 12. Choosing the right skill
+## 14. Choosing the right skill
 
 | User's request | Use |
 |---|---|
@@ -311,6 +373,8 @@ Apply these rules across the Upstox workflows:
 | "Enter at market with distance-based SL, fixed target and step-trailing stop" | `upstox-gtt-trailing-sl` |
 | "Change the stop-loss/entry/target trigger on an existing GTT" | `upstox-gtt-modify` |
 | "List all normal and GTT orders or fetch a particular order" | `upstox-orders-fetch` |
+| "Cancel untriggered GTTs and exit positions from triggered GTT entries" | `upstox-gtt-cleanup` |
+| "Cancel pending normal orders and exit reconciled positions" | `upstox-normal-order-cleanup` |
 | "Show today's P&L and positions" | `upstox-pnl` |
 
 ---
