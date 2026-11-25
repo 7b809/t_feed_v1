@@ -253,7 +253,9 @@ print(resp.data)
 | Topic | When to load | File |
 |-------|-------------|------|
 | Orders (place/modify/cancel/multi/exit) | Any order operation | `references/orders.md` |
-| GTT orders (single & multi-leg) | Conditional / good-till-triggered orders | `references/gtt-orders.md` |\n| Modify existing GTT ENTRY / STOPLOSS / TARGET | Change one trigger while retaining other rules; requires explicit confirmation | `.agents/skills/upstox-gtt-modify/SKILL.md` |
+| GTT orders (single & multi-leg) | Conditional / good-till-triggered orders | `references/gtt-orders.md` |
+| Cancel untriggered GTTs and exit triggered GTT positions | GTT cleanup with exact fill/position reconciliation and confirmation | `.agents/skills/upstox-gtt-cleanup/SKILL.md` |
+| Cancel pending normal orders and exit reconciled positions | Normal order cleanup with fresh state verification and confirmation | `.agents/skills/upstox-normal-order-cleanup/SKILL.md` |
 | Market entry with fixed target and step-trailing stop-loss | Live market entry followed by broker-side SL-M and locally managed target/trailing | `.agents/skills/upstox-gtt-trailing-sl/SKILL.md` |
 | Fetch normal orders and GTT orders | Read-only order book, GTT listing, specific order lookup and filters | `.agents/skills/upstox-orders-fetch/SKILL.md` |
 | Portfolio (holdings, positions, convert, P&L) | View/manage portfolio | `references/portfolio.md` |
