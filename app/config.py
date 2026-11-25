@@ -174,6 +174,8 @@ class Settings:
     supertrend_multiplier: float = _float("SUPERTREND_MULTIPLIER", 3.0)
     supertrend_change_atr: bool = _bool("SUPERTREND_CHANGE_ATR", True)
     supertrend_history_days: int = _int("SUPERTREND_HISTORY_DAYS", 10)
+    # Comma-separated Upstox minute intervals. 1m keeps the legacy file/channel names.
+    supertrend_intervals: str = os.getenv("SUPERTREND_INTERVALS", "1m,5m,15m,30m")
     supertrend_poll_seconds: int = _int("SUPERTREND_POLL_SECONDS", 60)
     supertrend_max_workers: int = _int("SUPERTREND_MAX_WORKERS", 3)
     supertrend_fetch_timeout_seconds: float = _float("SUPERTREND_FETCH_TIMEOUT_SECONDS", 30.0)
@@ -262,6 +264,17 @@ class Settings:
             raise ValueError("SUPERTREND_MULTIPLIER must be > 0")
         if self.supertrend_history_days < 1:
             raise ValueError("SUPERTREND_HISTORY_DAYS must be >= 1")
+        supported_supertrend_intervals = {1, 2, 3, 5, 10, 15, 30}
+        parsed_intervals = self.supertrend_intervals_list
+        if not parsed_intervals or "1m" not in parsed_intervals:
+            raise ValueError("SUPERTREND_INTERVALS must include 1m")
+        for interval in parsed_intervals:
+            minutes = int(interval[:-1])
+            if minutes not in supported_supertrend_intervals:
+                raise ValueError(
+                    f"Unsupported Supertrend interval {interval!r}; supported: "
+                    "1m, 2m, 3m, 5m, 10m, 15m, 30m"
+                )
         if self.supertrend_poll_seconds < 5:
             raise ValueError("SUPERTREND_POLL_SECONDS must be >= 5")
         if self.supertrend_max_workers < 1:
@@ -336,6 +349,23 @@ class Settings:
     @property
     def sr_default_configs_list(self) -> list[str]:
         return [c.strip() for c in (self.sr_default_configs or "").split(",") if c.strip()]
+
+    @property
+    def supertrend_intervals_list(self) -> list[str]:
+        """Normalized, de-duplicated intervals such as [1m, 5m, 15m, 30m]."""
+        result: list[str] = []
+        for raw in (self.supertrend_intervals or "").split(","):
+            value = raw.strip().lower()
+            if not value:
+                continue
+            if value.endswith("m"):
+                value = value[:-1]
+            if not value.isdigit() or int(value) < 1:
+                raise ValueError(f"Invalid SUPERTREND_INTERVALS entry: {raw!r}")
+            normalized = f"{int(value)}m"
+            if normalized not in result:
+                result.append(normalized)
+        return result
 
     @property
     def cleanup_dirs_list(self) -> list[Path]:

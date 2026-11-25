@@ -590,3 +590,15 @@ SUPERTREND_FETCH_TIMEOUT_SECONDS=30
 
 Use `/ws/supertrend/{instrument_key}` for raw keys (encode `|` as `%7C`),
 or `/ws/supertrend/index/{underlying}` for an index alias such as `nifty`.
+
+
+---
+
+## 13. Multi-interval Supertrend feeds
+
+Supertrend supports independent 1m, 5m, 15m and 30m calculations by default. The 1m
+file and WebSocket channel retain their original names; higher intervals have separate
+JSON files and channels. Configure the list with `SUPERTREND_INTERVALS`.
+
+See [Multi-Interval Supertrend Feeds](docs/SUPERTREND_MULTI_INTERVAL.md) for file
+layout, WebSocket URLs, REST query parameters, events, configuration and lifecycle.

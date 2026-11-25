@@ -302,7 +302,7 @@ def info():
             "Job 2: EMA crosses live feed | "
             "Job 3: First-candle pivot levels | "
             "Job 4: Live SR levels (per-instrument, per-config) | "
-            "Job 5: Confirmed Supertrend signals (today-only snapshots + live WebSocket)"
+            "Job 5: Multi-interval confirmed Supertrend signals (today-only snapshots + live WebSockets)"
         ),
         "docs": "/docs",
         "health": "/health",
