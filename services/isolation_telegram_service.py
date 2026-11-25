@@ -202,6 +202,16 @@ def format_chart_links(record: dict) -> list[str]:
         add(isolated.get("instrument_key"), "Isolated instrument")
     if isinstance(opposite, dict):
         add(opposite.get("instrument_key"), "Opposite instrument")
+    related = source.get("related_instruments") or archive.get("related_instruments") or []
+    if isinstance(related, list):
+        for item in related:
+            if isinstance(item, dict):
+                add(item.get("instrument_key"), item.get("chart_label") or item.get("trading_symbol") or "Related instrument")
+    related_keys = source.get("related_instrument_keys") or []
+    if isinstance(related_keys, list):
+        for key in related_keys:
+            add(key, "Related instrument")
+
     if trigger_key:
         canonical = (
             trigger.get("canonical")
