@@ -26,6 +26,8 @@ from core.config import (
     LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR, LIVE_GTT_MAX_RISK_PER_TRADE_INR,
     LIVE_GTT_REVERSAL_CLOSE_TIMEOUT_SECONDS,
     LIVE_GTT_MONITOR_INTERVAL_SECONDS, LIVE_GTT_STATE_COLLECTION, LIVE_GTT_STATE_DIR,
+    ISOLATION_SUPERTREND_RECOVERY_ENABLED,
+    ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS,
 )
 from core.logger import get_logger
 from core.mongo_client import get_mongo_db
@@ -617,6 +619,8 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False, chart_
     entry = {
         "entry_id": entry_id, "signal_key": signal["signal_key"],
         "signal_direction": signal["direction"], "signal_time_ist": signal["signal_time"].isoformat(),
+        "signal_source": signal.get("source", "live_supertrend"),
+        "historical_recovery": signal.get("historical_recovery"),
         "instrument_key": plan["instrument_key"], "trading_symbol": plan["trading_symbol"],
         "entry_price": plan["entry_price"],
         "stop_loss_price": plan["stop_loss_price"], "target_price": plan["target_price"],
@@ -748,7 +752,7 @@ def _submit(client, state, plan, signal, isolation_id, is_reversal=False, chart_
     )
     return entry
 
-def _process(record, payload, received_at, role):
+def _process(record, payload, received_at, role, *, historical=False, historical_evidence=None):
     if not LIVE_GTT_EXECUTION_ENABLED or LIVE_GTT_KILL_SWITCH:
         return
     if role != "isolated" or payload.get("event") != "supertrend_signal":
@@ -764,14 +768,21 @@ def _process(record, payload, received_at, role):
         return
     if str(record.get("trade_date_ist") or "") != now.date().isoformat():
         return
-    if stamp < isolation - timedelta(seconds=LIVE_GTT_ISOLATION_LOOKBACK_SECONDS):
-        return
-    signal_age = (now - stamp).total_seconds()
-    frame_age = (now - received).total_seconds()
-    if signal_age < -2 or signal_age > LIVE_GTT_MAX_SIGNAL_AGE_SECONDS:
-        return
-    if frame_age < -2 or frame_age > LIVE_GTT_MAX_FRAME_AGE_SECONDS:
-        return
+    if not historical:
+        if stamp < isolation - timedelta(seconds=LIVE_GTT_ISOLATION_LOOKBACK_SECONDS):
+            return
+        signal_age = (now - stamp).total_seconds()
+        frame_age = (now - received).total_seconds()
+        if signal_age < -2 or signal_age > LIVE_GTT_MAX_SIGNAL_AGE_SECONDS:
+            return
+        if frame_age < -2 or frame_age > LIVE_GTT_MAX_FRAME_AGE_SECONDS:
+            return
+    else:
+        # Historical signals are intentionally older than the live freshness
+        # window. They are accepted only through the separate recovery worker.
+        if (now - isolation).total_seconds() > ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS:
+            logger.info("Historical Supertrend execution skipped: isolation recovery window expired | isolation=%s", iso_id)
+            return
     key = _signal_key(source_key, direction, stamp)
     with _lock(iso_id):
         state = _STORE.load(iso_id)
@@ -816,7 +827,10 @@ def _process(record, payload, received_at, role):
             if _position_qty(client, plan["instrument_key"]) != 0:
                 raise RuntimeError("A pre-existing position exists for the target instrument")
             signal = {"direction": direction, "signal_time": stamp, "signal_key": key,
-                      "received_at_ist": received.isoformat(), "source_instrument_key": source_key}
+                      "received_at_ist": received.isoformat(), "source_instrument_key": source_key,
+                      "source": "historical_price_recovery" if historical else "live_supertrend"}
+            if historical and isinstance(historical_evidence, dict):
+                signal["historical_recovery"] = historical_evidence
             _submit(client, state, plan, signal, iso_id, is_reversal=is_reversal, chart_context=record)
         except Exception as exc:
             logger.exception("Live GTT signal rejected/failed | isolation=%s", iso_id)
@@ -868,6 +882,140 @@ def _process(record, payload, received_at, role):
             )
             send_private_audit(event)
 
+
+
+
+def _process_pre_isolation_recovery(record: dict, access_token: str) -> None:
+    """Evaluate pre-isolation price direction and submit at most one historical entry attempt."""
+    if not ISOLATION_SUPERTREND_RECOVERY_ENABLED:
+        return
+    if not LIVE_GTT_EXECUTION_ENABLED or LIVE_GTT_KILL_SWITCH:
+        logger.info("Historical Supertrend recovery evaluated only when live GTT execution is enabled")
+        return
+
+    isolation = _dt(record.get("isolation_touch_time") or record.get("isolation_created_at"))
+    source_key = str(record.get("instrument_key") or "")
+    if isolation is None or not source_key:
+        return
+    if str(record.get("trade_date_ist") or "") != _now().date().isoformat():
+        return
+    iso_id = _iso_id(record)
+
+    with _lock(iso_id):
+        state = _STORE.load(iso_id)
+        state.setdefault("isolation_id", iso_id)
+        existing = state.get("historical_recovery")
+        if isinstance(existing, dict) and existing.get("execution_status") in {
+            "DISPATCH_INTENT_PERSISTED", "SUBMITTED", "BLOCKED", "NOT_REQUIRED",
+        }:
+            return
+        if (_now() - isolation).total_seconds() > ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS:
+            state["historical_recovery"] = {
+                "status": "expired",
+                "execution_status": "NOT_REQUIRED",
+                "reason": "Historical recovery execution delay exceeded configured safety window",
+                "isolation_time_ist": isolation.isoformat(),
+            }
+            _STORE.save(state)
+            return
+        state["historical_recovery"] = {
+            "status": "evaluating",
+            "execution_status": "EVALUATING",
+            "started_at_ist": _now().isoformat(),
+            "isolation_time_ist": isolation.isoformat(),
+        }
+        _STORE.save(state)
+
+    try:
+        from core.candle_fetcher import CandleFetcher
+        from services.isolation_supertrend_backfill_service import evaluate_pre_isolation_price_trend
+
+        candles = CandleFetcher(access_token).fetch_intraday_candles(
+            source_key, unit="minutes", interval="1"
+        )
+        evidence = evaluate_pre_isolation_price_trend(
+            record.get("supertrend_backfill") or {},
+            isolation,
+            candles,
+        )
+    except Exception as exc:
+        logger.exception("Historical Supertrend recovery data unavailable; live flow remains active | isolation=%s", iso_id)
+        evidence = {
+            "status": "data_unavailable",
+            "direction": None,
+            "reason": str(exc),
+            "isolation_time_ist": isolation.isoformat(),
+            "evaluated_at_ist": _now().isoformat(),
+        }
+
+    with _lock(iso_id):
+        state = _STORE.load(iso_id)
+        current = state.get("historical_recovery") or {}
+        if current.get("execution_status") == "DISPATCH_INTENT_PERSISTED":
+            return
+        evidence["execution_status"] = "NOT_REQUIRED"
+        state["historical_recovery"] = evidence
+        _STORE.save(state)
+
+        direction = evidence.get("direction")
+        if direction not in {"BULLISH", "BEARISH"}:
+            logger.info(
+                "Historical Supertrend recovery fallback to live signals | isolation=%s status=%s reason=%s",
+                iso_id, evidence.get("status"), evidence.get("reason"),
+            )
+            return
+        if (_now() - isolation).total_seconds() > ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS:
+            evidence["execution_status"] = "NOT_REQUIRED"
+            evidence["status"] = "expired"
+            evidence["reason"] = "Recovery data retrieval exceeded the configured execution delay"
+            _STORE.save(state)
+            return
+
+        baseline = evidence.get("baseline") or {}
+        signal_stamp = _dt(baseline.get("confirmed_time_ist"))
+        if signal_stamp is None:
+            evidence["execution_status"] = "NOT_REQUIRED"
+            evidence["status"] = "invalid_signal_timestamp"
+            _STORE.save(state)
+            return
+
+        # Persist dispatch intent before entering the broker execution path.
+        evidence["execution_status"] = "DISPATCH_INTENT_PERSISTED"
+        evidence["dispatch_intent_at_ist"] = _now().isoformat()
+        state["historical_recovery"] = evidence
+        _STORE.save(state)
+
+    payload = {
+        "event": "supertrend_signal",
+        "signal": "buy" if direction == "BULLISH" else "sell",
+        "signal_time": signal_stamp.isoformat(),
+        "historical_recovery": True,
+    }
+    _process(
+        record,
+        payload,
+        _now().isoformat(),
+        "isolated",
+        historical=True,
+        historical_evidence=evidence,
+    )
+
+
+def dispatch_pre_isolation_supertrend_recovery(record: dict, access_token: str) -> bool:
+    """Queue historical evaluation after isolation persistence; never block feed callbacks."""
+    if not ISOLATION_SUPERTREND_RECOVERY_ENABLED:
+        return False
+    if not LIVE_GTT_EXECUTION_ENABLED or LIVE_GTT_KILL_SWITCH:
+        return False
+    if not isinstance(record, dict) or not access_token:
+        return False
+    try:
+        start_live_gtt_execution_service()
+        _WORKER.submit(_process_pre_isolation_recovery, dict(record), str(access_token))
+        return True
+    except Exception:
+        logger.exception("Could not enqueue pre-isolation Supertrend recovery")
+        return False
 
 def _status(value):
     return str(value or "").strip().upper().replace(" ", "_")
