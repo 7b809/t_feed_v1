@@ -130,3 +130,60 @@ def test_redactor_removes_credential_fields_and_inline_tokens():
     assert "api_token" not in cleaned
     assert cleaned["message"] == "Bearer [REDACTED]"
     assert "access_token" not in cleaned["result"]
+
+
+
+class FakeHealthClient:
+    def __init__(self, *, fail=False):
+        self.last_execution = {}
+        self.fail = fail
+
+    def _template(self, name, values):
+        assert name == "get_positions.txt"
+        assert values == {}
+        return "Use the upstox-pnl skill to fetch current positions. Return JSON only."
+
+    def _run(self, name, values, write=False):
+        assert name == "get_positions.txt"
+        assert write is False
+        self.last_execution = {
+            "template": name,
+            "stage": "GET_POSITIONS",
+            "outcome": "COMPLETED",
+            "duration_seconds": 0.12,
+            "process_started": True,
+        }
+        if self.fail:
+            self.last_execution["outcome"] = "LAUNCH_FAILED"
+            raise RuntimeError("algoai executable unavailable")
+        return {
+            "response": {"positions": [{"instrument_key": "NSE_FO|123", "quantity": 15}]},
+            "_algocli": {"template": name, "stage": "GET_POSITIONS"},
+        }
+
+
+def test_get_positions_health_returns_full_response_and_archives(tmp_path, monkeypatch):
+    monkeypatch.setattr(service_module, "ALGOCLI_TEST_DATA_DIR", str(tmp_path))
+    result = AlgoCLITestService(FakeHealthClient()).get_positions_health()
+
+    assert result["status"] == "HEALTHY"
+    assert result["healthy"] is True
+    assert result["response"]["response"]["positions"][0]["quantity"] == 15
+    folder = tmp_path / result["artifact_directory"].split("/")[-1]
+    assert (folder / "prompt.txt").read_text(encoding="utf-8").startswith("Use the upstox-pnl")
+    saved = json.loads((folder / "response.json").read_text(encoding="utf-8"))
+    assert saved["status"] == "HEALTHY"
+    metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
+    assert metadata["cli_execution"]["stage"] == "GET_POSITIONS"
+
+
+def test_get_positions_health_archives_cli_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(service_module, "ALGOCLI_TEST_DATA_DIR", str(tmp_path))
+    result = AlgoCLITestService(FakeHealthClient(fail=True)).get_positions_health()
+
+    assert result["status"] == "UNHEALTHY"
+    assert result["healthy"] is False
+    assert "unavailable" in result["response"]["error"]
+    folder = tmp_path / result["artifact_directory"].split("/")[-1]
+    saved = json.loads((folder / "response.json").read_text(encoding="utf-8"))
+    assert saved["status"] == "UNHEALTHY"
