@@ -7,7 +7,8 @@ credentials are configured or accessed by this application.
 """
 from __future__ import annotations
 
-import json,os
+import json
+import os
 import re
 import signal
 import subprocess
@@ -25,7 +26,19 @@ CLI_TIMEOUT_SECONDS = 180
 ALGOAI_BIN = os.getenv(
     "ALGOAI_BIN",
     "/home/ubuntu/.local/bin/algoai",
-)
+).strip() or "/home/ubuntu/.local/bin/algoai"
+
+_TEMPLATE_STAGES = {
+    "get_ltp.txt": "GET_LTP",
+    "get_positions.txt": "GET_POSITIONS",
+    "place_gtt.txt": "PLACE_GTT",
+    "get_gtt.txt": "GET_GTT",
+    "cancel_gtt.txt": "CANCEL_GTT",
+    "modify_gtt_stop_loss.txt": "MODIFY_GTT_STOPLOSS",
+    "place_market_exit.txt": "PLACE_MARKET_EXIT",
+    "get_order_details.txt": "GET_ORDER_DETAILS",
+    "test_place_gtt.txt": "TEST_PLACE_GTT",
+}
 
 def _redact_text(value: str) -> str:
     value = re.sub(r"(?i)(bearer\s+)[A-Za-z0-9._~+/-]+=*", r"\1[REDACTED]", value)
@@ -49,6 +62,7 @@ class AlgoCLIClient:
 
     def __init__(self) -> None:
         self.last_execution: dict[str, Any] = {}
+        self.current_stage = "PRE_ALGOCLI"
 
     def _template(self, name: str, values: dict[str, Any]) -> str:
         root = Path(__file__).resolve().parents[1] / "prompts" / "algocli"
@@ -112,6 +126,8 @@ class AlgoCLIClient:
 
         # Invoke only the installed CLI. No project path, script, interpreter,
         # custom working directory, or broker credential is passed.
+        stage = _TEMPLATE_STAGES.get(template_name, "ALGOCLI")
+        self.current_stage = stage
         command = [
             ALGOAI_BIN,
             "--skip-permissions",
@@ -119,6 +135,20 @@ class AlgoCLIClient:
             prompt,
         ]
         started = time.monotonic()
+        self.last_execution = {
+            "operation_id": operation_id,
+            "template": template_name,
+            "prompt": prompt,
+            "executable": ALGOAI_BIN,
+            "stage": stage,
+            "launch_attempted": True,
+            "process_started": False,
+            "exit_code": None,
+            "duration_seconds": 0.0,
+            "stderr": "",
+            "outcome": "LAUNCHING",
+            "command": f"{ALGOAI_BIN} --skip-permissions --prompt <rendered_prompt>",
+        }
         try:
             proc = subprocess.Popen(
                 command,
@@ -129,10 +159,20 @@ class AlgoCLIClient:
                 errors="replace",
                 start_new_session=True,
             )
-        except FileNotFoundError as exc:
+        except OSError as exc:
+            error = _redact_text(f"{type(exc).__name__}: {exc}")
+            self.last_execution.update({
+                "duration_seconds": round(time.monotonic() - started, 3),
+                "outcome": "LAUNCH_FAILED",
+                "process_started": False,
+                "launch_error_type": type(exc).__name__,
+                "error": error,
+            })
             raise AlgoCLIError(
-                "The algoai command is not installed or is not available on PATH."
+                f"Could not launch AlgoAI executable '{ALGOAI_BIN}': {error}"
             ) from exc
+
+        self.last_execution["process_started"] = True
 
         try:
             stdout, stderr = proc.communicate(timeout=CLI_TIMEOUT_SECONDS)
@@ -151,16 +191,14 @@ class AlgoCLIClient:
                 except (ProcessLookupError, PermissionError, AttributeError):
                     proc.kill()
                 proc.communicate()
-            self.last_execution = {
-                "operation_id": operation_id,
-                "template": template_name,
-                "prompt": prompt,
+            self.last_execution.update({
                 "exit_code": None,
                 "duration_seconds": round(time.monotonic() - started, 3),
                 "stderr": _redact_text(str(exc)),
+                "error": _redact_text(str(exc)),
                 "outcome": "AMBIGUOUS" if write else "FAILED",
-                "command": "algoai --skip-permissions --prompt <template>",
-            }
+                "process_started": True,
+            })
             if write:
                 raise AlgoCLIWriteAmbiguous(
                     f"algoai timed out after {CLI_TIMEOUT_SECONDS}s; broker outcome is unknown"
@@ -168,20 +206,18 @@ class AlgoCLIClient:
             raise AlgoCLIError(f"algoai timed out after {CLI_TIMEOUT_SECONDS}s") from exc
 
         duration = round(time.monotonic() - started, 3)
-        self.last_execution = {
-            "operation_id": operation_id,
-            "template": template_name,
-            "prompt": prompt,
+        self.last_execution.update({
             "exit_code": proc.returncode,
             "duration_seconds": duration,
             "stderr": _redact_text(stderr[-4000:]),
             "outcome": "COMPLETED" if proc.returncode == 0 else ("AMBIGUOUS" if write else "FAILED"),
-            "command": "algoai --skip-permissions --prompt <template>",
-        }
+            "process_started": True,
+        })
         if proc.returncode != 0:
             message = _redact_text(
                 f"algoai exited with code {proc.returncode}: {stderr[-1500:] or stdout[-1500:]}"
             )
+            self.last_execution["error"] = message
             if write:
                 raise AlgoCLIWriteAmbiguous(
                     message + " (write outcome is unknown; reconcile before any retry)"
@@ -194,6 +230,7 @@ class AlgoCLIClient:
             if not isinstance(payload, (dict, list)):
                 raise AlgoCLIError("algoai JSON response must be an object or array")
         except AlgoCLIError as exc:
+            self.last_execution["error"] = str(exc)
             if write:
                 self.last_execution["outcome"] = "AMBIGUOUS"
                 raise AlgoCLIWriteAmbiguous(
@@ -207,9 +244,11 @@ class AlgoCLIClient:
                 "operation_id": operation_id,
                 "template": template_name,
                 "prompt": prompt,
+                "executable": ALGOAI_BIN,
+                "stage": stage,
                 "exit_code": proc.returncode,
                 "duration_seconds": duration,
-                "command": "algoai --skip-permissions --prompt <template>",
+                "command": f"{ALGOAI_BIN} --skip-permissions --prompt <rendered_prompt>",
             },
         }
 
