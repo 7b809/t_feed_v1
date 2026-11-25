@@ -5,7 +5,7 @@ import sys
 import unittest
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(__file__).resolve().parents[4]
 SKILLS = ROOT / ".agents" / "skills"
 sys.path.insert(0, str(SKILLS / "upstox" / "scripts"))
 sys.path.insert(0, str(SKILLS / "upstox-gtt-cleanup" / "scripts"))
