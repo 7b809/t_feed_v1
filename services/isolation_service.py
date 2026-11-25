@@ -306,12 +306,34 @@ class IsolationService:
             nifty_ltp_source=nifty_ltp_source,
             trend_result=trend_result,
             option_ltp=snapshot_ltp,
-            option_ltp_source=snapshot_source,
+            option_ltp_source=option_ltp_source,
             mode_payload=mode_payload,
             touch_time=touch_time,
             backfilled=backfilled,
             opposite_leg=opposite_leg,
         )
+
+        # Load the already-computed Supertrend document for this exact isolated
+        # option contract. This is metadata/data only: it does not dispatch or
+        # execute historical signals.
+        try:
+            from services.isolation_supertrend_backfill_service import (
+                load_isolated_supertrend_backfill,
+            )
+            record["supertrend_backfill"] = load_isolated_supertrend_backfill(record)
+        except Exception:
+            logger.exception(
+                "Supertrend backfill load failed; isolation continues | instrument=%s",
+                record.get("instrument_key"),
+            )
+            record["supertrend_backfill"] = {
+                "status": "error",
+                "is_backfill": True,
+                "source": "mega_supertrend_json",
+                "signal_count": 0,
+                "data": None,
+            }
+
         self.repo.upsert_current(record)
         self.repo.append_history(record)
         # Persist the complete two-leg snapshot locally before starting feeds.

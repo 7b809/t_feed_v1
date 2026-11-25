@@ -163,6 +163,11 @@ ISOLATION_OPTION_LTP_WAIT_SECONDS = int(
     os.getenv("ISOLATION_OPTION_LTP_WAIT_SECONDS", "5")
 )
 
+# Read-only Supertrend history loaded when an instrument is first isolated.
+ISOLATION_SUPERTREND_BACKFILL_DIR = os.getenv(
+    "ISOLATION_SUPERTREND_BACKFILL_DIR", ""
+).strip()
+
 # Scan-window bounds. The start reads ISOLATION_SCAN_START_* first so a
 # deployment can delay the scan start (e.g. until 09:18, when OR levels
 # are actually ready) without moving MARKET_OPEN_*. Falls back to
