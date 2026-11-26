@@ -105,14 +105,14 @@ class IsolatedFeedManager:
             if not self.enabled_st:
                 continue
             for interval in self.supertrend_intervals:
-                    task_key = (isolation_id, role, "supertrend", key, interval)
-                    if task_key in self._tasks and not self._tasks[task_key].done():
-                        continue
-                    coro = self._run_feed(isolation_id, trade_date, role, key, symbol or key, "supertrend", record, interval=interval)
-                    future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-                    self._tasks[task_key] = future
-                    status_key = "|".join(str(part) for part in task_key)
-                    self._status[status_key] = {"state": "starting", "instrument_key": key, "interval": interval}
+                task_key = (isolation_id, role, "supertrend", key, interval)
+                if task_key in self._tasks and not self._tasks[task_key].done():
+                    continue
+                coro = self._run_feed(isolation_id, trade_date, role, key, symbol or key, "supertrend", record, interval=interval)
+                future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+                self._tasks[task_key] = future
+                status_key = "|".join(str(part) for part in task_key)
+                self._status[status_key] = {"state": "starting", "instrument_key": key, "interval": interval}
         logger.info("Supertrend capture scheduled isolation=%s legs=%d intervals=%s", isolation_id, len(valid), self.supertrend_intervals)
 
 
@@ -157,10 +157,11 @@ class IsolatedFeedManager:
                             continue
                         if not isinstance(payload, dict):
                             continue
-                        if self.require_today_scope and payload.get("data_scope") != "today_only":
-                            logger.warning("%s frame rejected: data_scope=%s key=%s", indicator.upper(), payload.get("data_scope"), key)
-                            continue
                         body = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+                        data_scope = body.get("data_scope") or payload.get("data_scope")
+                        if self.require_today_scope and data_scope != "today_only":
+                            logger.warning("%s frame rejected: data_scope=%s key=%s", indicator.upper(), data_scope, key)
+                            continue
                         frame_interval = body.get("interval") or payload.get("interval")
                         if frame_interval and str(frame_interval).lower() != interval:
                             logger.warning("Supertrend interval mismatch expected=%s received=%s key=%s", interval, frame_interval, key)
