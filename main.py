@@ -283,6 +283,11 @@ def _restore_isolation_capture() -> None:
             if not archive:
                 IsolatedArchiveService().save_isolation(record)
             start_isolated_feeds(record)
+            try:
+                from core.token_service import fetch_access_token
+                start_isolated_pivot_capture(record, fetch_access_token())
+            except Exception:
+                logger.exception("Could not restore isolated pivot capture")
             notify_runtime_event(
                 "ISOLATION CAPTURE RESTORED",
                 f"{record.get('trading_symbol') or record.get('instrument_key')} · multi-interval Supertrend feeds restored.",
