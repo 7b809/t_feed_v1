@@ -534,6 +534,21 @@ class SandboxSupertrendSignalService:
         )
         ignored_count = int(selection.get("ignored_pre_isolation_signal_count") or 0)
         other_count = max(0, int(selection.get("eligible_signal_count") or 1) - 1)
+        stop_basis = calc.get("stop_loss_basis")
+        if stop_basis == "30_percent_fallback_no_valid_support_below_entry":
+            stop_explanation = "No support level was below entry, so we used the 30% stop."
+        elif stop_basis == "30_percent_stop_is_lower_than_nearest_support":
+            stop_explanation = "The 30% stop was lower than the nearest support, so we used the 30% stop."
+        else:
+            stop_explanation = "The nearest support was lower than the 30% stop, so we used that support."
+        if calc.get("target_offset") == 40:
+            target_explanation = "Entry is ₹100 or less, so the target is entry + ₹40."
+        elif calc.get("target_offset") == 50:
+            target_explanation = "Entry is above ₹100 and up to ₹200, so the target is entry + ₹50."
+        else:
+            target_explanation = "Entry is above ₹200, so the target is entry + ₹60."
+        opposite = document.get("source_snapshots", {}).get("opposite", {})
+        isolated = document.get("source_snapshots", {}).get("isolated", {})
         message = "\n".join([
             "🧪 <b>New Supertrend Signal Plan</b>",
             "",
@@ -543,6 +558,8 @@ class SandboxSupertrendSignalService:
             f"<b>Signal:</b> <b>{html.escape(signal_word)}</b>",
             f"<b>Confirmation price:</b> {self._fmt(signal.get('confirmed_time_price'))}",
             f"<b>Signal came from:</b> {html.escape(str(source.get('trading_symbol') or source.get('instrument_key') or '—'))}",
+            f"<b>Isolated instrument:</b> <code>{html.escape(str(isolated.get('instrument_key') or '—'))}</code>",
+            f"<b>Opposite instrument:</b> <code>{html.escape(str(opposite.get('instrument_key') or '—'))}</code>",
             f"<b>Why accepted:</b> {html.escape(eligibility)}",
             f"<b>Other signals:</b> {other_count} other eligible signal(s) were checked; {ignored_count} signal(s) from before the isolation minute were ignored.",
             "",
@@ -560,11 +577,12 @@ class SandboxSupertrendSignalService:
             "<b>How the stop was calculated</b>",
             f"30% stop: {self._fmt(calc.get('percentage_stop_loss'))}",
             f"Nearest support below entry: {html.escape(support_text)}",
-            f"Selected stop: {html.escape(str(calc.get('stop_loss_basis') or '—'))}",
+            f"<b>Stop decision:</b> {html.escape(stop_explanation)}",
             "",
             "<b>How the target was calculated</b>",
             f"Entry band: {html.escape(str(calc.get('target_band') or '—'))}",
             f"Target increase: +{self._fmt(calc.get('target_offset'))}",
+            html.escape(target_explanation),
             "",
             "<b>In simple words</b>",
             "We checked the first Supertrend signal from both option instruments. "
