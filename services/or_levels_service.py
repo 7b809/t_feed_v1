@@ -54,6 +54,8 @@ class ORLevelsService:
                     or (existing_indexes.get(key) or {}).get("levels", {}).get(
                         "A", (existing_indexes.get(key) or {}).get("levels", {}).get("avg")
                     ) is None
+                    or (existing_indexes.get(key) or {}).get("levels", {}).get("R3_Threshold") is None
+                    or (existing_indexes.get(key) or {}).get("levels", {}).get("S3_Threshold") is None
                 )
             ]
             if not missing_keys:
