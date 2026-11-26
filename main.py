@@ -308,8 +308,12 @@ def status():
                     "next_run": str(job.next_run_time),
                 }
             )
-    return {"scheduler_running": _scheduler is not None, "jobs": jobs,
-            "isolated_feeds": get_isolated_feed_status()}
+    return {
+        "scheduler_running": _scheduler is not None,
+        "jobs": jobs,
+        "isolated_feeds": get_isolated_feed_status(),
+        "isolated_pivots": get_isolated_pivot_status(),
+    }
 
 @app.get("/startup-state")
 def startup_state():
