@@ -30,6 +30,18 @@ Each isolated and opposite leg receives one feed per configured interval. Files 
 
 The 1-minute endpoint is `/ws/supertrend/{instrument_key}`; other intervals use `/ws/supertrend/interval/{interval}/{instrument_key}`. Instrument keys are URL-encoded.
 
+## Index isolation thresholds
+
+Index isolation uses the thresholds calculated from the index's own opening-range
+pivot levels in MongoDB (`project_info.pivot_levels`). An R3-side isolation is
+triggered when index LTP is greater than or equal to `R3_Threshold`; an S3-side
+isolation is triggered when index LTP is less than or equal to `S3_Threshold`.
+Both thresholds are the midpoint between the corresponding second and third
+levels. Raw R3/S3 are retained as reference levels, not trigger boundaries.
+If a same-day MongoDB pivot document is missing either threshold, the OR-level
+service attempts to repair the index levels before scanning; the detector does
+not fall back to raw R3/S3 when a threshold is absent.
+
 ## Isolated option pivot levels
 
 The active isolated option and its exact opposite CE/PE contract are processed independently.
@@ -58,6 +70,10 @@ Files are written atomically under
 
 The level document includes the instrument/leg metadata, interval, source candle,
 source candle timestamps, calculation inputs, and R3/R2/R1/AVG/S1/S2/S3 levels.
+It also stores `R3_Threshold = (R2 + R3) / 2` and
+`S3_Threshold = (S2 + S3) / 2` in both `levels` and a dedicated `thresholds` object.
+These values are calculated independently for each instrument and each interval;
+they do not drive index isolation detection.
 Candles are aligned to the 09:15 IST session open; a configurable publication grace
 is applied and incomplete candles are never used. A polling worker runs only for the
 current isolation pair during the weekday 09:15–15:30 IST session. The worker resumes
