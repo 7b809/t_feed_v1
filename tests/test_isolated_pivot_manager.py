@@ -106,7 +106,16 @@ def test_calculates_both_intervals_for_isolated_and_opposite_legs(tmp_path):
         document = json.loads(path.read_text(encoding="utf-8"))
         assert document["instrument_key"] in {"NSE_FO|12345", "NSE_FO|12346"}
         assert document["interval_label"] in {"1m", "15m"}
-        assert set(document["levels"]) == {"R3", "R2", "R1", "AVG", "S1", "S2", "S3"}
+        assert set(document["levels"]) == {
+            "R3", "R2", "R1", "AVG", "S1", "S2", "S3",
+            "R3_Threshold", "S3_Threshold",
+        }
+        assert document["thresholds"] == {
+            "R3_Threshold": 135.0,
+            "S3_Threshold": 85.0,
+        }
+        assert document["levels"]["R3_Threshold"] == 135.0
+        assert document["levels"]["S3_Threshold"] == 85.0
         assert document["source_candle"]["high"] == 120.0
 
 
@@ -132,7 +141,12 @@ def test_existing_completed_interval_file_is_not_fetched_again(tmp_path):
         "instrument_key": "NSE_FO|12345",
         "interval_minutes": 15,
         "source_candle_timestamp": target.isoformat(),
-        "levels": {name: 1 for name in ("R3", "R2", "R1", "AVG", "S1", "S2", "S3")},
+        "levels": {
+            name: 1 for name in (
+                "R3", "R2", "R1", "AVG", "S1", "S2", "S3",
+                "R3_Threshold", "S3_Threshold",
+            )
+        },
     }), encoding="utf-8")
 
     assert service._process_leg(leg, "2026-11-23", 15, target) == "already_present"
