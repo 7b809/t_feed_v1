@@ -33,11 +33,17 @@ The 1-minute endpoint is `/ws/supertrend/{instrument_key}`; other intervals use 
 ## Sandbox Supertrend signal plans
 
 After an isolation is created, the isolated and opposite instruments' interval-specific
-Supertrend WebSocket snapshots are compared. For each interval (default `1m` and
-`15m`), the earliest confirmed `buy`/`sell` signal across the two legs wins. A `buy`
-selects the instrument that emitted the signal; a `sell` selects the opposite leg.
-Only one plan is saved per isolation and interval. A missing fresh live LTP delays
-processing; the service does not substitute the Supertrend confirmation price for entry.
+Supertrend WebSocket snapshots are checked independently for `1m` and `15m`.
+A signal is eligible when its confirmation timestamp falls in the same IST minute
+as isolation or any later minute. Seconds are ignored for this eligibility check, so
+a signal at 09:20:15 is accepted when isolation happens at 09:20:40.
+Signals from earlier minutes are ignored. The earliest confirmed eligible signal wins;
+if both legs have the same confirmation time, the earlier WebSocket arrival wins.
+Once selected, that signal is locked for the interval even if the live entry quote
+is temporarily unavailable. Later signals cannot replace it.
+A `buy` selects the instrument that emitted the signal; a `sell` selects the opposite leg.
+Only one plan is saved per isolation and interval. Entry always uses the selected
+instrument's live Upstox LTP, never the Supertrend confirmation price.
 
 The selected target instrument's live Upstox market-feed LTP is the entry. The stop
 is the lower numeric value of the 30% entry stop and the nearest valid S1/S2/S3 support
