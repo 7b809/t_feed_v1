@@ -178,7 +178,7 @@ class IsolatedFeedManager:
                         # a fresh live quote before saving a plan.
                         try:
                             from jobs.daily_refresh import get_feed_service
-                            from services.sandbox_signal_service import (
+                            from sandbox_services.supertrend_signal_service import (
                                 process_supertrend_signal_update,
                             )
 
