@@ -63,6 +63,7 @@ from services.index_touch_detector import IndexTouchDetector
 from services.touch_arbitration_service import arbitrate_touches
 from services.isolated_archive_service import IsolatedArchiveService
 from services.isolated_feed_manager import start_isolated_feeds
+from services.isolated_pivot_manager import start_isolated_pivot_capture
 from services.isolation_telegram_service import notify_isolation_created
 
 logger = get_logger(__file__)
