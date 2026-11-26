@@ -67,6 +67,10 @@ from services.isolated_archive_service import IsolatedArchiveService
 from services.isolated_feed_manager import (
     start_isolated_feeds, get_isolated_feed_status, stop_isolated_feeds,
 )
+from services.isolated_pivot_manager import (
+    get_isolated_pivot_status, start_isolated_pivot_capture,
+    stop_isolated_pivot_capture,
+)
 from services.isolation_telegram_service import notify_runtime_event
 from services.log_file_service import (
     DEFAULT_TAIL_LINES,
