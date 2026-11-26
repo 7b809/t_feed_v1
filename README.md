@@ -54,7 +54,7 @@ Files are written atomically under
 
 - `pivot_levels_1m.json` — latest completed 1-minute candle's levels.
 - `pivot_levels_15m.json` — latest completed 15-minute candle's levels.
-- `pivot_levels_opening_1m.json` — preserved opening 09:15 one-minute candle levels, when available.
+- `pivot_levels.json` — preserved opening 09:15 one-minute candle levels, when available (legacy-compatible name).
 
 The level document includes the instrument/leg metadata, interval, source candle,
 source candle timestamps, calculation inputs, and R3/R2/R1/AVG/S1/S2/S3 levels.
