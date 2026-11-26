@@ -72,6 +72,7 @@ def update_supertrend_snapshot_cache(instrument_key, payload, received_at_ist=No
                 for item in signals:
                     normalized = _normalise_signal(item)
                     if normalized is not None:
+                        normalized.setdefault("received_at_ist", now_text)
                         merged[_signal_key(normalized)] = normalized
                 state["signals"] = sorted(merged.values(), key=lambda item: str(item.get("confirmed_time") or ""))
             latest = body.get("latest") or body.get("state")
@@ -82,6 +83,7 @@ def update_supertrend_snapshot_cache(instrument_key, payload, received_at_ist=No
             data.setdefault("interval", selected_interval)
             normalized = _normalise_signal(data)
             if normalized is not None:
+                normalized.setdefault("received_at_ist", now_text)
                 existing = {_signal_key(item) for item in state["signals"] if isinstance(item, dict)}
                 if _signal_key(normalized) not in existing:
                     state["signals"].append(normalized)
