@@ -80,6 +80,9 @@ def test_first_bullish_signal_targets_its_own_instrument_and_saves_once(tmp_path
     saved = json.loads((tmp_path / "sandbox_services" / "20261127" /
                         "2026-11-27__NSE_FO_111_1m.json").read_text())
     assert saved["first_signal"]["signal"] == "buy"
+    assert saved["first_signal"]["eligible_for_isolation"] is True
+    assert "same minute" in saved["first_signal"]["eligibility_reason"]
+    assert saved["signal_selection"]["isolation_time_ist"] == "2026-11-27T09:30:40+05:30"
     assert saved["target"]["entry_price"] == 250.0
     assert saved["calculation"]["target_price"] == 310.0
     assert saved["calculation"]["stop_loss"] == 175.0
@@ -130,7 +133,13 @@ def test_signal_before_isolation_minute_is_ignored(tmp_path, monkeypatch):
     )
     assert result["state"] == "processed"
     assert result["target_instrument_key"] == "NSE_FO|222"
-
+    saved_path = (
+        tmp_path / "sandbox_services" / "20261127"
+        / "2026-11-27__NSE_FO_111_1m.json"
+    )
+    saved = json.loads(saved_path.read_text(encoding="utf-8"))
+    assert saved["signal_source"]["leg_role"] == "isolated"
+    assert saved["signal_selection"]["ignored_pre_isolation_signal_count"] == 1
 
 
 def test_signal_earlier_seconds_in_same_isolation_minute_is_accepted(tmp_path, monkeypatch):
