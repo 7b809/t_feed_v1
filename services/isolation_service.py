@@ -346,7 +346,11 @@ class IsolationService:
         try:
             start_isolated_feeds(record)
         except Exception:
-            logger.exception("Could not start SR/Supertrend capture for new isolation")
+            logger.exception("Could not start Supertrend capture for new isolation")
+        try:
+            start_isolated_pivot_capture(record, self.access_token)
+        except Exception:
+            logger.exception("Could not start isolated option pivot capture")
         try:
             notify_isolation_created(record, archive_path)
         except Exception:
