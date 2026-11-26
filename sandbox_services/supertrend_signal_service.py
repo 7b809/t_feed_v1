@@ -80,7 +80,7 @@ class SandboxSupertrendSignalService:
         interval = _normalise_interval(interval)
         trade_date = str(isolation_record.get("trade_date_ist") or datetime.now(IST).date().isoformat())
         legs = self._legs(isolation_record)
-        if len(legs) != 2:
+        if any(not (legs.get(role) or {}).get("instrument_key") for role in ("isolated", "opposite")):
             return {"state": "waiting_for_both_legs", "interval": interval}
 
         snapshots = {}
