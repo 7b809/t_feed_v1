@@ -43,6 +43,24 @@ def _normalise_interval(value) -> str:
     return text if text.endswith("m") else f"{text}m"
 
 
+def _parse_ist_timestamp(value) -> datetime | None:
+    """Parse an ISO timestamp; treat naive timestamps as IST."""
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=IST)
+        return parsed.astimezone(IST)
+    except (TypeError, ValueError):
+        return None
+
+
+def _minute_bucket(value) -> datetime | None:
+    parsed = _parse_ist_timestamp(value)
+    return parsed.replace(second=0, microsecond=0) if parsed else None
+
+
 def _signal_rows(snapshot: dict, role: str) -> list[dict]:
     rows = snapshot.get("signals") if isinstance(snapshot, dict) else []
     if not isinstance(rows, list):
@@ -130,10 +148,26 @@ class SandboxSupertrendSignalService:
             if set(snapshots) < {"isolated", "opposite"}:
                 return {"state": "waiting_for_both_snapshots", "interval": interval}
 
-            candidates = []
+            isolation_time = (
+                isolation_record.get("isolation_created_at")
+                or isolation_record.get("isolation_time_ist")
+                or isolation_record.get("isolation_touch_time")
+            )
+            isolation_dt = _parse_ist_timestamp(isolation_time)
+            isolation_minute = _minute_bucket(isolation_time)
+            if isolation_minute is None:
+                state = {
+                    "state": "waiting_for_isolation_timestamp",
+                    "interval": interval,
+                    "reason": "The isolation record has no valid IST timestamp.",
+                }
+                self._status[f"{isolation_id}|{interval}"] = state
+                return state
+
+            eligible_candidates = []
+            rejected_candidates = []
             for role in ("isolated", "opposite"):
                 snap = snapshots.get(role) or {}
-                # A WS snapshot must identify the same instrument and interval.
                 expected_key = legs[role]["instrument_key"]
                 actual_key = str(snap.get("instrument_key") or expected_key)
                 if actual_key != expected_key:
@@ -142,21 +176,54 @@ class SandboxSupertrendSignalService:
                 if actual_interval != interval:
                     continue
                 for signal in _signal_rows(snap, role):
-                    candidates.append(signal)
+                    confirmed_dt = _parse_ist_timestamp(signal.get("confirmed_time"))
+                    if confirmed_dt is None:
+                        continue
+                    received_dt = _parse_ist_timestamp(
+                        signal.get("received_at_ist") or snap.get("snapshot_updated_at_ist")
+                    ) or confirmed_dt
+                    signal_minute = confirmed_dt.replace(second=0, microsecond=0)
+                    row = {
+                        **signal,
+                        "confirmed_at_ist": confirmed_dt.isoformat(),
+                        "received_at_ist": received_dt.isoformat(),
+                        "source_leg_role": role,
+                        "signal_minute_ist": signal_minute.isoformat(),
+                        "eligible_for_isolation": signal_minute >= isolation_minute,
+                        "eligibility_reason": (
+                            "Confirmed in the same minute as isolation or in a later minute."
+                            if signal_minute >= isolation_minute
+                            else "Confirmed before the isolation minute."
+                        ),
+                    }
+                    if row["eligible_for_isolation"]:
+                        eligible_candidates.append(row)
+                    else:
+                        rejected_candidates.append(row)
 
-            if not candidates:
-                state = {"state": "waiting_for_first_signal", "interval": interval}
+            if not eligible_candidates:
+                state = {
+                    "state": "waiting_for_first_signal",
+                    "interval": interval,
+                    "isolation_time_ist": isolation_dt.isoformat(),
+                    "eligible_signal_count": 0,
+                    "ignored_pre_isolation_signal_count": len(rejected_candidates),
+                    "ignored_signals": rejected_candidates,
+                }
                 self._status[f"{isolation_id}|{interval}"] = state
                 return state
 
-            # Earliest confirmed_time across both instruments wins. In an exact
-            # timestamp tie, isolated leg wins deterministically.
-            candidates.sort(
+            # Earliest confirmation wins. If both legs confirm at the exact
+            # same time, the earlier WebSocket arrival wins. If that also ties,
+            # prefer the isolated leg for deterministic behaviour.
+            eligible_candidates.sort(
                 key=lambda item: (
-                    str(item.get("confirmed_time") or ""),
+                    _parse_ist_timestamp(item.get("confirmed_time")) or datetime.max.replace(tzinfo=IST),
+                    _parse_ist_timestamp(item.get("received_at_ist")) or datetime.max.replace(tzinfo=IST),
                     0 if item.get("source_leg_role") == "isolated" else 1,
                 )
             )
+            candidates = eligible_candidates
             first_signal = candidates[0]
             source_role = first_signal["source_leg_role"]
             target_role = source_role if first_signal["signal"] == "buy" else (
@@ -197,6 +264,25 @@ class SandboxSupertrendSignalService:
                 "created_at_ist": datetime.now(IST).isoformat(),
                 "interval": interval,
                 "first_signal": first_signal,
+                "signal_selection": {
+                    "rule": (
+                        "Signals confirmed in the same minute as isolation or later are eligible. "
+                        "Seconds within the isolation minute do not disqualify a signal. "
+                        "The earliest confirmation wins; equal confirmation times are ordered "
+                        "by WebSocket arrival time."
+                    ),
+                    "isolation_time_ist": isolation_dt.isoformat(),
+                    "isolation_minute_ist": isolation_minute.isoformat(),
+                    "eligible_signal_count": len(eligible_candidates),
+                    "ignored_pre_isolation_signal_count": len(rejected_candidates),
+                    "eligible_signals_considered": eligible_candidates,
+                    "ignored_signals": rejected_candidates,
+                    "selected_because": (
+                        "This was the first eligible signal by confirmation time. "
+                        "If another leg confirmed at the same time, this signal's WebSocket "
+                        "frame arrived first."
+                    ),
+                },
                 "signal_source": {
                     "leg_role": source_role,
                     "instrument_key": legs[source_role]["instrument_key"],
@@ -402,28 +488,69 @@ class SandboxSupertrendSignalService:
         signal = document["first_signal"]
         target = document["target"]
         calc = document["calculation"]
+        selection = document.get("signal_selection") or {}
+        source = document["signal_source"]
+        signal_word = "Bullish (BUY)" if signal["signal"] == "buy" else "Bearish (SELL)"
+        target_reason = (
+            "A bullish signal selects the same instrument that gave the signal."
+            if signal["signal"] == "buy"
+            else "A bearish signal selects the opposite instrument."
+        )
+        same_minute = (
+            _minute_bucket(signal.get("confirmed_time"))
+            == _minute_bucket(selection.get("isolation_time_ist"))
+        )
+        eligibility = (
+            "The signal was confirmed in the same minute as isolation. "
+            "We accept it even when its seconds are earlier than the isolation seconds."
+            if same_minute
+            else "The signal was confirmed after the isolation minute."
+        )
+        nearest = calc.get("nearest_support")
+        support_text = (
+            f"{nearest.get('level')} at {self._fmt(nearest.get('value'))}"
+            if nearest else "No valid support below entry; the 30% stop is used."
+        )
+        ignored_count = int(selection.get("ignored_pre_isolation_signal_count") or 0)
+        other_count = max(0, int(selection.get("eligible_signal_count") or 1) - 1)
         message = "\n".join([
-            "🧪 <b>Sandbox Supertrend Signal Plan</b>",
-            f"Interval: <b>{html.escape(document['interval'])}</b>",
-            f"First signal: <b>{html.escape(signal['signal'].upper())}</b>",
-            f"Confirmed at: <code>{html.escape(str(signal.get('confirmed_time') or '—'))}</code>",
-            f"Confirmation price: <b>{self._fmt(signal.get('confirmed_time_price'))}</b>",
-            f"Signal source: <b>{html.escape(document['signal_source'].get('trading_symbol') or '—')}</b>",
-            f"Signal source key: <code>{html.escape(document['signal_source']['instrument_key'])}</code>",
+            "🧪 <b>New Supertrend Signal Plan</b>",
             "",
-            "<b>Selected target instrument</b>",
-            f"Symbol: <b>{html.escape(str(target.get('trading_symbol') or '—'))}</b>",
+            f"<b>Interval:</b> {html.escape(document['interval'])}",
+            f"<b>Isolation time:</b> <code>{html.escape(str(selection.get('isolation_time_ist') or '—'))}</code>",
+            f"<b>Signal time:</b> <code>{html.escape(str(signal.get('confirmed_time') or '—'))}</code>",
+            f"<b>Signal:</b> <b>{html.escape(signal_word)}</b>",
+            f"<b>Confirmation price:</b> {self._fmt(signal.get('confirmed_time_price'))}",
+            f"<b>Signal came from:</b> {html.escape(str(source.get('trading_symbol') or source.get('instrument_key') or '—'))}",
+            f"<b>Why accepted:</b> {html.escape(eligibility)}",
+            f"<b>Other signals:</b> {other_count} other eligible signal(s) were checked; {ignored_count} signal(s) from before the isolation minute were ignored.",
+            "",
+            "<b>Why this instrument was selected</b>",
+            html.escape(target_reason),
+            f"Selected leg: <b>{html.escape(str(target.get('leg_role') or '—').title())}</b>",
+            f"Trading symbol: <b>{html.escape(str(target.get('trading_symbol') or '—'))}</b>",
             f"Instrument key: <code>{html.escape(str(target.get('instrument_key') or '—'))}</code>",
-            f"Leg: <b>{html.escape(str(target.get('leg_role') or '—'))}</b>",
-            f"Live entry: <b>{self._fmt(target.get('entry_price'))}</b>",
+            "",
+            "<b>Price plan</b>",
+            f"Live entry price: <b>{self._fmt(target.get('entry_price'))}</b>",
             f"Stop loss: <b>{self._fmt(calc.get('stop_loss'))}</b>",
-            f"Target: <b>{self._fmt(calc.get('target_price'))}</b>",
+            f"Target price: <b>{self._fmt(calc.get('target_price'))}</b>",
             "",
-            f"SL calculation: {html.escape(str(calc.get('stop_loss_basis')))}",
-            f"Target calculation: {html.escape(str(calc.get('target_band')))} (+{self._fmt(calc.get('target_offset'))})",
-            f"Decision: {html.escape(str(document['decision']['reason']))}",
+            "<b>How the stop was calculated</b>",
+            f"30% stop: {self._fmt(calc.get('percentage_stop_loss'))}",
+            f"Nearest support below entry: {html.escape(support_text)}",
+            f"Selected stop: {html.escape(str(calc.get('stop_loss_basis') or '—'))}",
             "",
-            "<i>Sandbox calculation only — no order has been placed.</i>",
+            "<b>How the target was calculated</b>",
+            f"Entry band: {html.escape(str(calc.get('target_band') or '—'))}",
+            f"Target increase: +{self._fmt(calc.get('target_offset'))}",
+            "",
+            "<b>In simple words</b>",
+            "We checked the first Supertrend signal from both option instruments. "
+            "We kept the first eligible signal and used its direction to choose the target instrument. "
+            "Entry uses the selected instrument's live market price.",
+            "",
+            "<i>This is a saved calculation and notification only. No order was placed.</i>",
         ])
         return send_isolation_html(message)
 
