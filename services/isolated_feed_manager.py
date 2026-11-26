@@ -171,6 +171,47 @@ class IsolatedFeedManager:
                             update_supertrend_snapshot_cache(key, payload, received_at, interval=interval)
                         except Exception:
                             logger.exception("Could not update Supertrend snapshot cache key=%s interval=%s", key, interval)
+
+                        # Evaluate the pair after every accepted frame. The sandbox
+                        # service reads both instruments' interval-specific caches,
+                        # chooses the earliest confirmed signal once, and waits for
+                        # a fresh live quote before saving a plan.
+                        try:
+                            from jobs.daily_refresh import get_feed_service
+                            from services.sandbox_signal_service import (
+                                process_supertrend_signal_update,
+                            )
+
+                            def _live_quote(instrument_key):
+                                market_feed = get_feed_service()
+                                if market_feed is None:
+                                    return {"ltp": None, "stale": True, "reason": "market_feed_unavailable"}
+                                health = market_feed.get_health()
+                                instrument = (health.get("instruments") or {}).get(instrument_key) or {}
+                                ltp = market_feed.get_ltp(instrument_key)
+                                return {
+                                    "ltp": ltp,
+                                    "stale": bool(instrument.get("stale", True)),
+                                    "age_seconds": instrument.get("age_seconds"),
+                                    "received_at": instrument.get("last_recv"),
+                                }
+
+                            outcome = process_supertrend_signal_update(
+                                isolation_record, interval, _live_quote
+                            )
+                            if outcome.get("state") not in {
+                                "waiting_for_snapshot", "waiting_for_first_signal",
+                                "already_processed",
+                            }:
+                                logger.info(
+                                    "Sandbox signal evaluation | interval=%s | state=%s",
+                                    interval, outcome.get("state"),
+                                )
+                        except Exception:
+                            logger.exception(
+                                "Sandbox Supertrend signal evaluation failed | key=%s interval=%s",
+                                key, interval,
+                            )
                         row = {
                             "received_at_ist": received_at,
                             "indicator": "supertrend",
