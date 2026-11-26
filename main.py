@@ -313,6 +313,10 @@ def status():
         "jobs": jobs,
         "isolated_feeds": get_isolated_feed_status(),
         "isolated_pivots": get_isolated_pivot_status(),
+        "sandbox_signals": __import__(
+            "sandbox_services.supertrend_signal_service",
+            fromlist=["get_sandbox_signal_status"],
+        ).get_sandbox_signal_status(),
     }
 
 @app.get("/startup-state")
