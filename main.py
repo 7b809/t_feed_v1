@@ -209,6 +209,11 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down…")
 
     try:
+        stop_isolated_pivot_capture()
+    except Exception:
+        logger.exception("Isolated pivot capture shutdown failed.")
+
+    try:
         stop_isolated_feeds()
     except Exception:
         logger.exception("Isolated Supertrend feed shutdown failed.")
