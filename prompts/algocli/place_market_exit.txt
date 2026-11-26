@@ -1,1 +1,0 @@
-Use the upstox-order skill to MARKET SELL $lot_label of instrument $instrument_key, product I (Intraday). Return valid JSON only.

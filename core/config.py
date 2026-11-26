@@ -176,22 +176,6 @@ SUPERTREND_INTERVALS = [
 if "1m" not in SUPERTREND_INTERVALS:
     raise ValueError("SUPERTREND_INTERVALS must include 1m")
 
-# Price-based pre-isolation Supertrend recovery. Historical decisions are
-# informational unless LIVE_GTT_EXECUTION_ENABLED is also enabled.
-ISOLATION_SUPERTREND_RECOVERY_ENABLED = (
-    os.getenv("ISOLATION_SUPERTREND_RECOVERY_ENABLED", "true").strip().lower()
-    in {"1", "true", "yes", "on"}
-)
-ISOLATION_SUPERTREND_MIN_MOVE_PERCENT = float(
-    os.getenv("ISOLATION_SUPERTREND_MIN_MOVE_PERCENT", "0.10")
-)
-ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS = max(
-    1, int(os.getenv("ISOLATION_SUPERTREND_RECOVERY_MAX_DELAY_SECONDS", "60"))
-)
-ISOLATION_SUPERTREND_SNAPSHOT_WAIT_SECONDS = max(
-    0, int(os.getenv("ISOLATION_SUPERTREND_SNAPSHOT_WAIT_SECONDS", "15"))
-)
-
 # Scan-window bounds. The start reads ISOLATION_SCAN_START_* first so a
 # deployment can delay the scan start (e.g. until 09:18, when OR levels
 # are actually ready) without moving MARKET_OPEN_*. Falls back to
@@ -333,51 +317,10 @@ DISCONNECT_HOUR = int(os.getenv("DISCONNECT_HOUR", "15"))
 DISCONNECT_MINUTE = int(os.getenv("DISCONNECT_MINUTE", "45"))
 
 # ---------------------------------------------------------------------------
-# Isolation client notifications (fire-and-forget)
-# ---------------------------------------------------------------------------
-ISOLATION_NOTIFY_ENABLED = (
-    os.getenv("ISOLATION_NOTIFY_ENABLED", "false").strip().lower() == "true"
-)
-
-# Comma-separated URLs, e.g. https://client-a.example/api/isolation,https://client-b.example/api/isolation
-ISOLATION_NOTIFY_CLIENT_URLS = [
-    url.strip()
-    for url in os.getenv("ISOLATION_NOTIFY_CLIENT_URLS", "").split(",")
-    if url.strip()
-]
-
-# Shared secret. Both this service (sender) and each client (receiver)
-# must configure the SAME value; the sender transmits it under
-# ISOLATION_NOTIFY_CLIENT_KEY_HEADER. Empty means "send without a key".
-ISOLATION_NOTIFY_CLIENT_KEY = (
-    os.getenv("ISOLATION_NOTIFY_CLIENT_KEY", "").strip()
-)
-
-# Header name under which the shared key is sent. Defaults to
-# "X-Isolation-Key". Change to "X-API-Key" / "Authorization" / etc. if
-# the client expects something else.
-ISOLATION_NOTIFY_CLIENT_KEY_HEADER = (
-    os.getenv("ISOLATION_NOTIFY_CLIENT_KEY_HEADER", "X-Isolation-Key").strip()
-    or "X-Isolation-Key"
-)
-
-ISOLATION_NOTIFY_TIMEOUT_SECONDS = float(
-    os.getenv("ISOLATION_NOTIFY_TIMEOUT_SECONDS", "5")
-)
-TOKEN_CACHE_TTL_SECONDS = int(os.getenv("TOKEN_CACHE_TTL_SECONDS", "1800"))
-# ---------------------------------------------------------------------------
 # API
 # ---------------------------------------------------------------------------
 API_HOST = os.getenv("API_HOST", "0.0.0.0")
 API_PORT = int(os.getenv("API_PORT", "8001"))
-
-# ---------------------------------------------------------------------------
-# AlgoCLI test API (disabled by default; live broker writes require two gates)
-# ---------------------------------------------------------------------------
-ALGOCLI_TEST_API_ENABLED = os.getenv("ALGOCLI_TEST_API_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-ALGOCLI_TEST_API_KEY = os.getenv("ALGOCLI_TEST_API_KEY", "").strip()
-ALGOCLI_TEST_LIVE_WRITES_ENABLED = os.getenv("ALGOCLI_TEST_LIVE_WRITES_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
-ALGOCLI_TEST_DATA_DIR = os.getenv("ALGOCLI_TEST_DATA_DIR", "data/algocli_tests").strip() or "data/algocli_tests"
 
 # ---------------------------------------------------------------------------
 # Daily MEGA data backup
@@ -401,80 +344,3 @@ MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
 MEGA_BACKUP_ROOT = os.getenv("MEGA_BACKUP_ROOT", "isolation_app").strip().strip("/")
 
 
-# ---------------------------------------------------------------------------
-# Live option-chain capture
-# ---------------------------------------------------------------------------
-OPTION_CHAIN_CAPTURE_ENABLED = (
-    os.getenv("OPTION_CHAIN_CAPTURE_ENABLED", "true").strip().lower() == "true"
-)
-
-OPTION_CHAIN_INDEXES = [
-    key.strip()
-    for key in os.getenv("OPTION_CHAIN_INDEXES", "NSE_INDEX|Nifty 50").split(",")
-    if key.strip()
-]
-
-# Pivot calculation is independent of live option-chain subscriptions.
-# By default, calculate pivots for all four supported index option universes.
-OPTION_PIVOT_INDEXES = [
-    key.strip()
-    for key in os.getenv(
-        "OPTION_PIVOT_INDEXES",
-        "NSE_INDEX|Nifty 50,NSE_INDEX|Nifty Bank,NSE_INDEX|NIFTY MID SELECT,BSE_INDEX|SENSEX",
-    ).split(",")
-    if key.strip()
-]
-
-
-# ---------------------------------------------------------------------------
-# Live Supertrend GTT execution (disabled by default)
-# ---------------------------------------------------------------------------
-def _live_bool(name: str, default: str = "false") -> bool:
-    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
-
-def _live_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-def _live_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-LIVE_GTT_EXECUTION_ENABLED = _live_bool("LIVE_GTT_EXECUTION_ENABLED", "false")
-LIVE_GTT_KILL_SWITCH = _live_bool("LIVE_GTT_KILL_SWITCH", "false")
-# Each of the two independent GTTs is fixed to one lot for this strategy.
-LIVE_GTT_LOTS_PER_ORDER = _live_int("LIVE_GTT_LOTS_PER_ORDER", 1)
-DUMMY_ORDER_QUANTITY = _live_int("DUMMY_ORDER_QUANTITY", 2)  # legacy; not used by two-GTT execution
-DUMMY_ORDER_STOP_LOSS_PERCENT = _live_float("DUMMY_ORDER_STOP_LOSS_PERCENT", 30.0)
-DUMMY_TARGET_UPPER_THRESHOLD = _live_float("DUMMY_TARGET_UPPER_THRESHOLD", 200.0)
-DUMMY_TARGET_LOWER_THRESHOLD = _live_float("DUMMY_TARGET_LOWER_THRESHOLD", 100.0)
-DUMMY_TARGET_POINTS_ABOVE_UPPER = _live_float("DUMMY_TARGET_POINTS_ABOVE_UPPER", 60.0)
-DUMMY_TARGET_POINTS_MIDDLE = _live_float("DUMMY_TARGET_POINTS_MIDDLE", 50.0)
-DUMMY_TARGET_POINTS_BELOW_LOWER = _live_float("DUMMY_TARGET_POINTS_BELOW_LOWER", 40.0)
-
-LIVE_GTT_ISOLATION_LOOKBACK_SECONDS = _live_int("LIVE_GTT_ISOLATION_LOOKBACK_SECONDS", 60)
-LIVE_GTT_MAX_SIGNAL_AGE_SECONDS = _live_int("LIVE_GTT_MAX_SIGNAL_AGE_SECONDS", 120)
-LIVE_GTT_MAX_FRAME_AGE_SECONDS = _live_int("LIVE_GTT_MAX_FRAME_AGE_SECONDS", 5)
-LIVE_GTT_QUOTE_MAX_AGE_SECONDS = _live_int("LIVE_GTT_QUOTE_MAX_AGE_SECONDS", 10)
-
-LIVE_GTT_EARLY_ENTRY_START = os.getenv("LIVE_GTT_EARLY_ENTRY_START", "09:15")
-LIVE_GTT_EARLY_ENTRY_END = os.getenv("LIVE_GTT_EARLY_ENTRY_END", "09:39:59")
-LIVE_GTT_EARLY_MAX_ENTRIES = _live_int("LIVE_GTT_EARLY_MAX_ENTRIES", 2)
-LIVE_GTT_LATE_ENTRY_START = os.getenv("LIVE_GTT_LATE_ENTRY_START", "09:40")
-LIVE_GTT_LATE_MAX_ENTRIES = _live_int("LIVE_GTT_LATE_MAX_ENTRIES", 1)
-LIVE_GTT_LATE_ALLOW_REVERSAL = _live_bool("LIVE_GTT_LATE_ALLOW_REVERSAL", "false")
-
-LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR = _live_float("LIVE_GTT_MAX_NOTIONAL_PER_TRADE_INR", 0.0)
-LIVE_GTT_MAX_RISK_PER_TRADE_INR = _live_float("LIVE_GTT_MAX_RISK_PER_TRADE_INR", 0.0)
-LIVE_GTT_REVERSAL_CLOSE_TIMEOUT_SECONDS = _live_int("LIVE_GTT_REVERSAL_CLOSE_TIMEOUT_SECONDS", 30)
-LIVE_GTT_MONITOR_INTERVAL_SECONDS = _live_int("LIVE_GTT_MONITOR_INTERVAL_SECONDS", 3)
-
-LIVE_GTT_AUDIT_COLLECTION = os.getenv("LIVE_GTT_AUDIT_COLLECTION", "live_gtt_execution_audit")
-LIVE_GTT_STATE_COLLECTION = os.getenv("LIVE_GTT_STATE_COLLECTION", "live_gtt_execution_state")
-LIVE_GTT_AUDIT_DIR = os.getenv("LIVE_GTT_AUDIT_DIR", "data/live_gtt_audit")
-LIVE_GTT_STATE_DIR = os.getenv("LIVE_GTT_STATE_DIR", "data/live_gtt_state")
-LIVE_GTT_AUDIT_MAX_EVENTS = _live_int("LIVE_GTT_AUDIT_MAX_EVENTS", 500)

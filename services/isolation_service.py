@@ -61,10 +61,8 @@ from repositories.isolation_repository import IsolationRepository
 from services.execution_mode_service import pin_execution_mode
 from services.index_touch_detector import IndexTouchDetector
 from services.touch_arbitration_service import arbitrate_touches
-from services.isolation_notification_service import notify_isolation_clients
 from services.isolated_archive_service import IsolatedArchiveService
 from services.isolated_feed_manager import start_isolated_feeds
-from services.isolated_live_feed_capture_service import start_isolated_live_feed
 from services.isolation_telegram_service import notify_isolation_created
 
 logger = get_logger(__file__)
@@ -342,25 +340,8 @@ class IsolationService:
             archive_path = self.archive.save_isolation(record)
         except Exception:
             logger.exception("Local isolation archive failed; Mongo record remains saved")
-        # Historical Supertrend recovery is queued only after the isolation
-        # record is durable. It uses a dedicated worker and the same GTT
-        # safeguards as live signals; failures never block live feed startup.
-        try:
-            from services.live_gtt_execution_service import (
-                dispatch_pre_isolation_supertrend_recovery,
-            )
-            dispatch_pre_isolation_supertrend_recovery(record, self.access_token)
-        except Exception:
-            logger.exception(
-                "Could not queue pre-isolation Supertrend recovery; live flow remains active"
-            )
-
-        # Optional live-feed archive is strictly best-effort. It must never
+        # Optional Supertrend capture is strictly best-effort. It must never
         # block or roll back the already-persisted isolation.
-        try:
-            start_isolated_live_feed(record, feed)
-        except Exception:
-            logger.exception("Isolated live-feed capture failed; isolation remains active")
         try:
             start_isolated_feeds(record)
         except Exception:
@@ -369,9 +350,6 @@ class IsolationService:
             notify_isolation_created(record, archive_path)
         except Exception:
             logger.exception("Isolation Telegram notification failed")
-        # Best-effort notification starts only after Mongo persistence.
-        # Worker threads do not block this isolation flow waiting for clients.
-        notify_isolation_clients(record)
         logger.info(
             "Isolation persisted: %s | mode=%s | bias=%s | backfilled=%s",
             record["trading_symbol"], record["standard_execution_mode"],

@@ -46,32 +46,8 @@ from jobs.deferred_startup import run_deferred_startup_sequence
 from jobs.isolation_scan import run_isolation_scan
 from services.daily_data_backup_service import DailyDataBackupService
 from core.mongo_client import get_mongo_db
-from core.config import OPTION_CHAIN_CAPTURE_ENABLED
 
 logger = get_logger(__file__)
-
-
-def _option_pivot_scheduler_interval() -> int:
-    """Return a safe polling cadence for completed option candles."""
-    try:
-        configured = int(os.getenv("OPTION_PIVOT_SCHEDULER_INTERVAL_SECONDS", "30"))
-    except (TypeError, ValueError):
-        logger.warning("Invalid OPTION_PIVOT_SCHEDULER_INTERVAL_SECONDS; using 30")
-        configured = 30
-    return max(15, configured)
-
-
-def _run_option_chain_capture_job() -> None:
-    """Run the lowest-priority option capture behind a hard exception boundary."""
-    try:
-        from services.option_chain_capture_service import ensure_option_chain_capture
-        result = ensure_option_chain_capture()
-        logger.debug("Option-chain capture result: %s", result)
-    except Exception:
-        logger.exception(
-            "Optional option-chain capture failed; skipping this cycle. "
-            "Isolation scan and primary feeds continue unaffected."
-        )
 
 
 def _pivot_check_job() -> None:
@@ -170,21 +146,6 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
     )
-
-    # Option-chain capture retries until today's OR levels and the primary
-    # market feed are ready. The service itself is idempotent after success.
-    if OPTION_CHAIN_CAPTURE_ENABLED:
-        scheduler.add_job(
-            _run_option_chain_capture_job,
-            # Recheck frequently enough to notice completed 1m/15m candles.
-            # The pivot worker is independently guarded and rate limited.
-            IntervalTrigger(seconds=_option_pivot_scheduler_interval()),
-            id="option_chain_capture",
-            name="Live Option Chain + Multi-Interval Pivot Capture",
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-        )
 
     # End-of-day disconnect
     scheduler.add_job(

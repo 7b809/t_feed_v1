@@ -1,1 +1,0 @@
-Use the upstox-pnl skill to fetch current positions, including instrument keys and net quantities. Return valid JSON only.

@@ -25,10 +25,6 @@ GET  /api/v1/isolation/history              recent isolation history
 POST /api/v1/isolation/trigger              manual isolation scan
 POST /api/v1/isolation/backfill             manual startup backfill
 
-POST /api/algocli-test/place-gtt              generate/execute a guarded AlgoCLI GTT test\nPOST /api/isolation-test                    send a static dummy isolation
-                                            payload to each client URL and
-                                            return per-URL HTTP result
-
 GET  /api/v1/search/instrument              first match at a given strike
 GET  /api/v1/search/instrument/all          all matches at a given strike
 GET  /api/v1/search/instrument/atm          ATM lookup from NIFTY LTP
@@ -49,11 +45,7 @@ from zoneinfo import ZoneInfo
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
-from api.routes.isolation import (
-    router as isolation_router,
-    test_router as isolation_test_router,
-)
-from api.routes.algocli_test import router as algocli_test_router
+from api.routes.isolation import router as isolation_router
 from api.routes.search import router as search_router
 from api.routes.market_feed import router as market_feed_router, shutdown_websocket_feeds
 from scheduler import start_scheduler
@@ -76,9 +68,6 @@ from services.isolated_feed_manager import (
     start_isolated_feeds, get_isolated_feed_status, stop_isolated_feeds,
 )
 from services.isolation_telegram_service import notify_runtime_event
-from services.isolated_live_feed_capture_service import (
-    start_isolated_live_feed, get_isolated_live_feed_status, stop_isolated_live_feed,
-)
 from services.log_file_service import (
     DEFAULT_TAIL_LINES,
     HARD_MAX_TAIL_LINES,
@@ -87,25 +76,6 @@ from services.log_file_service import (
 )
 
 logger = get_logger(__file__)
-
-
-def _get_option_chain_capture_status_safe() -> dict:
-    """Optional feature health must never make the API unavailable."""
-    try:
-        from services.option_chain_capture_service import get_option_chain_capture_status
-        return get_option_chain_capture_status()
-    except Exception:
-        logger.exception("Optional option-chain status unavailable")
-        return {"enabled": True, "state": "unavailable"}
-
-
-def _stop_option_chain_capture_safe() -> None:
-    """Shut down optional capture without affecting core shutdown."""
-    try:
-        from services.option_chain_capture_service import stop_option_chain_capture
-        stop_option_chain_capture()
-    except Exception:
-        logger.exception("Optional option-chain capture shutdown failed")
 
 
 _scheduler = None                       # populated in lifespan
@@ -218,18 +188,6 @@ async def lifespan(app: FastAPI):
         _restore_isolation_capture()
 
         try:
-            from services.option_chain_capture_service import ensure_option_chain_capture
-            logger.info("Startup option-chain capture: %s", ensure_option_chain_capture())
-        except Exception:
-            logger.exception("Startup option-chain capture kickoff failed")
-
-        try:
-            from services.live_gtt_execution_service import start_live_gtt_execution_service
-            logger.info("Startup live GTT execution service: %s", start_live_gtt_execution_service())
-        except Exception:
-            logger.exception("Live GTT execution service startup failed")
-
-        try:
             _scheduler = start_scheduler()
             logger.info(
                 "Scheduler running. Jobs: %s",
@@ -247,22 +205,9 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down…")
 
     try:
-        from services.live_gtt_execution_service import stop_live_gtt_execution_service
-        stop_live_gtt_execution_service()
-    except Exception:
-        logger.exception("Live GTT execution service shutdown failed")
-
-    _stop_option_chain_capture_safe()
-
-    try:
-        stop_isolated_live_feed()
-    except Exception:
-        logger.exception("Isolated live-feed capture shutdown failed")
-
-    try:
         stop_isolated_feeds()
     except Exception:
-        logger.exception("Isolated SR/Supertrend feed shutdown failed.")
+        logger.exception("Isolated Supertrend feed shutdown failed.")
 
     try:
         shutdown_websocket_feeds()
@@ -291,15 +236,13 @@ app = FastAPI(
         "OR-level auto-compute, Upstox feed, index-isolation pipeline "
         "with NIFTY-trend bias, deferred startup gate, startup backfill, "
         "isolation API, instrument search API, log inspection API, and "
-        "synchronous client-notification test endpoint."
+        "Telegram isolation notifications and multi-interval Supertrend capture."
     ),
     version="0.7.1",
     lifespan=lifespan,
 )
 
 app.include_router(isolation_router)
-app.include_router(isolation_test_router)
-app.include_router(algocli_test_router)
 app.include_router(search_router)
 app.include_router(market_feed_router)
 
@@ -311,8 +254,6 @@ def health():
     return {
         "status": "ok",
         "isolated_feeds": get_isolated_feed_status(),
-        "isolated_live_feed": get_isolated_live_feed_status(),
-        "option_chain_capture": _get_option_chain_capture_status_safe(),
     }
 
 
@@ -332,11 +273,10 @@ def _restore_isolation_capture() -> None:
                 and record.get("instrument_key")):
             if not archive:
                 IsolatedArchiveService().save_isolation(record)
-            start_isolated_live_feed(record)
             start_isolated_feeds(record)
             notify_runtime_event(
                 "ISOLATION CAPTURE RESTORED",
-                f"{record.get('trading_symbol') or record.get('instrument_key')} · live feed, SR and Supertrend recovery requested.",
+                f"{record.get('trading_symbol') or record.get('instrument_key')} · multi-interval Supertrend feeds restored.",
                 "🔄",
             )
     except Exception:
@@ -355,9 +295,7 @@ def status():
                 }
             )
     return {"scheduler_running": _scheduler is not None, "jobs": jobs,
-            "isolated_feeds": get_isolated_feed_status(),
-            "isolated_live_feed": get_isolated_live_feed_status(),
-            "option_chain_capture": _get_option_chain_capture_status_safe()}
+            "isolated_feeds": get_isolated_feed_status()}
 
 @app.get("/startup-state")
 def startup_state():

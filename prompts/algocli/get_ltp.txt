@@ -1,1 +1,0 @@
-Use the upstox skill to fetch the latest LTP for instrument $instrument_key. Return valid JSON only.

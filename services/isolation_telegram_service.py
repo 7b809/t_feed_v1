@@ -386,24 +386,3 @@ def send_existing_isolation_test(record: dict) -> bool:
 
 def notify_runtime_event(title: str, detail: str, emoji: str = "ℹ️") -> bool:
     return send_html(f"{emoji} <b>{html.escape(title)}</b>\n{html.escape(detail)}")
-
-
-def notify_indicator_event(indicator: str, payload: dict, symbol: str, role: str) -> bool:
-    """Log individual SR/Supertrend updates locally; never send Telegram spam."""
-    event = payload.get("event")
-    if indicator == "sr" and event == "sr_update":
-        levels = payload.get("new_levels") or payload.get("confirmed_levels") or payload.get("levels")
-        count = len(levels) if isinstance(levels, list) else 0
-        logger.info(
-            "[INDICATOR] New SR level update identified | instrument=%s | leg=%s | levels=%d",
-            symbol, role, count,
-        )
-        return False
-    if indicator == "supertrend" and event == "supertrend_signal":
-        signal = _v(payload.get("signal") or payload.get("trend"))
-        logger.info(
-            "[INDICATOR] Supertrend signal identified | instrument=%s | leg=%s | signal=%s",
-            symbol, role, signal,
-        )
-        return False
-    return False
