@@ -8,6 +8,7 @@ from sandbox_services.supertrend_signal_service import SandboxSupertrendSignalSe
 def _record():
     return {
         "trade_date_ist": "2026-11-27",
+        "isolation_created_at": "2026-11-27T09:30:40+05:30",
         "isolation_id": "2026-11-27__NSE_FO|111",
         "instrument_key": "NSE_FO|111",
         "trading_symbol": "NIFTY 26000 CE",
@@ -106,10 +107,10 @@ def test_first_bearish_signal_targets_opposite_instrument(tmp_path, monkeypatch)
         ltp_provider=lambda key: {"ltp": 150.0, "stale": False},
     )
     assert result["state"] == "processed"
-    assert result["target_instrument_key"] == "NSE_FO|222"
+    assert result["target_instrument_key"] == "NSE_FO|111"
 
 
-def test_earliest_confirmed_signal_across_both_legs_wins(tmp_path, monkeypatch):
+def test_signal_before_isolation_minute_is_ignored(tmp_path, monkeypatch):
     service = SandboxSupertrendSignalService(root=tmp_path)
     monkeypatch.setattr(service, "_notify", lambda document: False)
     record = _record()
@@ -129,3 +130,69 @@ def test_earliest_confirmed_signal_across_both_legs_wins(tmp_path, monkeypatch):
     )
     assert result["state"] == "processed"
     assert result["target_instrument_key"] == "NSE_FO|222"
+
+
+
+def test_signal_earlier_seconds_in_same_isolation_minute_is_accepted(tmp_path, monkeypatch):
+    service = SandboxSupertrendSignalService(root=tmp_path)
+    monkeypatch.setattr(service, "_notify", lambda document: False)
+    record = _record()
+    snapshots = {
+        "isolated": _snap("NSE_FO|111", "1m", [{
+            "signal": "buy",
+            "confirmed_time": "2026-11-27T09:30:15+05:30",
+            "confirmed_time_price": 260.5,
+            "received_at_ist": "2026-11-27T09:30:42+05:30",
+        }]),
+        "opposite": _snap("NSE_FO|222", "1m", []),
+    }
+    result = service.process_snapshots(
+        record, "1m", snapshots,
+        ltp_provider=lambda key: {"ltp": 250.0, "stale": False},
+    )
+    assert result["state"] == "processed"
+    assert result["target_instrument_key"] == "NSE_FO|111"
+
+
+def test_same_confirmation_time_uses_first_websocket_arrival(tmp_path, monkeypatch):
+    service = SandboxSupertrendSignalService(root=tmp_path)
+    monkeypatch.setattr(service, "_notify", lambda document: False)
+    record = _record()
+    snapshots = {
+        "isolated": _snap("NSE_FO|111", "1m", [{
+            "signal": "sell",
+            "confirmed_time": "2026-11-27T09:31:00+05:30",
+            "confirmed_time_price": 250.0,
+            "received_at_ist": "2026-11-27T09:31:03+05:30",
+        }]),
+        "opposite": _snap("NSE_FO|222", "1m", [{
+            "signal": "buy",
+            "confirmed_time": "2026-11-27T09:31:00+05:30",
+            "confirmed_time_price": 120.0,
+            "received_at_ist": "2026-11-27T09:31:02+05:30",
+        }]),
+    }
+    result = service.process_snapshots(
+        record, "1m", snapshots,
+        ltp_provider=lambda key: {"ltp": 120.0, "stale": False},
+    )
+    assert result["state"] == "processed"
+    assert result["target_instrument_key"] == "NSE_FO|222"
+
+
+def test_only_signals_from_before_isolation_minute_are_waiting(tmp_path):
+    service = SandboxSupertrendSignalService(root=tmp_path)
+    record = _record()
+    snapshots = {
+        "isolated": _snap("NSE_FO|111", "15m", [{
+            "signal": "buy",
+            "confirmed_time": "2026-11-27T09:29:59+05:30",
+            "confirmed_time_price": 260.5,
+        }]),
+        "opposite": _snap("NSE_FO|222", "15m", []),
+    }
+    result = service.process_snapshots(
+        record, "15m", snapshots, ltp_provider=lambda key: {"ltp": 250.0, "stale": False}
+    )
+    assert result["state"] == "waiting_for_first_signal"
+    assert result["ignored_pre_isolation_signal_count"] == 1
