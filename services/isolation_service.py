@@ -333,6 +333,18 @@ class IsolationService:
                 "data": None,
             }
 
+        # Ensure the Upstox market feed supplies live LTP for both option
+        # legs; Supertrend WebSocket prices are not used as entry prices.
+        try:
+            if feed:
+                option_keys = [
+                    record.get("instrument_key"),
+                    (record.get("opposite_leg") or {}).get("instrument_key"),
+                ]
+                feed.subscribe([key for key in option_keys if key])
+        except Exception:
+            logger.exception("Could not subscribe both option legs to live LTP feed")
+
         self.repo.upsert_current(record)
         self.repo.append_history(record)
         # Persist the complete two-leg snapshot locally before starting feeds.
