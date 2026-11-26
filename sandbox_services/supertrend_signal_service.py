@@ -68,6 +68,7 @@ class SandboxSupertrendSignalService:
     def __init__(self, root: str | Path | None = None):
         self.root = Path(root or os.getenv("ISOLATED_DATA_DIR", "data/isolated"))
         self.output_root = self.root / "sandbox_services"
+        self.enabled = os.getenv("SANDBOX_SUPERTREND_SIGNALS_ENABLED", "true").strip().lower() == "true"
         self._status: dict[str, dict] = {}
 
     def process_update(
@@ -77,6 +78,8 @@ class SandboxSupertrendSignalService:
         ltp_provider: Callable | None,
     ) -> dict:
         """Evaluate the two cached snapshots after any accepted WS frame."""
+        if not self.enabled:
+            return {"state": "disabled", "interval": _normalise_interval(interval)}
         interval = _normalise_interval(interval)
         trade_date = str(isolation_record.get("trade_date_ist") or datetime.now(IST).date().isoformat())
         legs = self._legs(isolation_record)
@@ -452,7 +455,7 @@ class SandboxSupertrendSignalService:
                 os.unlink(temp_name)
 
     def status(self) -> dict:
-        return {"output_directory": str(self.output_root), "intervals": dict(self._status)}
+        return {"enabled": self.enabled, "output_directory": str(self.output_root), "intervals": dict(self._status)}
 
 
 _service = SandboxSupertrendSignalService()
