@@ -376,8 +376,15 @@ class IsolatedPivotCaptureManager:
                     boundary = now.replace(hour=9, minute=15, second=0, microsecond=0)
                     stop_event.wait(max(1.0, (boundary - now).total_seconds()))
                     continue
-                if now.time().replace(tzinfo=None) >= SESSION_CLOSE:
+                close_at = datetime.combine(now.date(), SESSION_CLOSE, tzinfo=IST)
+                grace = timedelta(seconds=service.close_grace_seconds)
+                if now >= close_at + grace:
                     break
+                if now >= close_at:
+                    # Let the final 15:15–15:30 and 15:29–15:30 candles
+                    # publish before fetching them after the configured grace.
+                    stop_event.wait(max(0.1, (close_at + grace - now).total_seconds()))
+                    continue
                 with self._lock:
                     self._status[isolation_id] = {
                         **self._status.get(isolation_id, {}),
