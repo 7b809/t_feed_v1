@@ -406,7 +406,14 @@ class IsolatedPivotCaptureManager:
                             **self._status.get(isolation_id, {}),
                             "state": "error", "last_error": str(exc),
                         }
-                stop_event.wait(poll_seconds)
+                after_cycle = datetime.now(IST)
+                close_at = datetime.combine(after_cycle.date(), SESSION_CLOSE, tzinfo=IST)
+                final_deadline = close_at + timedelta(seconds=service.close_grace_seconds)
+                remaining = (final_deadline - after_cycle).total_seconds()
+                if remaining <= 0:
+                    break
+                # Do not sleep past the final completed-candle fetch window.
+                stop_event.wait(min(poll_seconds, max(0.1, remaining)))
             with self._lock:
                 self._status[isolation_id] = {
                     **self._status.get(isolation_id, {}),
