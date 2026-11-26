@@ -30,6 +30,44 @@ Each isolated and opposite leg receives one feed per configured interval. Files 
 
 The 1-minute endpoint is `/ws/supertrend/{instrument_key}`; other intervals use `/ws/supertrend/interval/{interval}/{instrument_key}`. Instrument keys are URL-encoded.
 
+## Isolated option pivot levels
+
+The active isolated option and its exact opposite CE/PE contract are processed independently.
+The service calculates levels from completed Upstox intraday candles for **1-minute and
+15-minute** intervals only. It does not scan or subscribe to the full option chain and
+does not restore order placement, GTT, positions, or execution workflows.
+
+Configuration:
+
+```dotenv
+ISOLATED_PIVOT_ENABLED=true
+ISOLATED_PIVOT_INTERVALS=1,15
+ISOLATED_PIVOT_SCHEDULER_INTERVAL_SECONDS=30
+ISOLATED_PIVOT_CANDLE_CLOSE_GRACE_SECONDS=5
+ISOLATED_PIVOT_FETCH_REQUESTS_PER_SECOND=4
+ISOLATED_PIVOT_FETCH_MAX_RETRIES=2
+ISOLATED_PIVOT_FETCH_RETRY_BACKOFF_SECONDS=1
+```
+
+Files are written atomically under
+`data/isolated/pivots/{YYYYMMDD}/{isolated|opposite}/{instrument_key}/`:
+
+- `pivot_levels_1m.json` — latest completed 1-minute candle's levels.
+- `pivot_levels_15m.json` — latest completed 15-minute candle's levels.
+- `pivot_levels_opening_1m.json` — preserved opening 09:15 one-minute candle levels, when available.
+
+The level document includes the instrument/leg metadata, interval, source candle,
+source candle timestamps, calculation inputs, and R3/R2/R1/AVG/S1/S2/S3 levels.
+Candles are aligned to the 09:15 IST session open; a configurable publication grace
+is applied and incomplete candles are never used. A polling worker runs only for the
+current isolation pair during the weekday 09:15–15:30 IST session. The worker resumes
+for today's persisted isolation after application restart. Status is exposed in
+`GET /status` under `isolated_pivots`.
+
+This calculation uses the same existing range-level formula as the project's OR
+calculator, applied independently to each completed option candle; it is not a
+traditional previous-day floor-pivot formula.
+
 ## Telegram
 
 Configure `TELEGRAM_BOT_TOKEN`, `TELEGRAM_GROUP_CHAT_ID`, and optionally `TELEGRAM_CHAT_ID`. Group announcements are controlled by `TELEGRAM_GROUP_ENABLED`; private-chat announcements are controlled by `TELEGRAM_ENABLED`.
