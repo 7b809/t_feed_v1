@@ -195,7 +195,16 @@ class IsolatedPivotLevelsService:
         folder = self._folder(leg, trade_date)
         folder.mkdir(parents=True, exist_ok=True)
         target_path = folder / f"pivot_levels_{interval}m.json"
-        if self._is_current(target_path, key, trade_date, interval, target_stamp):
+        opening_stamp = datetime.combine(
+            date.fromisoformat(trade_date), SESSION_OPEN, tzinfo=IST
+        )
+        opening_path = folder / "pivot_levels.json"
+        opening_is_saved = True
+        if interval == 1:
+            opening_is_saved = self._is_current(
+                opening_path, key, trade_date, 1, opening_stamp
+            )
+        if self._is_current(target_path, key, trade_date, interval, target_stamp) and opening_is_saved:
             return "already_present"
 
         candles = self._fetch_with_retry(key, interval)
@@ -203,21 +212,16 @@ class IsolatedPivotLevelsService:
             (row for row in candles if _as_ist(row.get("timestamp")) == target_stamp),
             None,
         )
-        if interval == 1:
-            opening_stamp = datetime.combine(
-                date.fromisoformat(trade_date), SESSION_OPEN, tzinfo=IST
+        if interval == 1 and not opening_is_saved:
+            opening = next(
+                (row for row in candles if _as_ist(row.get("timestamp")) == opening_stamp),
+                None,
             )
-            opening_path = folder / "pivot_levels_opening_1m.json"
-            if not opening_path.exists():
-                opening = next(
-                    (row for row in candles if _as_ist(row.get("timestamp")) == opening_stamp),
-                    None,
+            if opening is not None:
+                self._save_levels(
+                    opening_path, leg, key, trade_date, 1, opening_stamp, opening,
+                    document_type="opening_candle",
                 )
-                if opening is not None:
-                    self._save_levels(
-                        opening_path, leg, key, trade_date, 1, opening_stamp, opening,
-                        document_type="opening_candle",
-                    )
         if matched is None:
             logger.debug(
                 "Isolated pivot candle not published yet | interval=%dm key=%s target=%s",
