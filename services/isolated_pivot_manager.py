@@ -27,6 +27,7 @@ IST = ZoneInfo("Asia/Kolkata")
 SESSION_OPEN = dt_time(9, 15)
 SESSION_CLOSE = dt_time(15, 30)
 LEVEL_KEYS = ("R3", "R2", "R1", "AVG", "S1", "S2", "S3")
+THRESHOLD_KEYS = ("R3_Threshold", "S3_Threshold")
 
 
 def _safe(value: Any) -> str:
@@ -278,6 +279,7 @@ class IsolatedPivotLevelsService:
                 and int(doc.get("interval_minutes", 0)) == interval
                 and stamp == target
                 and all(levels.get(name) is not None for name in LEVEL_KEYS)
+                and all(levels.get(name) is not None for name in THRESHOLD_KEYS)
             )
         except (OSError, ValueError, TypeError, json.JSONDecodeError, AttributeError):
             return False
@@ -292,6 +294,8 @@ class IsolatedPivotLevelsService:
             "R3": calculated["R3"], "R2": calculated["R2"], "R1": calculated["R1"],
             "AVG": calculated.get("A", calculated.get("avg")),
             "S1": calculated["S1"], "S2": calculated["S2"], "S3": calculated["S3"],
+            "R3_Threshold": calculated["R3_Threshold"],
+            "S3_Threshold": calculated["S3_Threshold"],
         }
         if any(value is None or not math.isfinite(float(value)) for value in levels.values()):
             raise ValueError(f"Invalid pivot levels for {key} interval={interval}m")
@@ -313,6 +317,10 @@ class IsolatedPivotLevelsService:
             "source_candle_end_timestamp": (candle_stamp + timedelta(minutes=interval)).isoformat(),
             "source_candle": candle,
             "levels": levels,
+            "thresholds": {
+                "R3_Threshold": levels["R3_Threshold"],
+                "S3_Threshold": levels["S3_Threshold"],
+            },
             "calculation": calculated,
         }
         path.parent.mkdir(parents=True, exist_ok=True)
