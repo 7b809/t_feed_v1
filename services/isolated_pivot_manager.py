@@ -368,6 +368,7 @@ class IsolatedPivotCaptureManager:
             service = IsolatedPivotLevelsService(token)
             poll_seconds = max(15, int(os.getenv("ISOLATED_PIVOT_SCHEDULER_INTERVAL_SECONDS", "30")))
             trade_date = str(record.get("trade_date_ist") or datetime.now(IST).date().isoformat())
+            final_cycle_done = False
             while not stop_event.is_set():
                 now = datetime.now(IST)
                 if now.date().isoformat() != trade_date or now.weekday() >= 5:
@@ -378,9 +379,9 @@ class IsolatedPivotCaptureManager:
                     continue
                 close_at = datetime.combine(now.date(), SESSION_CLOSE, tzinfo=IST)
                 grace = timedelta(seconds=service.close_grace_seconds)
-                if now >= close_at + grace:
+                if now >= close_at + grace and final_cycle_done:
                     break
-                if now >= close_at:
+                if now >= close_at and now < close_at + grace:
                     # Let the final 15:15–15:30 and 15:29–15:30 candles
                     # publish before fetching them after the configured grace.
                     stop_event.wait(max(0.1, (close_at + grace - now).total_seconds()))
@@ -411,6 +412,7 @@ class IsolatedPivotCaptureManager:
                 final_deadline = close_at + timedelta(seconds=service.close_grace_seconds)
                 remaining = (final_deadline - after_cycle).total_seconds()
                 if remaining <= 0:
+                    final_cycle_done = True
                     break
                 # Do not sleep past the final completed-candle fetch window.
                 stop_event.wait(min(poll_seconds, max(0.1, remaining)))
