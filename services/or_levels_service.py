@@ -84,7 +84,14 @@ class ORLevelsService:
                 self._save_mongo(merged)
                 self._save_local(merged)
 
-            still_missing = [key for key in INSTRUMENT_KEYS if key not in merged_indexes]
+            still_missing = [
+                key for key in INSTRUMENT_KEYS
+                if (
+                    key not in merged_indexes
+                    or (merged_indexes.get(key) or {}).get("levels", {}).get("R3_Threshold") is None
+                    or (merged_indexes.get(key) or {}).get("levels", {}).get("S3_Threshold") is None
+                )
+            ]
             if still_missing:
                 logger.error("OR levels remain incomplete after repair; missing=%s", still_missing)
             else:
