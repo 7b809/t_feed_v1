@@ -164,67 +164,102 @@ class SandboxSupertrendSignalService:
                 self._status[f"{isolation_id}|{interval}"] = state
                 return state
 
-            eligible_candidates = []
-            rejected_candidates = []
-            for role in ("isolated", "opposite"):
-                snap = snapshots.get(role) or {}
-                expected_key = legs[role]["instrument_key"]
-                actual_key = str(snap.get("instrument_key") or expected_key)
-                if actual_key != expected_key:
-                    continue
-                actual_interval = _normalise_interval(snap.get("interval") or interval)
-                if actual_interval != interval:
-                    continue
-                for signal in _signal_rows(snap, role):
-                    confirmed_dt = _parse_ist_timestamp(signal.get("confirmed_time"))
-                    if confirmed_dt is None:
+            pending_path = output_path.with_suffix(".pending.json")
+            pending_document = self._load_json(pending_path)
+
+            if pending_document:
+                # The first eligible signal is locked even if live LTP is not
+                # available yet. Later signals cannot replace this selection.
+                first_signal = pending_document["first_signal"]
+                signal_selection = pending_document["signal_selection"]
+            else:
+                eligible_candidates = []
+                rejected_candidates = []
+                for role in ("isolated", "opposite"):
+                    snap = snapshots.get(role) or {}
+                    expected_key = legs[role]["instrument_key"]
+                    actual_key = str(snap.get("instrument_key") or expected_key)
+                    if actual_key != expected_key:
                         continue
-                    received_dt = _parse_ist_timestamp(
-                        signal.get("received_at_ist") or snap.get("snapshot_updated_at_ist")
-                    ) or confirmed_dt
-                    signal_minute = confirmed_dt.replace(second=0, microsecond=0)
-                    row = {
-                        **signal,
-                        "confirmed_at_ist": confirmed_dt.isoformat(),
-                        "received_at_ist": received_dt.isoformat(),
-                        "source_leg_role": role,
-                        "signal_minute_ist": signal_minute.isoformat(),
-                        "eligible_for_isolation": signal_minute >= isolation_minute,
-                        "eligibility_reason": (
-                            "Confirmed in the same minute as isolation or in a later minute."
-                            if signal_minute >= isolation_minute
-                            else "Confirmed before the isolation minute."
-                        ),
+                    actual_interval = _normalise_interval(snap.get("interval") or interval)
+                    if actual_interval != interval:
+                        continue
+                    for signal in _signal_rows(snap, role):
+                        confirmed_dt = _parse_ist_timestamp(signal.get("confirmed_time"))
+                        if confirmed_dt is None:
+                            continue
+                        received_dt = _parse_ist_timestamp(
+                            signal.get("received_at_ist") or snap.get("snapshot_updated_at_ist")
+                        ) or confirmed_dt
+                        signal_minute = confirmed_dt.replace(second=0, microsecond=0)
+                        row = {
+                            **signal,
+                            "confirmed_at_ist": confirmed_dt.isoformat(),
+                            "received_at_ist": received_dt.isoformat(),
+                            "source_leg_role": role,
+                            "signal_minute_ist": signal_minute.isoformat(),
+                            "eligible_for_isolation": signal_minute >= isolation_minute,
+                            "eligibility_reason": (
+                                "Confirmed in the same minute as isolation or in a later minute."
+                                if signal_minute >= isolation_minute
+                                else "Confirmed before the isolation minute."
+                            ),
+                        }
+                        if row["eligible_for_isolation"]:
+                            eligible_candidates.append(row)
+                        else:
+                            rejected_candidates.append(row)
+
+                if not eligible_candidates:
+                    state = {
+                        "state": "waiting_for_first_signal",
+                        "interval": interval,
+                        "isolation_time_ist": isolation_dt.isoformat(),
+                        "eligible_signal_count": 0,
+                        "ignored_pre_isolation_signal_count": len(rejected_candidates),
+                        "ignored_signals": rejected_candidates,
                     }
-                    if row["eligible_for_isolation"]:
-                        eligible_candidates.append(row)
-                    else:
-                        rejected_candidates.append(row)
+                    self._status[f"{isolation_id}|{interval}"] = state
+                    return state
 
-            if not eligible_candidates:
-                state = {
-                    "state": "waiting_for_first_signal",
-                    "interval": interval,
-                    "isolation_time_ist": isolation_dt.isoformat(),
-                    "eligible_signal_count": 0,
-                    "ignored_pre_isolation_signal_count": len(rejected_candidates),
-                    "ignored_signals": rejected_candidates,
-                }
-                self._status[f"{isolation_id}|{interval}"] = state
-                return state
-
-            # Earliest confirmation wins. If both legs confirm at the exact
-            # same time, the earlier WebSocket arrival wins. If that also ties,
-            # prefer the isolated leg for deterministic behaviour.
-            eligible_candidates.sort(
-                key=lambda item: (
-                    _parse_ist_timestamp(item.get("confirmed_time")) or datetime.max.replace(tzinfo=IST),
-                    _parse_ist_timestamp(item.get("received_at_ist")) or datetime.max.replace(tzinfo=IST),
-                    0 if item.get("source_leg_role") == "isolated" else 1,
+                # Earliest confirmation wins. If confirmation times match,
+                # the first WebSocket arrival wins. An exact tie prefers the
+                # isolated leg for deterministic behaviour.
+                eligible_candidates.sort(
+                    key=lambda item: (
+                        _parse_ist_timestamp(item.get("confirmed_time")) or datetime.max.replace(tzinfo=IST),
+                        _parse_ist_timestamp(item.get("received_at_ist")) or datetime.max.replace(tzinfo=IST),
+                        0 if item.get("source_leg_role") == "isolated" else 1,
+                    )
                 )
-            )
-            candidates = eligible_candidates
-            first_signal = candidates[0]
+                first_signal = eligible_candidates[0]
+                signal_selection = {
+                    "rule": (
+                        "Signals confirmed in the same minute as isolation or later are eligible. "
+                        "Seconds within the isolation minute do not disqualify a signal. "
+                        "The earliest confirmation wins; equal confirmation times are ordered "
+                        "by WebSocket arrival time. The first selected signal is locked."
+                    ),
+                    "isolation_time_ist": isolation_dt.isoformat(),
+                    "isolation_minute_ist": isolation_minute.isoformat(),
+                    "eligible_signal_count": len(eligible_candidates),
+                    "ignored_pre_isolation_signal_count": len(rejected_candidates),
+                    "eligible_signals_considered": eligible_candidates,
+                    "ignored_signals": rejected_candidates,
+                    "selected_because": (
+                        "This was the first eligible signal by confirmation time. "
+                        "If another leg confirmed at the same time, this signal's WebSocket "
+                        "frame arrived first. The selection is now locked for this interval."
+                    ),
+                }
+                self._atomic_write(pending_path, {
+                    "isolation_id": isolation_id,
+                    "interval": interval,
+                    "first_signal": first_signal,
+                    "signal_selection": signal_selection,
+                    "locked_at_ist": datetime.now(IST).isoformat(),
+                })
+
             source_role = first_signal["source_leg_role"]
             target_role = source_role if first_signal["signal"] == "buy" else (
                 "opposite" if source_role == "isolated" else "isolated"
@@ -264,25 +299,7 @@ class SandboxSupertrendSignalService:
                 "created_at_ist": datetime.now(IST).isoformat(),
                 "interval": interval,
                 "first_signal": first_signal,
-                "signal_selection": {
-                    "rule": (
-                        "Signals confirmed in the same minute as isolation or later are eligible. "
-                        "Seconds within the isolation minute do not disqualify a signal. "
-                        "The earliest confirmation wins; equal confirmation times are ordered "
-                        "by WebSocket arrival time."
-                    ),
-                    "isolation_time_ist": isolation_dt.isoformat(),
-                    "isolation_minute_ist": isolation_minute.isoformat(),
-                    "eligible_signal_count": len(eligible_candidates),
-                    "ignored_pre_isolation_signal_count": len(rejected_candidates),
-                    "eligible_signals_considered": eligible_candidates,
-                    "ignored_signals": rejected_candidates,
-                    "selected_because": (
-                        "This was the first eligible signal by confirmation time. "
-                        "If another leg confirmed at the same time, this signal's WebSocket "
-                        "frame arrived first."
-                    ),
-                },
+                "signal_selection": signal_selection,
                 "signal_source": {
                     "leg_role": source_role,
                     "instrument_key": legs[source_role]["instrument_key"],
@@ -321,6 +338,10 @@ class SandboxSupertrendSignalService:
                 },
             }
             self._atomic_write(output_path, document)
+            try:
+                pending_path.unlink(missing_ok=True)
+            except OSError:
+                logger.exception("Could not remove pending signal lock file: %s", pending_path)
             notification_sent = self._notify(document)
             document["notification"] = {
                 "attempted": True,
