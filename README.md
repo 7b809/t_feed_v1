@@ -30,6 +30,27 @@ Each isolated and opposite leg receives one feed per configured interval. Files 
 
 The 1-minute endpoint is `/ws/supertrend/{instrument_key}`; other intervals use `/ws/supertrend/interval/{interval}/{instrument_key}`. Instrument keys are URL-encoded.
 
+## Sandbox Supertrend signal plans
+
+After an isolation is created, the isolated and opposite instruments' interval-specific
+Supertrend WebSocket snapshots are compared. For each interval (default `1m` and
+`15m`), the earliest confirmed `buy`/`sell` signal across the two legs wins. A `buy`
+selects the instrument that emitted the signal; a `sell` selects the opposite leg.
+Only one plan is saved per isolation and interval. A missing fresh live LTP delays
+processing; the service does not substitute the Supertrend confirmation price for entry.
+
+The selected target instrument's live Upstox market-feed LTP is the entry. The stop
+is the lower numeric value of the 30% entry stop and the nearest valid S1/S2/S3 support
+below entry; if no valid support is available, the 30% stop is used. Target offsets are
++40 for entry <= 100, +50 for 100 < entry <= 200, and +60 for entry > 200.
+
+Plans are saved under `data/isolated/sandbox_services/{YYYYMMDD}/`, one JSON file
+per isolation and interval. Notifications are sent to the enabled isolation Telegram
+group/private destinations. `SANDBOX_SUPERTREND_SIGNALS_ENABLED=true` enables this
+workflow. The saved payload records the signal source, target-leg decision, live entry,
+support candidates, stop/target formulas, and explicitly marks `order_placed=false`.
+This is analysis/notification only; it does not place orders or manage positions.
+
 ## Index isolation thresholds
 
 Index isolation uses the thresholds calculated from the index's own opening-range
