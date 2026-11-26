@@ -166,9 +166,8 @@ ISOLATION_OPTION_LTP_WAIT_SECONDS = int(
     os.getenv("ISOLATION_OPTION_LTP_WAIT_SECONDS", "5")
 )
 
-# Supertrend feeds run independently for each configured candle interval.
-# Keep 1m enabled for legacy recovery/trading compatibility.
 # Independent pivot calculation for only the active isolated/opposite option pair.
+# This is separate from the Supertrend WebSocket interval configuration.
 ISOLATED_PIVOT_ENABLED = os.getenv("ISOLATED_PIVOT_ENABLED", "true").strip().lower() == "true"
 ISOLATED_PIVOT_INTERVALS = [
     item.strip().lower().removesuffix("m")
