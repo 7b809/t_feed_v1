@@ -467,7 +467,7 @@ class TimeWindowSupertrendService:
         try:
             legs = self._active_legs()
             if len(legs) != 2:
-                logger.warning("Time-window Supertrend scan skipped: today's active isolation pair is unavailable")
+                logger.debug("Time-window Supertrend scan skipped: today's active isolation pair is unavailable")
                 return {"state": "isolation_pair_unavailable"}
 
             day_root = self._day_root(now.date())
@@ -502,7 +502,7 @@ class TimeWindowSupertrendService:
                             use_atr=TIME_WINDOW_SUPERTREND_USE_ATR,
                         )
                         if trends is None:
-                            logger.info(
+                            logger.debug(
                                 "Insufficient completed candles | role=%s key=%s interval=%s count=%d",
                                 role, key, interval, len(candles),
                             )
