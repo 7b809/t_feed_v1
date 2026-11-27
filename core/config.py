@@ -355,3 +355,51 @@ MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
 MEGA_BACKUP_ROOT = os.getenv("MEGA_BACKUP_ROOT", "isolation_app").strip().strip("/")
 
 
+
+# ---------------------------------------------------------------------------
+# Daily time-window Supertrend scan (separate from WebSocket signal plans)
+# ---------------------------------------------------------------------------
+TIME_WINDOW_SUPERTREND_ENABLED = (
+    os.getenv("TIME_WINDOW_SUPERTREND_ENABLED", "true").strip().lower() == "true"
+)
+TIME_WINDOW_SUPERTREND_START_HOUR = int(os.getenv("TIME_WINDOW_SUPERTREND_START_HOUR", "15"))
+TIME_WINDOW_SUPERTREND_START_MINUTE = int(os.getenv("TIME_WINDOW_SUPERTREND_START_MINUTE", "0"))
+TIME_WINDOW_SUPERTREND_END_HOUR = int(os.getenv("TIME_WINDOW_SUPERTREND_END_HOUR", "15"))
+TIME_WINDOW_SUPERTREND_END_MINUTE = int(os.getenv("TIME_WINDOW_SUPERTREND_END_MINUTE", "40"))
+TIME_WINDOW_SUPERTREND_SCAN_SECOND = int(os.getenv("TIME_WINDOW_SUPERTREND_SCAN_SECOND", "10"))
+TIME_WINDOW_SUPERTREND_CANDLE_GRACE_SECONDS = int(
+    os.getenv("TIME_WINDOW_SUPERTREND_CANDLE_GRACE_SECONDS", "5")
+)
+TIME_WINDOW_SUPERTREND_HISTORY_DAYS = max(
+    1, int(os.getenv("TIME_WINDOW_SUPERTREND_HISTORY_DAYS", "12"))
+)
+TIME_WINDOW_SUPERTREND_HISTORY_BATCH_DAYS = max(
+    1, int(os.getenv("TIME_WINDOW_SUPERTREND_HISTORY_BATCH_DAYS", "3"))
+)
+_TIME_WINDOW_INTERVALS = [
+    item.strip().lower().removesuffix("m")
+    for item in os.getenv("TIME_WINDOW_SUPERTREND_INTERVALS", "1m,3m,5m,15m").split(",")
+    if item.strip()
+]
+TIME_WINDOW_SUPERTREND_INTERVALS = sorted(
+    {f"{int(item)}m" for item in _TIME_WINDOW_INTERVALS
+     if item.isdigit() and 1 <= int(item) <= 60},
+    key=lambda item: int(item.removesuffix("m")),
+)
+if not TIME_WINDOW_SUPERTREND_INTERVALS:
+    TIME_WINDOW_SUPERTREND_INTERVALS = ["1m", "3m", "5m", "15m"]
+TIME_WINDOW_SUPERTREND_ATR_PERIOD = max(
+    1, int(os.getenv("TIME_WINDOW_SUPERTREND_ATR_PERIOD", "10"))
+)
+TIME_WINDOW_SUPERTREND_MULTIPLIER = max(
+    0.1, float(os.getenv("TIME_WINDOW_SUPERTREND_MULTIPLIER", "3.0"))
+)
+TIME_WINDOW_SUPERTREND_USE_ATR = (
+    os.getenv("TIME_WINDOW_SUPERTREND_USE_ATR", "true").strip().lower() == "true"
+)
+TIME_WINDOW_SUPERTREND_MAX_NOTIFICATION_ATTEMPTS = max(
+    1, int(os.getenv("TIME_WINDOW_SUPERTREND_MAX_NOTIFICATION_ATTEMPTS", "5"))
+)
+TIME_WINDOW_SUPERTREND_DATA_DIR = os.getenv(
+    "TIME_WINDOW_SUPERTREND_DATA_DIR", "data/time_window_supertrend"
+)
