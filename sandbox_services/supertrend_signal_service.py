@@ -18,7 +18,10 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from core.logger import get_logger
-from services.isolation_telegram_service import (\n    format_option_chart_links,\n    send_isolation_notifications,\n)
+from services.isolation_telegram_service import (
+    format_option_chart_links,
+    send_isolation_notifications,
+)
 from services.supertrend_snapshot_cache import get_supertrend_snapshot
 
 logger = get_logger(__file__)
