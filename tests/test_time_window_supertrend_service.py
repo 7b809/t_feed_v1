@@ -104,6 +104,8 @@ def test_notification_messages_include_both_chart_links_and_split_detail(monkeyp
     group_message, private_message = service._make_notifications(record)
     assert "Isolated instrument chart" in group_message
     assert "Opposite instrument chart" in group_message
+    assert "NSE_FO|123" in group_message
+    assert "NSE_FO|456" in group_message
     assert "125.50" not in group_message
     assert "125.50" in private_message
     assert "Isolated instrument chart" in private_message
@@ -189,3 +191,12 @@ def test_telegram_private_retry_does_not_resend_successful_group(monkeypatch):
         ("private", "time-window-private"),
         ("private", "time-window-private"),
     ]
+
+def test_telegram_disabled_destinations_are_reported_as_skipped(monkeypatch):
+    import services.isolation_telegram_service as telegram
+
+    monkeypatch.setattr(telegram, "TELEGRAM_BOT_TOKEN", "")
+    monkeypatch.setattr(telegram, "TELEGRAM_GROUP_ENABLED", False)
+    monkeypatch.setattr(telegram, "TELEGRAM_ENABLED", False)
+    result = telegram.send_isolation_notification_results("group", "private")
+    assert result == {"group": None, "private": None}
