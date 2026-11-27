@@ -96,24 +96,35 @@ def send_group_html(message: str) -> bool:
 
 
 def send_isolation_html(message: str) -> bool:
-    """Send an isolation-related message to every configured Telegram destination.
+    """Backward-compatible helper: send identical content to enabled destinations."""
+    return send_isolation_notifications(message, message)
 
-    The official group and legacy/private chat are independent opt-ins.
-    Duplicate chat IDs are delivered only once.
+
+def send_isolation_notifications(group_message: str, private_message: str) -> bool:
+    """Send audience-specific content to the group and private Telegram chat.
+
+    The group receives only the concise public summary. The private chat keeps
+    the detailed operational message. Each destination remains independently
+    configurable, and duplicate chat IDs are delivered only once (group first).
     """
     if not TELEGRAM_BOT_TOKEN:
         return False
 
     destinations = []
     if TELEGRAM_GROUP_ENABLED and TELEGRAM_GROUP_CHAT_ID:
-        destinations.append((TELEGRAM_GROUP_CHAT_ID, "isolation-group"))
+        destinations.append((TELEGRAM_GROUP_CHAT_ID, "isolation-group", group_message))
     if TELEGRAM_ENABLED and TELEGRAM_CHAT_ID:
-        destinations.append((TELEGRAM_CHAT_ID, "isolation-chat"))
+        destinations.append((TELEGRAM_CHAT_ID, "isolation-chat", private_message))
 
     delivered = False
     seen = set()
-    for chat_id, label in destinations:
+    for chat_id, label, message in destinations:
         if chat_id in seen:
+            logger.warning(
+                "Telegram destination %s is configured for both group and private alerts; "
+                "the group-safe message was sent only once.",
+                chat_id,
+            )
             continue
         seen.add(chat_id)
         delivered = _post_html(chat_id, message, label) or delivered
@@ -199,9 +210,9 @@ def format_chart_links(record: dict) -> list[str]:
             items.append((key, label))
 
     if isinstance(isolated, dict):
-        add(isolated.get("instrument_key"), "Isolated instrument")
+        add(isolated.get("instrument_key"), "Isolated instrument chart")
     if isinstance(opposite, dict):
-        add(opposite.get("instrument_key"), "Opposite instrument")
+        add(opposite.get("instrument_key"), "Opposite instrument chart")
     related = source.get("related_instruments") or archive.get("related_instruments") or []
     if isinstance(related, list):
         for item in related:
@@ -231,6 +242,61 @@ def format_chart_links(record: dict) -> list[str]:
         f'<a href="{html.escape(CHART_BASE_URL + "/chart/" + quote(key, safe=""), quote=True)}">📈 {html.escape(label)}</a>'
         for key, label in items
     ]
+
+
+def format_option_chart_links(isolated_leg: dict, opposite_leg: dict) -> list[str]:
+    """Return only the two clearly labelled option-chart links."""
+    if not CHART_BASE_URL:
+        return []
+    links = []
+    for leg, label, emoji in (
+        (isolated_leg, "Isolated instrument chart", "📈"),
+        (opposite_leg, "Opposite instrument chart", "📉"),
+    ):
+        key = str((leg or {}).get("instrument_key") or "").strip()
+        if not key:
+            continue
+        url = CHART_BASE_URL.rstrip("/") + "/chart/" + quote(key, safe="")
+        links.append(
+            f'<a href="{html.escape(url, quote=True)}">{emoji} {html.escape(label)}</a>'
+        )
+    return links
+
+
+def _build_group_isolation_message(record: dict) -> str:
+    """Build a strategy-safe isolation announcement for the public group."""
+    archive = record if isinstance(record, dict) else {}
+    is_archive = isinstance(archive.get("source_record"), dict)
+    source = archive.get("source_record") if is_archive else archive
+    source = source if isinstance(source, dict) else {}
+    instruments = archive.get("instruments") if is_archive else {}
+    instruments = instruments if isinstance(instruments, dict) else {}
+    isolated = instruments.get("isolated") if instruments else source
+    opposite = instruments.get("opposite") if instruments else source.get("opposite_leg")
+    isolated = isolated if isinstance(isolated, dict) else {}
+    opposite = opposite if isinstance(opposite, dict) else {}
+    timings = archive.get("timings") if is_archive else {}
+    timings = timings if isinstance(timings, dict) else {}
+    created_at = _first(
+        timings.get("created_at_ist"), source.get("isolation_created_at"),
+        source.get("isolation_touch_time")
+    )
+    trade_date = _first(archive.get("trade_date_ist"), source.get("trade_date_ist"))
+    backfilled = bool(source.get("isolation_backfilled"))
+    title = "🟠 INSTRUMENT ISOLATION RESTORED" if backfilled else "🟢 NEW INSTRUMENT ISOLATION"
+    lines = [
+        f"<b>{title}</b>",
+        f"<i>{_safe(trade_date)} · IST</i>",
+        "",
+        f"🟢 <b>Isolated:</b> <code>{_safe(isolated.get('trading_symbol') or isolated.get('instrument_key'))}</code>",
+        f"🔴 <b>Opposite:</b> <code>{_safe(opposite.get('trading_symbol') or opposite.get('instrument_key'))}</code>",
+        f"🕒 <b>Created:</b> {_time_ist(created_at)}",
+        f"<b>Status:</b> {_safe(_first(source.get('status'), archive.get('status'), 'ACTIVE'))}",
+    ]
+    links = format_option_chart_links(isolated, opposite)
+    if links:
+        lines += ["", "📊 <b>OPTION CHARTS</b>", *links]
+    return "\\n".join(lines)
 
 
 def _build_isolation_message(record: dict) -> str:
@@ -364,12 +430,13 @@ def _build_isolation_message(record: dict) -> str:
 
 
 def notify_isolation_created(record: dict, archive_path: str | None = None) -> bool:
-    """Send the isolation announcement to all enabled Telegram destinations."""
+    """Send a concise group announcement and the full detail to private chat."""
     try:
-        message = _build_isolation_message(record)
-        return send_isolation_html(message)
+        group_message = _build_group_isolation_message(record)
+        private_message = _build_isolation_message(record)
+        return send_isolation_notifications(group_message, private_message)
     except Exception:
-        logger.exception("Could not format isolation group notification")
+        logger.exception("Could not format isolation Telegram notifications")
         return False
 
 
