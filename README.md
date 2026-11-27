@@ -57,6 +57,61 @@ workflow. The saved payload records the signal source, target-leg decision, live
 support candidates, stop/target formulas, and explicitly marks `order_placed=false`.
 This is analysis/notification only; it does not place orders or manage positions.
 
+## Daily time-window Supertrend signal scan
+
+A separate scheduler task scans the active isolated and opposite option instruments
+during the configured afternoon window. It does not replace the WebSocket-based
+sandbox signal workflow.
+
+Defaults are weekdays, 15:00–15:40 IST. The first run is scheduled at 15:00:10;
+subsequent runs execute at ten seconds past each minute. Each cycle refreshes
+today's intraday candles and reuses date/instrument/interval-keyed historical
+batches fetched on the first run. Historical requests are split into three-day
+batches and transient failures are retried on later cycles. Only fully completed
+candles are evaluated, with a configurable publication grace.
+
+The default intervals are 1m, 3m, 5m, and 15m. 30m, 45m, and 60m can be enabled
+through configuration. Each isolated/opposite leg and interval is evaluated
+independently. Every trend flip whose candle closes inside the 15:00–15:40 window
+is persisted; deterministic signal IDs prevent duplicate records and alerts when
+the same candles are reprocessed. One instrument/interval failure does not stop
+other scans. Failed Telegram deliveries remain pending for bounded retries.
+
+Daily files are stored under `data/time_window_supertrend/{YYYYMMDD}/`:
+- `history/` — historical API batches cached for the day.
+- `intraday/` — latest intraday candle snapshots by leg and interval.
+- `signals/{interval}/` — one atomic JSON file per unique signal.
+- `signals.json` — daily signal index and notification delivery state.
+- `state.json` — latest cycle status and errors.
+
+Notifications use the existing `TELEGRAM_GROUP_ENABLED` /
+`TELEGRAM_GROUP_CHAT_ID` and `TELEGRAM_ENABLED` / `TELEGRAM_CHAT_ID`
+destinations. Group messages contain a concise signal summary; private messages
+include the instrument key, candle close, signal ID, and Supertrend parameters.
+No orders are placed.
+
+Configuration (all values are read at process startup):
+
+```dotenv
+TIME_WINDOW_SUPERTREND_ENABLED=true
+TIME_WINDOW_SUPERTREND_START_HOUR=15
+TIME_WINDOW_SUPERTREND_START_MINUTE=0
+TIME_WINDOW_SUPERTREND_END_HOUR=15
+TIME_WINDOW_SUPERTREND_END_MINUTE=40
+TIME_WINDOW_SUPERTREND_SCAN_SECOND=10
+TIME_WINDOW_SUPERTREND_CANDLE_GRACE_SECONDS=5
+TIME_WINDOW_SUPERTREND_INTERVALS=1m,3m,5m,15m
+TIME_WINDOW_SUPERTREND_ATR_PERIOD=10
+TIME_WINDOW_SUPERTREND_MULTIPLIER=3.0
+TIME_WINDOW_SUPERTREND_USE_ATR=true
+TIME_WINDOW_SUPERTREND_HISTORY_DAYS=12
+TIME_WINDOW_SUPERTREND_HISTORY_BATCH_DAYS=3
+TIME_WINDOW_SUPERTREND_MAX_NOTIFICATION_ATTEMPTS=5
+TIME_WINDOW_SUPERTREND_DATA_DIR=data/time_window_supertrend
+```
+
+The status is exposed by `GET /status` under `time_window_supertrend`.
+
 ## Index isolation thresholds
 
 Index isolation uses the thresholds calculated from the index's own opening-range
