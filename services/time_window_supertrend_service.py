@@ -42,7 +42,7 @@ from core.token_service import fetch_access_token
 from services.isolated_archive_service import IsolatedArchiveService
 from services.isolation_telegram_service import (
     format_option_chart_links,
-    send_isolation_notifications,
+    send_isolation_notification_results,
 )
 
 logger = get_logger(__file__)
@@ -380,8 +380,14 @@ class TimeWindowSupertrendService:
 
     def _deliver_pending(self, state: dict) -> int:
         delivered = 0
+        day_root = self._day_root(_now().date())
         for record in state["signals"]:
-            notification = record.setdefault("notification", {"status": "pending", "attempts": 0})
+            notification = record.setdefault("notification", {
+                "status": "pending",
+                "attempts": 0,
+                "group_delivered": False,
+                "private_delivered": False,
+            })
             if notification.get("status") == "delivered":
                 continue
             if int(notification.get("attempts", 0)) >= TIME_WINDOW_SUPERTREND_MAX_NOTIFICATION_ATTEMPTS:
@@ -390,14 +396,34 @@ class TimeWindowSupertrendService:
             notification["attempts"] = int(notification.get("attempts", 0)) + 1
             notification["last_attempt_at_ist"] = _iso(_now())
             try:
-                sent = send_isolation_notifications(group_message, private_message)
+                outcomes = send_isolation_notification_results(
+                    group_message,
+                    private_message,
+                    send_group=not bool(notification.get("group_delivered")),
+                    send_private=not bool(notification.get("private_delivered")),
+                )
             except Exception:
                 logger.exception("Telegram delivery raised for signal %s", record["signal_id"])
-                sent = False
-            notification["status"] = "delivered" if sent else "pending"
-            if sent:
+                outcomes = {"group": False, "private": False}
+
+            notification["group_delivered"] = (
+                bool(notification.get("group_delivered")) or bool(outcomes.get("group"))
+            )
+            notification["private_delivered"] = (
+                bool(notification.get("private_delivered")) or bool(outcomes.get("private"))
+            )
+            complete = notification["group_delivered"] and notification["private_delivered"]
+            notification["status"] = "delivered" if complete else "pending"
+            notification["updated_at_ist"] = _iso(_now())
+            if complete:
                 delivered += 1
-            _atomic_json(self._day_root(_now().date()) / "signals.json", state)
+
+            signal_path = (
+                day_root / "signals" / _safe(record.get("interval"))
+                / f"{_safe(record.get('signal_id'))}.json"
+            )
+            _atomic_json(signal_path, record)
+            _atomic_json(day_root / "signals.json", state)
         return delivered
 
     def run_cycle(self, now: datetime | None = None) -> dict:
