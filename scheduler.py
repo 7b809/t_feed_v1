@@ -159,7 +159,11 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
             run_time_window_supertrend_scan,
             CronTrigger(
                 day_of_week="mon-fri",
-                hour=f"{TIME_WINDOW_SUPERTREND_START_HOUR}-{TIME_WINDOW_SUPERTREND_END_HOUR}",
+                hour=(
+                    TIME_WINDOW_SUPERTREND_START_HOUR
+                    if TIME_WINDOW_SUPERTREND_START_HOUR == TIME_WINDOW_SUPERTREND_END_HOUR
+                    else f"{TIME_WINDOW_SUPERTREND_START_HOUR}-{TIME_WINDOW_SUPERTREND_END_HOUR}"
+                ),
                 minute="*",
                 second=TIME_WINDOW_SUPERTREND_SCAN_SECOND,
                 timezone=TIMEZONE,
