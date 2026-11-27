@@ -356,22 +356,22 @@ class TimeWindowSupertrendService:
             instruments.get("isolated") or {},
             instruments.get("opposite") or {},
         )
-        chart_block = "\\n" + "\\n".join(chart_links) if chart_links else ""
+        chart_block = "\n" + "\n".join(chart_links) if chart_links else ""
         group_message = (
-            "<b>Time-Window Supertrend Signal</b>\\n"
-            f"Interval: <b>{interval}</b>\\nDirection: <b>{side}</b>\\n"
-            f"Signal time: {signal_time}\\nInstrument: <code>{symbol}</code>\\n"
+            "<b>Time-Window Supertrend Signal</b>\n"
+            f"Interval: <b>{interval}</b>\nDirection: <b>{side}</b>\n"
+            f"Signal time: {signal_time}\nInstrument: <code>{symbol}</code>\n"
             f"Leg: {role}{chart_block}"
         )
         private_message = (
-            "<b>Time-Window Supertrend Signal — Details</b>\\n"
-            f"Instrument: <code>{symbol}</code>\\n"
-            f"Instrument key: <code>{html.escape(record['instrument_key'])}</code>\\n"
-            f"Leg role: <b>{role}</b>\\nInterval: <b>{interval}</b>\\n"
-            f"Direction: <b>{side}</b>\\nSignal candle: {signal_time}\\n"
-            f"Candle close: <b>{float(record['close_price']):.2f}</b>\\n"
-            f"Detected at: {html.escape(record['detected_at_ist'])}\\n"
-            f"Signal ID: <code>{html.escape(record['signal_id'])}</code>\\n"
+            "<b>Time-Window Supertrend Signal — Details</b>\n"
+            f"Instrument: <code>{symbol}</code>\n"
+            f"Instrument key: <code>{html.escape(record['instrument_key'])}</code>\n"
+            f"Leg role: <b>{role}</b>\nInterval: <b>{interval}</b>\n"
+            f"Direction: <b>{side}</b>\nSignal candle: {signal_time}\n"
+            f"Candle close: <b>{float(record['close_price']):.2f}</b>\n"
+            f"Detected at: {html.escape(record['detected_at_ist'])}\n"
+            f"Signal ID: <code>{html.escape(record['signal_id'])}</code>\n"
             f"Supertrend: ATR {TIME_WINDOW_SUPERTREND_ATR_PERIOD}, "
             f"multiplier {TIME_WINDOW_SUPERTREND_MULTIPLIER:g}"
             f"{chart_block}"
