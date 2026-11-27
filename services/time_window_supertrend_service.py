@@ -35,6 +35,7 @@ from core.config import (
     TIME_WINDOW_SUPERTREND_MULTIPLIER,
     TIME_WINDOW_SUPERTREND_USE_ATR,
     TIME_WINDOW_SUPERTREND_MAX_NOTIFICATION_ATTEMPTS,
+    TIME_WINDOW_SUPERTREND_NOTIFICATION_RETRY_MINUTES,
     TIME_WINDOW_SUPERTREND_DATA_DIR,
 )
 from core.logger import get_logger
@@ -432,9 +433,23 @@ class TimeWindowSupertrendService:
         now = (now or _now()).astimezone(IST)
         start = dt_time(TIME_WINDOW_SUPERTREND_START_HOUR, TIME_WINDOW_SUPERTREND_START_MINUTE)
         end = dt_time(TIME_WINDOW_SUPERTREND_END_HOUR, TIME_WINDOW_SUPERTREND_END_MINUTE)
-        last_tick = (datetime.combine(now.date(), end, tzinfo=IST) +
-                     timedelta(seconds=TIME_WINDOW_SUPERTREND_SCAN_SECOND)).time()
-        if now.weekday() >= 5 or not (start <= now.timetz().replace(tzinfo=None) <= last_tick):
+        window_start = datetime.combine(now.date(), start, tzinfo=IST)
+        window_end = datetime.combine(now.date(), end, tzinfo=IST)
+        last_tick = window_end + timedelta(seconds=TIME_WINDOW_SUPERTREND_SCAN_SECOND)
+        retry_deadline = last_tick + timedelta(minutes=TIME_WINDOW_SUPERTREND_NOTIFICATION_RETRY_MINUTES)
+        if now.weekday() >= 5 or now < window_start:
+            return {"state": "outside_window", "at_ist": _iso(now)}
+        if now > last_tick:
+            if now <= retry_deadline and TIME_WINDOW_SUPERTREND_NOTIFICATION_RETRY_MINUTES:
+                day_root = self._day_root(now.date())
+                state = self._load_state(day_root)
+                delivered = self._deliver_pending(state)
+                _atomic_json(day_root / "signals.json", state)
+                return {
+                    "state": "notification_retry",
+                    "notifications_delivered": delivered,
+                    "at_ist": _iso(now),
+                }
             return {"state": "outside_window", "at_ist": _iso(now)}
 
         if not _RUN_LOCK.acquire(blocking=False):
