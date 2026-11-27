@@ -162,7 +162,7 @@ def send_isolation_notification_results(
     if group_active:
         results["group"] = bool(group_id and _post_html(group_id, group_message, "time-window-group"))
     if private_active:
-        if private_id and group_active and group_id and private_id == group_id:
+        if private_id and group_id and private_id == group_id and TELEGRAM_GROUP_ENABLED:
             # The same chat is already receiving the group-safe version.
             results["private"] = True
             logger.warning(
