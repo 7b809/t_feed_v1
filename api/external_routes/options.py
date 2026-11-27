@@ -190,7 +190,11 @@ def external_place_option_orders_by_budget(body: BudgetOptionOrdersRequest):
             slice_order=body.slice_order,
             strict_lot_size=body.strict_lot_size,
         )
-        raise_from_service_result(result, action="budget-option-orders")
+        raise_from_service_result(
+            result,
+            action="budget-option-orders",
+            accepted_statuses=("PREVIEW", "NO_MATCHES"),
+        )
         if result.get("status") == "PARTIAL_SUCCESS":
             return JSONResponse(status_code=207, content=result)
         return result

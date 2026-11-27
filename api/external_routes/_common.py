@@ -49,14 +49,20 @@ def _build_error_detail(result: dict[str, Any], action: str) -> dict[str, Any]:
     }
 
 
-def raise_from_service_result(result: Any, *, action: str) -> None:
+def raise_from_service_result(
+    result: Any,
+    *,
+    action: str,
+    accepted_statuses: tuple[str, ...] = (),
+) -> None:
     """
-    Inspect a sandbox-service result and raise an ``HTTPException`` for FAILED.
+    Inspect a sandbox-service result and raise an HTTPException for failures.
 
-    SUCCESS and PARTIAL_SUCCESS results pass through unchanged (the caller
-    decides whether to wrap them in a 207). FAILED results raise with the
-    broker's HTTP status when available, falling back to 502 for opaque
-    service-level failures.
+    SUCCESS and PARTIAL_SUCCESS always pass through unchanged. Routes may add
+    endpoint-specific non-error outcomes (for example PREVIEW and NO_MATCHES)
+    through accepted_statuses. FAILED and every unrecognized status raise
+    with the broker HTTP status when available, falling back to 502 for
+    opaque service-level failures.
     """
     if not isinstance(result, dict):
         raise HTTPException(
@@ -69,7 +75,11 @@ def raise_from_service_result(result: Any, *, action: str) -> None:
         )
 
     status = str(result.get("status") or "").upper()
-    if status in {"SUCCESS", "PARTIAL_SUCCESS"}:
+    pass_through_statuses = {"SUCCESS", "PARTIAL_SUCCESS"}
+    pass_through_statuses.update(
+        str(value).upper() for value in accepted_statuses if value
+    )
+    if status in pass_through_statuses:
         return
 
     http_status = _extract_http_status(result)

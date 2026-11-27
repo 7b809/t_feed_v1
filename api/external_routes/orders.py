@@ -149,7 +149,11 @@ def external_place_order_service(body: dict):
                 slice_order=budget_body.slice_order,
                 strict_lot_size=budget_body.strict_lot_size,
             )
-            raise_from_service_result(result, action="budget-option-orders")
+            raise_from_service_result(
+                result,
+                action="budget-option-orders",
+                accepted_statuses=("PREVIEW", "NO_MATCHES"),
+            )
             if result.get("status") == "PARTIAL_SUCCESS":
                 return JSONResponse(status_code=207, content=result)
             return result
