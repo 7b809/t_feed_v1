@@ -73,6 +73,7 @@ from services.isolated_pivot_manager import (
 )
 from services.isolation_telegram_service import notify_runtime_event
 from sandbox_services.supertrend_signal_service import get_sandbox_signal_status
+from services.time_window_supertrend_service import get_time_window_supertrend_status
 from services.log_file_service import (
     DEFAULT_TAIL_LINES,
     HARD_MAX_TAIL_LINES,
@@ -315,6 +316,7 @@ def status():
         "isolated_feeds": get_isolated_feed_status(),
         "isolated_pivots": get_isolated_pivot_status(),
         "sandbox_signals": get_sandbox_signal_status(),
+        "time_window_supertrend": get_time_window_supertrend_status(),
     }
 
 @app.get("/startup-state")
