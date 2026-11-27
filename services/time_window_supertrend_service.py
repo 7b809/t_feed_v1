@@ -396,8 +396,10 @@ class TimeWindowSupertrendService:
                 "attempts": 0,
                 "group_delivered": False,
                 "private_delivered": False,
+                "group_skipped": False,
+                "private_skipped": False,
             })
-            if notification.get("status") == "delivered":
+            if notification.get("status") in {"delivered", "skipped"}:
                 continue
             if int(notification.get("attempts", 0)) >= TIME_WINDOW_SUPERTREND_MAX_NOTIFICATION_ATTEMPTS:
                 continue
@@ -415,16 +417,28 @@ class TimeWindowSupertrendService:
                 logger.exception("Telegram delivery raised for signal %s", record["signal_id"])
                 outcomes = {"group": False, "private": False}
 
-            notification["group_delivered"] = (
-                bool(notification.get("group_delivered")) or bool(outcomes.get("group"))
+            for audience in ("group", "private"):
+                outcome = outcomes.get(audience)
+                delivered_key = f"{audience}_delivered"
+                skipped_key = f"{audience}_skipped"
+                if outcome is None:
+                    notification[skipped_key] = True
+                elif outcome is True:
+                    notification[delivered_key] = True
+
+            group_complete = notification.get("group_delivered") or notification.get("group_skipped")
+            private_complete = notification.get("private_delivered") or notification.get("private_skipped")
+            complete = bool(group_complete and private_complete)
+            any_delivered = bool(
+                notification.get("group_delivered") or notification.get("private_delivered")
             )
-            notification["private_delivered"] = (
-                bool(notification.get("private_delivered")) or bool(outcomes.get("private"))
+            notification["status"] = (
+                "delivered" if complete and any_delivered
+                else "skipped" if complete
+                else "pending"
             )
-            complete = notification["group_delivered"] and notification["private_delivered"]
-            notification["status"] = "delivered" if complete else "pending"
             notification["updated_at_ist"] = _iso(_now())
-            if complete:
+            if notification["status"] == "delivered":
                 delivered += 1
 
             signal_path = (
