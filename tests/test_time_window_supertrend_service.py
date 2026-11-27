@@ -129,3 +129,12 @@ def test_signal_persistence_is_idempotent(tmp_path):
     saved = day_root / "signals" / "1m" / "stable-signal-id.json"
     assert len(index["signals"]) == 1
     assert json.loads(saved.read_text(encoding="utf-8"))["signal_id"] == "stable-signal-id"
+
+def test_normalise_candles_discards_non_finite_ohlc():
+    rows = [
+        ["2026-11-27T15:00:00+05:30", 100, 101, 99, 100, 1, 0],
+        ["2026-11-27T15:01:00+05:30", 100, float("nan"), 99, 100, 1, 0],
+    ]
+    candles = _normalise_candles(rows)
+    assert len(candles) == 1
+    assert candles[0]["close"] == 100
