@@ -7,6 +7,7 @@ from services.time_window_supertrend_service import (
     _parse_timestamp,
     _signal_id,
     calculate_supertrend,
+    TimeWindowSupertrendService,
 )
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -55,3 +56,55 @@ def test_supertrend_returns_one_trend_per_candle_after_minimum_history():
     assert set(trends).issubset({-1, 1})
 
 
+
+def test_supertrend_detects_a_bearish_trend_flip():
+    candles = []
+    for index in range(12):
+        price = 100.0 if index < 11 else 90.0
+        candles.append({
+            "timestamp": (datetime(2026, 11, 27, 9, 15, tzinfo=IST) + timedelta(minutes=index)).isoformat(),
+            "open": price,
+            "high": price + 0.5,
+            "low": price - 0.5,
+            "close": price,
+        })
+    trends = calculate_supertrend(candles, period=10, multiplier=3.0, use_atr=True)
+    assert trends is not None
+    assert trends[-2] == 1
+    assert trends[-1] == -1
+
+
+def test_notification_messages_include_both_chart_links_and_split_detail(monkeypatch, tmp_path):
+    import services.time_window_supertrend_service as module
+
+    monkeypatch.setattr(
+        module,
+        "format_option_chart_links",
+        lambda isolated, opposite: [
+            '<a href="https://example.test/isolated">Isolated instrument chart</a>',
+            '<a href="https://example.test/opposite">Opposite instrument chart</a>',
+        ],
+    )
+    service = TimeWindowSupertrendService(root=str(tmp_path))
+    record = {
+        "instrument_key": "NSE_FO|123",
+        "trading_symbol": "NIFTY TEST CE",
+        "leg_role": "isolated",
+        "interval": "1m",
+        "signal": "BUY",
+        "signal_time_ist": "2026-11-27T15:01:00+05:30",
+        "close_price": 125.5,
+        "detected_at_ist": "2026-11-27T15:01:10+05:30",
+        "signal_id": "abc123",
+        "instruments": {
+            "isolated": {"instrument_key": "NSE_FO|123"},
+            "opposite": {"instrument_key": "NSE_FO|456"},
+        },
+    }
+    group_message, private_message = service._make_notifications(record)
+    assert "Isolated instrument chart" in group_message
+    assert "Opposite instrument chart" in group_message
+    assert "125.50" not in group_message
+    assert "125.50" in private_message
+    assert "Isolated instrument chart" in private_message
+    assert "Opposite instrument chart" in private_message
