@@ -11,6 +11,7 @@ External option-chain routes.
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.external_routes._common import raise_from_service_result
@@ -18,6 +19,9 @@ from core.logger import get_logger
 from sandbox_services.option_contract_service import (
     get_available_expiries,
     get_nearest_expiry_option_contracts,
+)
+from sandbox_services.budget_option_order_service import (
+    place_option_orders_by_budget,
 )
 
 logger = get_logger(__file__)
@@ -77,6 +81,33 @@ class AvailableExpiriesRequest(BaseModel):
     )
 
 
+class BudgetOptionOrdersRequest(BaseModel):
+    """Request schema for premium-filtered option-order preview/execution."""
+
+    model_config = ConfigDict(extra="allow")  # allows body.api_token
+
+    underlying_key: Optional[str] = Field(
+        default=None,
+        description="Underlying key or alias (NIFTY, SENSEX, BANKNIFTY, etc.); defaults to NIFTY.",
+    )
+    budget_min: float = Field(..., gt=0, description="Minimum option premium (inclusive).")
+    budget_max: float = Field(..., gt=0, description="Maximum option premium (inclusive).")
+    option_type: str = Field(..., description="CE or PE.")
+    expiry: Optional[str] = Field(default=None, description="Expiry keyword or YYYY-MM-DD; auto-discovered when omitted.")
+    offset_override: Optional[float] = Field(default=None, ge=0, description="Optional underlying strike-range override.")
+    execute: bool = Field(default=False, description="False returns a read-only preview without placing orders.")
+    max_orders: int = Field(default=1, ge=1, le=10, description="Maximum matching contracts to submit; hard-capped at 10.")
+    lot: int = Field(default=1, ge=1, description="Number of lots per selected contract.")
+    transaction_type: str = Field(default="BUY", description="BUY or SELL.")
+    product: str = Field(default="D", description="D or I.")
+    order_type: str = Field(default="LIMIT", description="LIMIT uses selected option-chain LTP; MARKET uses live execution.")
+    validity: str = Field(default="DAY", description="DAY or IOC.")
+    is_amo: bool = False
+    tag: Optional[str] = Field(default=None, max_length=20)
+    slice_order: bool = True
+    strict_lot_size: bool = Field(default=True, description="Require a valid lot size; contract metadata is preferred.")
+
+
 @router.post("/contracts")
 def external_option_contracts(body: OptionContractsRequest):
     """
@@ -129,4 +160,45 @@ def external_option_expiries(body: AvailableExpiriesRequest):
         raise HTTPException(
             status_code=500,
             detail={"error": "Unexpected option-expiry service error."},
+        ) from None
+
+@router.post("/place-by-budget")
+def external_place_option_orders_by_budget(body: BudgetOptionOrdersRequest):
+    """
+    Preview or place option orders selected by contract premium.
+
+    The budget range applies to each option contract's option-chain LTP, not
+    the combined lot value or margin. execute=false is a read-only preview.
+    """
+    try:
+        result = place_option_orders_by_budget(
+            underlying_key=body.underlying_key,
+            budget_min=body.budget_min,
+            budget_max=body.budget_max,
+            option_type=body.option_type,
+            expiry=body.expiry,
+            offset_override=body.offset_override,
+            execute=body.execute,
+            max_orders=body.max_orders,
+            lot=body.lot,
+            transaction_type=body.transaction_type,
+            product=body.product,
+            order_type=body.order_type,
+            validity=body.validity,
+            is_amo=body.is_amo,
+            tag=body.tag,
+            slice_order=body.slice_order,
+            strict_lot_size=body.strict_lot_size,
+        )
+        raise_from_service_result(result, action="budget-option-orders")
+        if result.get("status") == "PARTIAL_SUCCESS":
+            return JSONResponse(status_code=207, content=result)
+        return result
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Unexpected budget-filtered option-order failure")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Unexpected budget-filtered option-order error."},
         ) from None

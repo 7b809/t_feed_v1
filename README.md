@@ -171,6 +171,10 @@ For single-order cancel/exit endpoints, which otherwise have no request body, se
 External mutation endpoints:
 
 - `POST /api/external/v1/orders/place`
+- `POST /api/external/v1/orders/place-service`
+- `POST /api/external/v1/options/contracts`
+- `POST /api/external/v1/options/expiries`
+- `POST /api/external/v1/options/place-by-budget`
 - `POST /api/external/v1/orders/cancel/bulk`
 - `POST /api/external/v1/orders/{order_id}/cancel`
 - `POST /api/external/v1/orders/exit-by-ids`
@@ -321,3 +325,62 @@ The server now calls the official Upstox REST APIs directly with `requests`; the
 Important Upstox constraints: Exit All places opposite-side MARKET orders and applies Market Price Protection. It is available during the relevant segment's market hours, does not support Delivery orders in the EQ segment, and the request is limited to at most 10 positions. Upstox executes BUY positions before SELL positions and automatically slices orders where required. Tag filtering is for intraday positions; do not use a tag filter for carry-forward positions. A successful API acknowledgement means exit orders were submitted, not that every exit order has filled. Refresh the order book and positions to verify final quantities.
 
 Dashboard now includes a separate broker order-book panel. It is not merged into the project's local daily order ledger; the ledger remains the project's own persisted audit history.
+
+
+## Budget-filtered option order placement
+
+The external option API provides a combined option-chain filter and order-placement workflow:
+
+`POST /api/external/v1/options/place-by-budget`
+
+It uses the existing `/options/contracts` service to fetch the nearest-expiry option chain, then filters only the requested CE or PE side by the inclusive contract premium range:
+
+`budget_min <= market_data.ltp <= budget_max`.
+
+The range is the premium per option contract, not the total lot value, order value, or required margin. The response returns the full matching list. When there are more matching contracts than `max_orders`, the selected list prioritizes premiums nearest to the midpoint of the range, then strikes nearest to ATM.
+
+**Example preview request** (does not place orders):
+
+```json
+{
+  "api_token": "your_exactly_32_character_secret",
+  "underlying_key": "NSE_INDEX|Nifty 50",
+  "budget_min": 100,
+  "budget_max": 150,
+  "option_type": "CE",
+  "expiry": null,
+  "execute": false,
+  "max_orders": 1,
+  "lot": 1,
+  "transaction_type": "BUY",
+  "product": "D",
+  "order_type": "LIMIT"
+}
+```
+
+`underlying_key` is optional and defaults to NIFTY. Mapped aliases such as `NIFTY`, `BANKNIFTY`, `SENSEX`, and `BANKEX` are also accepted. `option_type` is required and must be `CE` or `PE`.
+
+To place orders, explicitly set `execute=true`. Execution is capped at 10 selected contracts per request; `max_orders` defaults to 1. The default order type is LIMIT, with the option-chain LTP supplied as its limit price. The existing `sandbox_services.place_order_service` then resolves quantity/lot size, refreshes live LTP, submits the broker order and persists the result. Option contract metadata's lot size is preferred; when absent, strict lot-size resolution is enabled by default.
+
+Example execution request:
+
+```json
+{
+  "api_token": "your_exactly_32_character_secret",
+  "underlying_key": "SENSEX",
+  "budget_min": 100,
+  "budget_max": 150,
+  "option_type": "PE",
+  "execute": true,
+  "max_orders": 2,
+  "lot": 1,
+  "transaction_type": "BUY",
+  "product": "D",
+  "order_type": "LIMIT",
+  "validity": "DAY"
+}
+```
+
+The response includes the chain expiry, underlying spot, all matching contracts, selected contracts, individual placement results and successful/failed counts. If one contract placement fails unexpectedly, the service records the failure and continues with the remaining selected contracts. Partial outcomes are returned with HTTP 207. If all selected order placements fail, the route returns a structured error with per-contract placement details in its context.
+
+Execution is opt-in because it submits real orders when the server is configured for the live Upstox account. Preview first, inspect the selected instrument keys, symbols, strikes, premiums and quantities, then explicitly enable execution. The premium range alone does not calculate total funds or margin required.

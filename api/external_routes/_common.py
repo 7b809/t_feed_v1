@@ -43,6 +43,8 @@ STEP_TO_HTTP_STATUS: Dict[str, int] = {
     # Upstream failures → 502 (broker unreachable / bad response)
     "API_CLIENT_INIT":     502,
     "LTP_FETCH":           502,
+    "OPTION_CHAIN":         502,
+    "DAILY_PROFIT_GUARD":   403,
     "FETCH_STATE":         502,
     "ORDER_PLACEMENT":     502,
     "MODIFY_PLACEMENT":    502,
@@ -77,7 +79,7 @@ def raise_from_service_result(
     # proper 4xx/5xx code – otherwise fall back to the step mapping.
     broker_http = err.get("http_status")
     if (
-        step in ("ORDER_PLACEMENT", "MODIFY_PLACEMENT")
+        step in ("ORDER_PLACEMENT", "MODIFY_PLACEMENT", "DAILY_PROFIT_GUARD")
         and isinstance(broker_http, int)
         and 400 <= broker_http <= 599
     ):
