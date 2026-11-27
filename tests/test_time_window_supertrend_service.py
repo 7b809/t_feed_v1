@@ -108,3 +108,24 @@ def test_notification_messages_include_both_chart_links_and_split_detail(monkeyp
     assert "125.50" in private_message
     assert "Isolated instrument chart" in private_message
     assert "Opposite instrument chart" in private_message
+
+def test_signal_persistence_is_idempotent(tmp_path):
+    from datetime import date
+    import json
+
+    service = TimeWindowSupertrendService(root=str(tmp_path))
+    day_root = service._day_root(date(2026, 11, 27))
+    state = service._load_state(day_root)
+    record = {
+        "signal_id": "stable-signal-id",
+        "interval": "1m",
+        "trade_date_ist": "2026-11-27",
+        "signal": "BUY",
+    }
+    assert service._persist_signal(day_root, state, record) is True
+    assert service._persist_signal(day_root, state, record) is False
+
+    index = json.loads((day_root / "signals.json").read_text(encoding="utf-8"))
+    saved = day_root / "signals" / "1m" / "stable-signal-id.json"
+    assert len(index["signals"]) == 1
+    assert json.loads(saved.read_text(encoding="utf-8"))["signal_id"] == "stable-signal-id"
