@@ -36,6 +36,10 @@ from core.config import (
     DAILY_DATA_BACKUP_DAYS, DAILY_DATA_BACKUP_COLLECTION,
     DAILY_DATA_BACKUP_CLEANUP_ENABLED,
     MEGA_ENABLED, MEGA_EMAIL, MEGA_PASSWORD, MEGA_BACKUP_ROOT,
+    TIME_WINDOW_SUPERTREND_ENABLED,
+    TIME_WINDOW_SUPERTREND_START_HOUR,
+    TIME_WINDOW_SUPERTREND_END_HOUR,
+    TIME_WINDOW_SUPERTREND_SCAN_SECOND,
 )
 from core.logger import get_logger
 from core.telegram_notifier import send_telegram_message
@@ -44,6 +48,7 @@ from jobs.daily_refresh import (
 )
 from jobs.deferred_startup import run_deferred_startup_sequence
 from jobs.isolation_scan import run_isolation_scan
+from jobs.time_window_supertrend import run_time_window_supertrend_scan
 from services.daily_data_backup_service import DailyDataBackupService
 from core.mongo_client import get_mongo_db
 
@@ -146,6 +151,35 @@ def start_scheduler(deferred_until=None) -> BackgroundScheduler:
         max_instances=1,
         coalesce=True,
     )
+
+    # Daily completed-candle Supertrend scan. The service enforces the
+    # exact 15:00–15:40 window; the cron only provides the :10-second cadence.
+    if TIME_WINDOW_SUPERTREND_ENABLED:
+        scheduler.add_job(
+            run_time_window_supertrend_scan,
+            CronTrigger(
+                day_of_week="mon-fri",
+                hour=f"{TIME_WINDOW_SUPERTREND_START_HOUR}-{TIME_WINDOW_SUPERTREND_END_HOUR}",
+                minute="*",
+                second=TIME_WINDOW_SUPERTREND_SCAN_SECOND,
+                timezone=TIMEZONE,
+            ),
+            id="time_window_supertrend",
+            name="Daily Time-Window Supertrend Scan",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=20,
+        )
+        logger.info(
+            "Time-window Supertrend scheduled @ %02d:%02d:%02d through %02d:%02d:%02d IST",
+            TIME_WINDOW_SUPERTREND_START_HOUR,
+            TIME_WINDOW_SUPERTREND_START_MINUTE,
+            TIME_WINDOW_SUPERTREND_SCAN_SECOND,
+            TIME_WINDOW_SUPERTREND_END_HOUR,
+            TIME_WINDOW_SUPERTREND_END_MINUTE,
+            TIME_WINDOW_SUPERTREND_SCAN_SECOND,
+        )
 
     # End-of-day disconnect
     scheduler.add_job(
