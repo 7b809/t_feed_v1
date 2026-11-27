@@ -75,7 +75,8 @@ through configuration. Each isolated/opposite leg and interval is evaluated
 independently. Every trend flip whose candle closes inside the 15:00–15:40 window
 is persisted; deterministic signal IDs prevent duplicate records and alerts when
 the same candles are reprocessed. One instrument/interval failure does not stop
-other scans. Failed Telegram deliveries remain pending for bounded retries.
+other scans. Failed Telegram deliveries remain pending for bounded retries, including a five-minute
+notification-only retry period after the 15:40 signal window closes.
 
 Daily files are stored under `data/time_window_supertrend/{YYYYMMDD}/`:
 - `history/` — historical API batches cached for the day.
@@ -107,6 +108,7 @@ TIME_WINDOW_SUPERTREND_USE_ATR=true
 TIME_WINDOW_SUPERTREND_HISTORY_DAYS=12
 TIME_WINDOW_SUPERTREND_HISTORY_BATCH_DAYS=3
 TIME_WINDOW_SUPERTREND_MAX_NOTIFICATION_ATTEMPTS=5
+TIME_WINDOW_SUPERTREND_NOTIFICATION_RETRY_MINUTES=5
 TIME_WINDOW_SUPERTREND_DATA_DIR=data/time_window_supertrend
 ```
 
