@@ -35,6 +35,7 @@ from core.config import (
     TIME_WINDOW_SUPERTREND_MULTIPLIER,
     TIME_WINDOW_SUPERTREND_USE_ATR,
     TIME_WINDOW_SUPERTREND_MAX_NOTIFICATION_ATTEMPTS,
+    TIME_WINDOW_SUPERTREND_DATA_DIR,
 )
 from core.logger import get_logger
 from core.token_service import fetch_access_token
@@ -215,7 +216,7 @@ def _signal_id(instrument_key: str, interval: str, signal_time: datetime, side: 
 
 class TimeWindowSupertrendService:
     def __init__(self, root: str | None = None):
-        self.root = Path(root or os.getenv("TIME_WINDOW_SUPERTREND_DATA_DIR", "data/time_window_supertrend"))
+        self.root = Path(root or TIME_WINDOW_SUPERTREND_DATA_DIR)
 
     def _day_root(self, trade_date: date) -> Path:
         return self.root / trade_date.strftime("%Y%m%d")
@@ -232,7 +233,7 @@ class TimeWindowSupertrendService:
         while current < today:
             batch_end = min(current + timedelta(days=TIME_WINDOW_SUPERTREND_HISTORY_BATCH_DAYS), today)
             cache_path = self._history_batch_path(day_root, role, key, interval, current, batch_end)
-            cached = _read_json(cache_path, {})
+            cached = _read_json(cache_path, {}) or {}
             if cached.get("complete") and isinstance(cached.get("candles"), list):
                 collected.extend(cached["candles"])
             else:
@@ -246,22 +247,19 @@ class TimeWindowSupertrendService:
                         row for row in candles
                         if _parse_timestamp(row["timestamp"]).date() < today
                     ]
-                    if candles:
-                        _atomic_json(cache_path, {
-                            "schema_version": 1,
-                            "complete": True,
-                            "instrument_key": key,
-                            "role": role,
-                            "interval": interval,
-                            "from_date": current.isoformat(),
-                            "to_date": batch_end.isoformat(),
-                            "fetched_at_ist": _iso(_now()),
-                            "candles": candles,
-                        })
-                        collected.extend(candles)
-                    else:
-                        # Empty provider responses are cached for this run only;
-                        # a missing file means the next cycle can retry the batch.
+                    _atomic_json(cache_path, {
+                        "schema_version": 1,
+                        "complete": True,
+                        "instrument_key": key,
+                        "role": role,
+                        "interval": interval,
+                        "from_date": current.isoformat(),
+                        "to_date": batch_end.isoformat(),
+                        "fetched_at_ist": _iso(_now()),
+                        "candles": candles,
+                    })
+                    collected.extend(candles)
+                    if not candles:
                         logger.warning(
                             "Historical batch returned no candles | role=%s key=%s interval=%s range=%s..%s",
                             role, key, interval, current, batch_end,
@@ -323,7 +321,11 @@ class TimeWindowSupertrendService:
             state = {}
         state.setdefault("schema_version", 1)
         state.setdefault("trade_date_ist", _now().date().isoformat())
-        state.setdefault("signals", [])
+        if not isinstance(state.get("signals"), list):
+            state["signals"] = []
+        state["signals"] = [
+            item for item in state["signals"] if isinstance(item, dict) and item.get("signal_id")
+        ]
         return state
 
     def _persist_signal(self, day_root: Path, state: dict, record: dict) -> bool:
