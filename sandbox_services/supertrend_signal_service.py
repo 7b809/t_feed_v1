@@ -18,7 +18,7 @@ from typing import Callable
 from zoneinfo import ZoneInfo
 
 from core.logger import get_logger
-from services.isolation_telegram_service import send_isolation_html
+from services.isolation_telegram_service import (\n    format_option_chart_links,\n    send_isolation_notifications,\n)
 from services.supertrend_snapshot_cache import get_supertrend_snapshot
 
 logger = get_logger(__file__)
@@ -305,6 +305,10 @@ class SandboxSupertrendSignalService:
                     "instrument_key": legs[source_role]["instrument_key"],
                     "trading_symbol": legs[source_role].get("trading_symbol"),
                 },
+                "instruments": {
+                    "isolated": dict(legs["isolated"]),
+                    "opposite": dict(legs["opposite"]),
+                },
                 "target": {
                     **target_leg,
                     "leg_role": target_role,
@@ -506,17 +510,41 @@ class SandboxSupertrendSignalService:
         }
 
     def _notify(self, document: dict) -> bool:
+        """Send a concise signal alert to the group and full plan privately."""
         signal = document["first_signal"]
         target = document["target"]
         calc = document["calculation"]
         selection = document.get("signal_selection") or {}
         source = document["signal_source"]
+        instruments = document.get("instruments") or {}
+        isolated = instruments.get("isolated") or {
+            "instrument_key": document.get("source_snapshots", {}).get("isolated", {}).get("instrument_key")
+        }
+        opposite = instruments.get("opposite") or {
+            "instrument_key": document.get("source_snapshots", {}).get("opposite", {}).get("instrument_key")
+        }
         signal_word = "Bullish (BUY)" if signal["signal"] == "buy" else "Bearish (SELL)"
-        target_reason = (
-            "A bullish signal selects the same instrument that gave the signal."
-            if signal["signal"] == "buy"
-            else "A bearish signal selects the opposite instrument."
-        )
+        signal_time = signal.get("confirmed_time")
+        source_symbol = source.get("trading_symbol") or source.get("instrument_key") or "—"
+        isolated_symbol = isolated.get("trading_symbol") or isolated.get("instrument_key") or "—"
+        opposite_symbol = opposite.get("trading_symbol") or opposite.get("instrument_key") or "—"
+        chart_links = format_option_chart_links(isolated, opposite)
+        chart_section = ["", "📊 <b>OPTION CHARTS</b>", *chart_links] if chart_links else []
+
+        # Group-safe summary: deliberately excludes strategy rules, confirmation
+        # price, selected target leg, entry, stop, target and pivot information.
+        group_message = "\n".join([
+            "🔔 <b>SUPERTREND SIGNAL DETECTED</b>",
+            f"<b>Interval:</b> {html.escape(str(document.get('interval') or '—'))}",
+            f"<b>Signal:</b> <b>{html.escape(signal_word)}</b>",
+            f"<b>Signal time:</b> <code>{html.escape(str(signal_time or '—'))}</code>",
+            f"<b>Signal instrument:</b> <code>{html.escape(str(source_symbol))}</code>",
+            "",
+            f"🟢 <b>Isolated:</b> <code>{html.escape(str(isolated_symbol))}</code>",
+            f"🔴 <b>Opposite:</b> <code>{html.escape(str(opposite_symbol))}</code>",
+            *chart_section,
+        ])
+
         same_minute = (
             _minute_bucket(signal.get("confirmed_time"))
             == _minute_bucket(selection.get("isolation_time_ist"))
@@ -547,9 +575,7 @@ class SandboxSupertrendSignalService:
             target_explanation = "Entry is above ₹100 and up to ₹200, so the target is entry + ₹50."
         else:
             target_explanation = "Entry is above ₹200, so the target is entry + ₹60."
-        opposite = document.get("source_snapshots", {}).get("opposite", {})
-        isolated = document.get("source_snapshots", {}).get("isolated", {})
-        message = "\n".join([
+        private_message = "\n".join([
             "🧪 <b>New Supertrend Signal Plan</b>",
             "",
             f"<b>Interval:</b> {html.escape(document['interval'])}",
@@ -557,14 +583,18 @@ class SandboxSupertrendSignalService:
             f"<b>Signal time:</b> <code>{html.escape(str(signal.get('confirmed_time') or '—'))}</code>",
             f"<b>Signal:</b> <b>{html.escape(signal_word)}</b>",
             f"<b>Confirmation price:</b> {self._fmt(signal.get('confirmed_time_price'))}",
-            f"<b>Signal came from:</b> {html.escape(str(source.get('trading_symbol') or source.get('instrument_key') or '—'))}",
+            f"<b>Signal came from:</b> {html.escape(str(source_symbol))}",
             f"<b>Isolated instrument:</b> <code>{html.escape(str(isolated.get('instrument_key') or '—'))}</code>",
             f"<b>Opposite instrument:</b> <code>{html.escape(str(opposite.get('instrument_key') or '—'))}</code>",
             f"<b>Why accepted:</b> {html.escape(eligibility)}",
             f"<b>Other signals:</b> {other_count} other eligible signal(s) were checked; {ignored_count} signal(s) from before the isolation minute were ignored.",
             "",
             "<b>Why this instrument was selected</b>",
-            html.escape(target_reason),
+            html.escape(
+                "A bullish signal selects the same instrument that gave the signal."
+                if signal["signal"] == "buy"
+                else "A bearish signal selects the opposite instrument."
+            ),
             f"Selected leg: <b>{html.escape(str(target.get('leg_role') or '—').title())}</b>",
             f"Trading symbol: <b>{html.escape(str(target.get('trading_symbol') or '—'))}</b>",
             f"Instrument key: <code>{html.escape(str(target.get('instrument_key') or '—'))}</code>",
@@ -590,8 +620,9 @@ class SandboxSupertrendSignalService:
             "Entry uses the selected instrument's live market price.",
             "",
             "<i>This is a saved calculation and notification only. No order was placed.</i>",
+            *chart_section,
         ])
-        return send_isolation_html(message)
+        return send_isolation_notifications(group_message, private_message)
 
     @staticmethod
     def _fmt(value) -> str:
