@@ -138,3 +138,54 @@ def test_normalise_candles_discards_non_finite_ohlc():
     candles = _normalise_candles(rows)
     assert len(candles) == 1
     assert candles[0]["close"] == 100
+
+def test_telegram_destinations_are_independent_and_shared_id_is_group_safe(monkeypatch):
+    import services.isolation_telegram_service as telegram
+
+    calls = []
+    monkeypatch.setattr(telegram, "TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(telegram, "TELEGRAM_GROUP_ENABLED", True)
+    monkeypatch.setattr(telegram, "TELEGRAM_ENABLED", True)
+    monkeypatch.setattr(telegram, "TELEGRAM_GROUP_CHAT_ID", "-100123")
+    monkeypatch.setattr(telegram, "TELEGRAM_CHAT_ID", "-100123")
+    monkeypatch.setattr(
+        telegram,
+        "_post_html",
+        lambda chat_id, message, label: calls.append((chat_id, message, label)) or True,
+    )
+
+    result = telegram.send_isolation_notification_results("group-safe", "private-detail")
+    assert result == {"group": True, "private": True}
+    assert len(calls) == 1
+    assert calls[0][1] == "group-safe"
+
+
+def test_telegram_private_retry_does_not_resend_successful_group(monkeypatch):
+    import services.isolation_telegram_service as telegram
+
+    calls = []
+    outcomes = {"group": True, "private": False}
+    monkeypatch.setattr(telegram, "TELEGRAM_BOT_TOKEN", "test-token")
+    monkeypatch.setattr(telegram, "TELEGRAM_GROUP_ENABLED", True)
+    monkeypatch.setattr(telegram, "TELEGRAM_ENABLED", True)
+    monkeypatch.setattr(telegram, "TELEGRAM_GROUP_CHAT_ID", "-100group")
+    monkeypatch.setattr(telegram, "TELEGRAM_CHAT_ID", "private")
+    monkeypatch.setattr(
+        telegram,
+        "_post_html",
+        lambda chat_id, message, label: calls.append((chat_id, label)) or (
+            chat_id == "-100group"
+        ),
+    )
+
+    first = telegram.send_isolation_notification_results("group", "private")
+    assert first == {"group": True, "private": False}
+    second = telegram.send_isolation_notification_results(
+        "group", "private", send_group=False, send_private=True
+    )
+    assert second == {"group": True, "private": False}
+    assert calls == [
+        ("-100group", "time-window-group"),
+        ("private", "time-window-private"),
+        ("private", "time-window-private"),
+    ]
