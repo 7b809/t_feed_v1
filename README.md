@@ -331,13 +331,14 @@ Dashboard now includes a separate broker order-book panel. It is not merged into
 
 The external option API provides a combined option-chain filter and order-placement workflow:
 
-`POST /api/external/v1/options/place-by-budget`
+- `POST /api/external/v1/options/place-by-budget`
+- `POST /api/external/v1/orders/place-service` also accepts this budget payload and dispatches it to the same workflow. Existing requests containing `instrument_token` continue to use the original single-order flow.
 
 It uses the existing `/options/contracts` service to fetch the nearest-expiry option chain, then filters only the requested CE or PE side by the inclusive contract premium range:
 
 `budget_min <= market_data.ltp <= budget_max`.
 
-The range is the premium per option contract, not the total lot value, order value, or required margin. The response returns the full matching list. When there are more matching contracts than `max_orders`, the selected list prioritizes premiums nearest to the midpoint of the range, then strikes nearest to ATM.
+The range is the premium per option contract, not the total lot value, order value, or required margin. The response returns the full matching list sorted by lowest LTP first. The selected contract(s) are the cheapest eligible premiums; ATM distance and strike are tie-breakers only. The response also includes `selected_instrument` and `selected_instrument_key` for the first selected contract.
 
 **Example preview request** (does not place orders):
 
@@ -349,18 +350,13 @@ The range is the premium per option contract, not the total lot value, order val
   "budget_max": 150,
   "option_type": "CE",
   "expiry": null,
-  "execute": false,
-  "max_orders": 1,
-  "lot": 1,
-  "transaction_type": "BUY",
-  "product": "D",
-  "order_type": "LIMIT"
+  "execute": false
 }
 ```
 
 `underlying_key` is optional and defaults to NIFTY. Mapped aliases such as `NIFTY`, `BANKNIFTY`, `SENSEX`, and `BANKEX` are also accepted. `option_type` is required and must be `CE` or `PE`.
 
-To place orders, explicitly set `execute=true`. Execution is capped at 10 selected contracts per request; `max_orders` defaults to 1. The default order type is LIMIT, with the option-chain LTP supplied as its limit price. The existing `sandbox_services.place_order_service` then resolves quantity/lot size, refreshes live LTP, submits the broker order and persists the result. Option contract metadata's lot size is preferred; when absent, strict lot-size resolution is enabled by default.
+To place orders, explicitly set `execute=true`. Execution is capped at 10 selected contracts per request; `max_orders` defaults to 1. The default order type is LIMIT, with the option-chain LTP supplied as its limit price. Defaults when omitted: `execute=false`, `max_orders=1`, `lot=1`, `transaction_type=BUY`, `product=D`, and `order_type=MARKET`. The existing `sandbox_services.place_order_service` resolves quantity/lot size, refreshes live LTP and submits each broker order. Option contract metadata's lot size is preferred; when absent, strict lot-size resolution is enabled by default. For MARKET orders no chain LTP is sent as a limit price; the broker order uses MARKET execution.
 
 Example execution request:
 

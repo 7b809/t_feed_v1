@@ -59,10 +59,13 @@ def test_preview_defaults_to_nifty_and_filters_inclusive_premium(monkeypatch):
     assert result["status"] == "PREVIEW"
     assert result["underlying_key"] == "NSE_INDEX|Nifty 50"
     assert [row["instrument_key"] for row in result["matching_contracts"]] == [
-        "NSE_FO|3", "NSE_FO|2", "NSE_FO|4"
+        "NSE_FO|2", "NSE_FO|3", "NSE_FO|4"
     ]
     assert result["selected_contracts_count"] == 1
-    assert result["selected_contracts"][0]["instrument_key"] == "NSE_FO|3"
+    assert result["selected_contracts"][0]["instrument_key"] == "NSE_FO|2"
+    assert result["selected_instrument_key"] == "NSE_FO|2"
+    assert result["selected_instrument"]["ltp"] == 100
+    assert result["execution_settings"]["order_type"] == "MARKET"
     assert captured["include_market_data"] is True
     assert captured["include_metadata"] is True
 
@@ -73,7 +76,7 @@ def test_underlying_symbol_alias_is_normalized():
     assert service.normalize_underlying_key("NSE_INDEX%7CNifty%2050") == "NSE_INDEX|Nifty 50"
 
 
-def test_execute_calls_existing_place_order_service_with_limit_premium(monkeypatch):
+def test_execute_defaults_to_market_and_uses_lowest_premium_contracts(monkeypatch):
     monkeypatch.setattr(
         service,
         "get_nearest_expiry_option_contracts",
@@ -98,9 +101,9 @@ def test_execute_calls_existing_place_order_service_with_limit_premium(monkeypat
 
     assert result["status"] == "SUCCESS"
     assert len(calls) == 2
-    assert calls[0]["instrument_token"] == "NSE_FO|3"
-    assert calls[0]["entry"] == 125
-    assert calls[0]["order_type"] == "LIMIT"
+    assert calls[0]["instrument_token"] == "NSE_FO|2"
+    assert calls[0]["entry"] is None
+    assert calls[0]["order_type"] == "MARKET"
     assert calls[0]["lot_size_override"] == 65
     assert calls[0]["strict_lot_size"] is True
 

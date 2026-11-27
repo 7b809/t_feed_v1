@@ -100,7 +100,7 @@ class BudgetOptionOrdersRequest(BaseModel):
     lot: int = Field(default=1, ge=1, description="Number of lots per selected contract.")
     transaction_type: str = Field(default="BUY", description="BUY or SELL.")
     product: str = Field(default="D", description="D or I.")
-    order_type: str = Field(default="LIMIT", description="LIMIT uses selected option-chain LTP; MARKET uses live execution.")
+    order_type: str = Field(default="MARKET", description="Defaults to MARKET; LIMIT uses selected option-chain LTP as its limit price.")
     validity: str = Field(default="DAY", description="DAY or IOC.")
     is_amo: bool = False
     tag: Optional[str] = Field(default=None, max_length=20)

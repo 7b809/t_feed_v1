@@ -18,17 +18,22 @@ exception tagging plus opt-in offset support.
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from api.external_routes._common import (
     handle_api_exception,
     raise_from_service_result,
 )
+from api.external_routes.options import BudgetOptionOrdersRequest
 from api.routes.orders import _raise_http, _service
 from core.logger import get_logger
 from models.order_models import ExitAllRequest, OrderIdsRequest, PlaceOrderRequest
 from sandbox_services.place_order_service import place_order as place_order_service
+from sandbox_services.budget_option_order_service import (
+    place_option_orders_by_budget,
+)
 from services.upstox_order_api import UpstoxOrderAPIError, get_order_book
 
 logger = get_logger(__file__)
@@ -102,56 +107,92 @@ def external_place_order(body: PlaceOrderRequest):
 # NEW route (sandbox_services.place_order_service)
 # ---------------------------------------------------------------------------
 @router.post("/place-service")
-def external_place_order_service(body: PlaceOrderServiceRequest):
-    """Place one MARKET / LIMIT / SL / SL-M order via ``place_order_service``.
+def external_place_order_service(body: dict):
+    """Place one direct order or run the budget-filtered option workflow.
 
-    Behaviour highlights
-    --------------------
-    * If ``entry`` is omitted → live LTP is fetched as the reference.
-    * If ``sl`` is supplied → the order is auto-promoted to SL (or SL-M if
-      ``sl_market=True``).
-    * With ``is_offset=True``, ``entry`` and ``sl`` are treated as offsets
-      from live LTP (BUY: entry below, sl above; SELL: mirror).
-    * Quantity = ``lot × resolved_lot_size``. Lot size resolves from
-      ``symbol`` → exchange prefix (NSE_FO / BSE_FO / ...) → fallback 1.
-
-    Failure contract
-    ----------------
-    The service always returns a dict. On failure:
-    ``{"status": "FAILED", "step": "<step>", "error": {...}, "context": {...}}``
-    ``raise_from_service_result`` converts that into the correct HTTP error
-    (400 for validation, 502 for broker/network, 500 for internal).
+    Budget requests are recognized by the presence of any budget-selection
+    field (budget_min, budget_max, option_type). Direct single-order requests
+    continue to require instrument_token exactly as before.
     """
+    is_budget_request = any(
+        key in body for key in ("budget_min", "budget_max", "option_type")
+    )
+
     try:
+        if is_budget_request:
+            try:
+                budget_body = BudgetOptionOrdersRequest.model_validate(body)
+            except ValidationError as exc:
+                errors = []
+                for item in exc.errors():
+                    detail = dict(item)
+                    detail["loc"] = ("body", *detail.get("loc", ()))
+                    errors.append(detail)
+                raise RequestValidationError(errors, body=body) from exc
+
+            result = place_option_orders_by_budget(
+                underlying_key=budget_body.underlying_key,
+                budget_min=budget_body.budget_min,
+                budget_max=budget_body.budget_max,
+                option_type=budget_body.option_type,
+                expiry=budget_body.expiry,
+                offset_override=budget_body.offset_override,
+                execute=budget_body.execute,
+                max_orders=budget_body.max_orders,
+                lot=budget_body.lot,
+                transaction_type=budget_body.transaction_type,
+                product=budget_body.product,
+                order_type=budget_body.order_type,
+                validity=budget_body.validity,
+                is_amo=budget_body.is_amo,
+                tag=budget_body.tag,
+                slice_order=budget_body.slice_order,
+                strict_lot_size=budget_body.strict_lot_size,
+            )
+            raise_from_service_result(result, action="budget-option-orders")
+            if result.get("status") == "PARTIAL_SUCCESS":
+                return JSONResponse(status_code=207, content=result)
+            return result
+
+        try:
+            direct_body = PlaceOrderServiceRequest.model_validate(body)
+        except ValidationError as exc:
+            errors = []
+            for item in exc.errors():
+                detail = dict(item)
+                detail["loc"] = ("body", *detail.get("loc", ()))
+                errors.append(detail)
+            raise RequestValidationError(errors, body=body) from exc
+
         result = place_order_service(
-            instrument_token=body.instrument_token,
-            order_type=body.order_type,
-            transaction_type=body.transaction_type,
-            product=body.product,
-            lot=body.lot,
-            entry=body.entry,
-            sl=body.sl,
-            sl_market=body.sl_market,
-            sl_limit=body.sl_limit,
-            symbol=body.symbol,
-            is_offset=body.is_offset,
-            lot_size_override=body.lot_size_override,
-            validity=body.validity,
-            is_amo=body.is_amo,
-            tag=body.tag,
-            disclosed_quantity=body.disclosed_quantity,
-            slice_order=body.slice_order,
-            algo_name=body.algo_name,
+            instrument_token=direct_body.instrument_token,
+            order_type=direct_body.order_type,
+            transaction_type=direct_body.transaction_type,
+            product=direct_body.product,
+            lot=direct_body.lot,
+            entry=direct_body.entry,
+            sl=direct_body.sl,
+            sl_market=direct_body.sl_market,
+            sl_limit=direct_body.sl_limit,
+            symbol=direct_body.symbol,
+            is_offset=direct_body.is_offset,
+            lot_size_override=direct_body.lot_size_override,
+            validity=direct_body.validity,
+            is_amo=direct_body.is_amo,
+            tag=direct_body.tag,
+            disclosed_quantity=direct_body.disclosed_quantity,
+            slice_order=direct_body.slice_order,
+            algo_name=direct_body.algo_name,
         )
         raise_from_service_result(result, action="place-order")
         return result
-    except HTTPException:
+    except (HTTPException, RequestValidationError):
         raise
     except Exception:
-        logger.exception("Unexpected external place-order-service failure")
+        logger.exception("Unexpected external place-service request failure")
         raise HTTPException(
             status_code=500,
-            detail={"error": "Unexpected place-order-service error."},
+            detail={"error": "Unexpected external place-service error."},
         ) from None
 
 

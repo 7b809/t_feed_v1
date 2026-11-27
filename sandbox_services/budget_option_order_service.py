@@ -4,8 +4,8 @@ Budget-filtered option contract order orchestration.
 The budget is an inclusive per-contract premium range based on the option-chain
 market_data.ltp field. It is not the total order value or required margin.
 
-Execution is disabled by default. With execute=True the service selects at most
-max_orders candidates and delegates each order to the existing
+Execution is disabled by default. With execute=True the service selects the
+lowest-LTP matches (up to max_orders) and delegates each order to the existing
 sandbox_services.place_order_service.
 """
 from __future__ import annotations
@@ -70,7 +70,7 @@ def place_option_orders_by_budget(
     lot: int = 1,
     transaction_type: str = "BUY",
     product: str = "D",
-    order_type: str = "LIMIT",
+    order_type: str = "MARKET",
     validity: str = "DAY",
     is_amo: bool = False,
     tag: Optional[str] = None,
@@ -81,9 +81,10 @@ def place_option_orders_by_budget(
     Preview or execute selected CE/PE option contracts.
 
     Matching is inclusive: budget_min <= option-chain LTP <= budget_max.
-    If there are more matches than max_orders, execution selection prefers
-    premiums closest to the budget midpoint, then strikes closest to ATM.
-    The complete matching list is always returned for review.
+    Matches are sorted by lowest premium first. If several contracts match,
+    the first max_orders cheapest contracts are selected; ATM distance and
+    strike are deterministic tie-breakers. The complete matching list is
+    always returned for review.
     """
     try:
         clean_key = normalize_underlying_key(underlying_key)
@@ -231,9 +232,11 @@ def place_option_orders_by_budget(
                 "_strike_sort": strike_price,
             })
 
+    # The required selection rule is the lowest eligible option premium.
+    # ATM distance and strike are deterministic tie-breakers only.
     matches.sort(
         key=lambda item: (
-            item["_midpoint_distance"],
+            item["ltp"],
             item["_atm_distance"],
             item["_strike_sort"],
         )
@@ -247,7 +250,7 @@ def place_option_orders_by_budget(
     public_selected = [public_contract(item) for item in selected]
 
     response: dict[str, Any] = {
-        "status": "PREVIEW" if not execute else "NO_MATCHES",
+        "status": "PREVIEW" if selected and not execute else "NO_MATCHES" if not selected else "EXECUTING",
         "mode": "EXECUTE" if execute else "DRY_RUN",
         "underlying_key": clean_key,
         "underlying_symbol": chain.get("underlying_symbol") or symbol,
@@ -256,6 +259,15 @@ def place_option_orders_by_budget(
         "expiry_keyword": chain.get("expiry_keyword"),
         "expiry_used": chain.get("expiry_used"),
         "option_type": side,
+        "execution_settings": {
+            "transaction_type": tx_type,
+            "product": product_code,
+            "order_type": order_kind,
+            "lot": lot,
+            "validity": validity_code,
+            "is_amo": is_amo,
+            "slice_order": slice_order,
+        },
         "budget_range": {
             "min": minimum,
             "max": maximum,
@@ -268,6 +280,10 @@ def place_option_orders_by_budget(
         "invalid_contract_rows": invalid_rows,
         "matching_contracts": public_matches,
         "selected_contracts": public_selected,
+        "selected_instrument": public_selected[0] if public_selected else None,
+        "selected_instrument_key": (
+            public_selected[0].get("instrument_key") if public_selected else None
+        ),
         "placement_results": [],
         "note": (
             "Budget range filters each option contract's observed premium (LTP), "
