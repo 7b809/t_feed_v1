@@ -9,9 +9,10 @@ from fastapi.templating import Jinja2Templates
 
 from api.routes.backups import router as backups_router
 from api.routes.gtt import router as gtt_router
-from api.routes.external_orders import router as external_orders_router
 from api.routes.orders import router as orders_router
 from api.routes.portfolio import router as portfolio_router
+# NEW: external order-mutation API now lives in its own package (was: api.routes.external_orders)
+from api.external_routes import router as external_orders_router
 from core.config import (
     API_HOST, API_PORT, MONGO_DB_NAME, ORDERS_COLLECTION, PROJECT_ROOT,
     ORDERFLOW_CLEANUP_ENABLED, TRADING_ENABLED, UPSTOX_SANDBOX,
@@ -54,7 +55,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Upstox Order Service",
     description="Responsive order dashboard, BUY order and GTT execution API.",
-    version="1.2.0",
+    version="1.3.0",   # bumped for the external_routes refactor + place_order_service
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=str(PROJECT_ROOT / "static")), name="static")
@@ -62,6 +63,8 @@ app.include_router(orders_router)
 app.include_router(portfolio_router)
 app.include_router(backups_router)
 app.include_router(gtt_router)
+# External order-mutation API — now serves /api/external/v1/{orders,gtt,portfolio}/*
+# from api/external_routes/ (orders.py, gtt.py, portfolio.py, _common.py).
 app.include_router(external_orders_router)
 
 

@@ -1,3 +1,40 @@
+"""
+place_gtt_order.py
+
+Places ONE MULTIPLE-leg GTT order (ENTRY + TARGET + STOPLOSS) using live LTP
+as the entry. Uses OrderApiV3 (place_gtt_order).
+
+Behaviour
+---------
+* Default product   : "I" (intraday). Use "D" for delivery GTTs.
+* Default quantity  : 1 lot  (resolved via shared lot_size_resolver:
+                            master → symbol map → exchange default).
+* Entry             : live LTP (immediate market entry).
+* SL / Target       : offset from LTP by default (`is_offset=True`),
+                      otherwise treated as absolute prices.
+* All failures are returned as a structured payload (no raw exceptions),
+  tagged with the exact step that failed:
+    VALIDATION, API_CLIENT_INIT, LOT_SIZE_RESOLUTION, LTP_FETCH,
+    PRICE_RESOLUTION, REQUEST_BUILD, ORDER_PLACEMENT, PERSISTENCE
+
+Return value on failure
+-----------------------
+{
+    "status": "FAILED",
+    "step":   "LTP_FETCH",
+    "error":  {
+        "error_code"   : "UDAPI100050",
+        "message"      : "Invalid token used to access API",
+        "property_path": null,
+        "invalid_value": null,
+        "http_status"  : 401,
+        "raw"          : "<full exception string>"
+    },
+    "context": { ...whatever was built before the failure... }
+}
+"""
+
+import json
 import urllib.parse
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -13,57 +50,42 @@ from core.config import (
 from core.logger import get_logger
 from core.token_service import fetch_access_token
 
+# Shared resolver — Tier 1 (master) → Tier 2 (symbol) → Tier 3 (exchange)
+# Re-exports SYMBOL_LOT_SIZE_MAP / EXCHANGE_DEFAULT_LOT_MAP for backwards compat.
+from sandbox_services.lot_size_resolver import (
+    EXCHANGE_DEFAULT_LOT_MAP,   # noqa: F401  (re-exported)
+    SYMBOL_LOT_SIZE_MAP,        # noqa: F401  (re-exported)
+    resolve_lot_size,
+)
+
 logger = get_logger(__file__)
 
 # ---------------------------------------------------------------------------
-# Instrument / Exchange Lot Size Mapping
+# Constants
 # ---------------------------------------------------------------------------
-# Specific underlying symbols take precedence, followed by exchange segment defaults.
-SYMBOL_LOT_SIZE_MAP: Dict[str, int] = {
-    "NIFTY": 65,
-    "BANKNIFTY": 30,
-    "FINNIFTY": 65,
-    "MIDCPNIFTY": 120,
-    "SENSEX": 20,
-    "BANKEX": 30,
-}
+VALID_TX_TYPES = {"BUY", "SELL"}
+VALID_PRODUCTS = {"D", "I"}
 
-EXCHANGE_DEFAULT_LOT_MAP: Dict[str, int] = {
-    "NSE_FO": 65,   # Default fallback for NSE F&O (e.g., NIFTY)
-    "BSE_FO": 20,   # Default fallback for BSE F&O (e.g., SENSEX)
-    "NSE_EQ": 1,
-    "BSE_EQ": 1,
-}
+# Step labels used for reporting
+STEP_VALIDATION    = "VALIDATION"
+STEP_API_CLIENT    = "API_CLIENT_INIT"
+STEP_LOT_SIZE      = "LOT_SIZE_RESOLUTION"
+STEP_LTP           = "LTP_FETCH"
+STEP_PRICE         = "PRICE_RESOLUTION"
+STEP_REQUEST       = "REQUEST_BUILD"
+STEP_ORDER         = "ORDER_PLACEMENT"
+STEP_PERSIST       = "PERSISTENCE"
 
 
+# ---------------------------------------------------------------------------
+# Basic helpers
+# ---------------------------------------------------------------------------
 def _normalize_instrument_token(instrument_token: str) -> str:
     """Decodes URL-encoded tokens (e.g., 'NSE_FO%7C64473' -> 'NSE_FO|64473')."""
     return urllib.parse.unquote(instrument_token).strip()
 
 
-def resolve_lot_size(instrument_token: str, symbol: Optional[str] = None) -> int:
-    """
-    Resolves the lot multiplier based on explicit symbol name or exchange prefix
-    (e.g., NSE_FO -> 65, BSE_FO -> 20).
-    """
-    if symbol:
-        clean_sym = symbol.upper().strip()
-        if clean_sym in SYMBOL_LOT_SIZE_MAP:
-            return SYMBOL_LOT_SIZE_MAP[clean_sym]
-
-    normalized_token = _normalize_instrument_token(instrument_token)
-    exchange_prefix = normalized_token.split("|")[0].upper() if "|" in normalized_token else ""
-
-    lot_size = EXCHANGE_DEFAULT_LOT_MAP.get(exchange_prefix, 1)
-    logger.debug(
-        f"Resolved lot_size={lot_size} for instrument='{normalized_token}' "
-        f"(exchange='{exchange_prefix}', symbol='{symbol}')"
-    )
-    return lot_size
-
-
 def _get_upstox_api_client() -> upstox_client.ApiClient:
-    """Builds an authenticated Upstox ApiClient configured with sandbox & timeout settings."""
     access_token = fetch_access_token()
     if not access_token:
         raise RuntimeError("Failed to retrieve a valid Upstox access token.")
@@ -72,17 +94,15 @@ def _get_upstox_api_client() -> upstox_client.ApiClient:
     configuration.access_token = access_token
 
     api_client = upstox_client.ApiClient(configuration)
-    # Apply configured HTTP timeout if supported by the underlying REST pool
     if hasattr(api_client, "rest_client") and hasattr(api_client.rest_client, "pool_manager"):
-        api_client.rest_client.pool_manager.connection_pool_kw["timeout"] = UPSTOX_HTTP_TIMEOUT_SECONDS
-
+        api_client.rest_client.pool_manager.connection_pool_kw["timeout"] = (
+            UPSTOX_HTTP_TIMEOUT_SECONDS
+        )
     return api_client
 
 
 def _fetch_live_ltp(api_client: upstox_client.ApiClient, instrument_token: str) -> float:
-    """Fetches the live Last Traded Price (LTP) for the given instrument token."""
     try:
-        # Upstox SDK V3 MarketQuoteV3Api (falls back to MarketQuoteApi if older SDK)
         if hasattr(upstox_client, "MarketQuoteV3Api"):
             quote_api = upstox_client.MarketQuoteV3Api(api_client)
             response = quote_api.get_ltp(instrument_key=instrument_token)
@@ -90,23 +110,26 @@ def _fetch_live_ltp(api_client: upstox_client.ApiClient, instrument_token: str) 
             quote_api = upstox_client.MarketQuoteApi(api_client)
             response = quote_api.ltp(symbol=instrument_token, api_version="2.0")
 
-        resp_dict = response.to_dict() if hasattr(response, "to_dict") else dict(response)
+        resp_dict = (
+            response.to_dict() if hasattr(response, "to_dict") else dict(response)
+        )
         data_map = resp_dict.get("data", {})
 
-        # Upstox returns keys either as 'NSE_FO|64473' or 'NSE_FO:SYMBOL'
         quote_entry = data_map.get(instrument_token)
         if not quote_entry and data_map:
             quote_entry = next(iter(data_map.values()))
 
         if not quote_entry or "last_price" not in quote_entry:
-            raise ValueError(f"LTP data missing in market quote response for {instrument_token}: {resp_dict}")
+            raise ValueError(
+                f"LTP data missing in market quote response for "
+                f"{instrument_token}: {resp_dict}"
+            )
 
         ltp = float(quote_entry["last_price"])
         logger.info(f"Fetched live LTP for {instrument_token}: {ltp}")
         return ltp
 
-    except ApiException as e:
-        logger.error(f"Upstox ApiException while fetching LTP for {instrument_token}: {e}")
+    except ApiException:
         raise
     except Exception as e:
         logger.exception(f"Unexpected error fetching LTP for {instrument_token}: {e}")
@@ -114,7 +137,6 @@ def _fetch_live_ltp(api_client: upstox_client.ApiClient, instrument_token: str) 
 
 
 def _serialize_sdk_object(obj: Any) -> Any:
-    """Safely converts Upstox SDK model objects into MongoDB-serializable dicts."""
     if hasattr(obj, "to_dict"):
         return obj.to_dict()
     if isinstance(obj, dict):
@@ -129,10 +151,6 @@ def _persist_order_to_daily_doc(
     response_payload: Dict[str, Any],
     status: str = "SUCCESS",
 ) -> None:
-    """
-    Appends the placed order into a single daily document keyed by current UTC/local date (_id='YYYY-MM-DD').
-    Maintains document-level `created_at` and `last_updated_at`.
-    """
     now = datetime.now(timezone.utc)
     date_id = now.strftime("%Y-%m-%d")
 
@@ -147,28 +165,128 @@ def _persist_order_to_daily_doc(
         ORDERS_COLLECTION.update_one(
             {"_id": date_id},
             {
-                "$setOnInsert": {
-                    "date": date_id,
-                    "created_at": now,
-                },
-                "$set": {
-                    "last_updated_at": now,
-                },
-                "$push": {
-                    "orders": order_entry,
-                },
-                "$inc": {
-                    "total_orders": 1,
-                },
+                "$setOnInsert": {"date": date_id, "created_at": now},
+                "$set": {"last_updated_at": now},
+                "$push": {"orders": order_entry},
+                "$inc": {"total_orders": 1},
             },
             upsert=True,
         )
-        logger.info(f"Persisted GTT order entry into ORDERS_COLLECTION doc '{date_id}'.")
+        logger.info(
+            f"Persisted GTT order entry into ORDERS_COLLECTION doc '{date_id}'."
+        )
     except Exception as db_err:
-        logger.exception(f"Failed to persist order to MongoDB doc '{date_id}': {db_err}")
+        logger.exception(
+            f"Failed to persist order to MongoDB doc '{date_id}': {db_err}"
+        )
         raise
 
 
+def _safe_persist(
+    request_payload: Dict[str, Any],
+    response_payload: Dict[str, Any],
+    status: str,
+) -> None:
+    """Best-effort persistence — never raises."""
+    try:
+        _persist_order_to_daily_doc(request_payload, response_payload, status)
+    except Exception:
+        logger.exception("Failure persistence also failed (ignored)")
+
+
+# ---------------------------------------------------------------------------
+# Official Upstox error parsing
+# ---------------------------------------------------------------------------
+def _parse_api_exception(e: ApiException) -> Dict[str, Any]:
+    """
+    Decodes ApiException.body per official Upstox error schema:
+        {
+          "status": "error",
+          "errors": [
+            {
+              "error_code": "string",
+              "message": "string",
+              "property_path": null,
+              "invalid_value": null
+            }
+          ]
+        }
+    Falls back gracefully if body is missing/malformed.
+    """
+    http_status = getattr(e, "status", None)
+    reason = getattr(e, "reason", str(e))
+    raw_body = getattr(e, "body", None)
+
+    parsed: Dict[str, Any] = {}
+    if raw_body:
+        try:
+            decoded = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
+            if isinstance(decoded, dict):
+                errors = decoded.get("errors") or []
+                if errors and isinstance(errors, list):
+                    first = errors[0]
+                    parsed = {
+                        "error_code": first.get("error_code")
+                        or first.get("errorCode"),
+                        "message": first.get("message"),
+                        "property_path": first.get("property_path")
+                        or first.get("propertyPath"),
+                        "invalid_value": first.get("invalid_value")
+                        or first.get("invalidValue"),
+                    }
+                elif decoded.get("error_code") or decoded.get("errorCode"):
+                    parsed = {
+                        "error_code": decoded.get("error_code")
+                        or decoded.get("errorCode"),
+                        "message": decoded.get("message"),
+                        "property_path": decoded.get("property_path")
+                        or decoded.get("propertyPath"),
+                        "invalid_value": decoded.get("invalid_value")
+                        or decoded.get("invalidValue"),
+                    }
+        except Exception:
+            pass
+
+    return {
+        "error_code": parsed.get("error_code") or "UNKNOWN",
+        "message": parsed.get("message") or reason or "Unknown API error",
+        "property_path": parsed.get("property_path"),
+        "invalid_value": parsed.get("invalid_value"),
+        "http_status": http_status,
+        "raw": str(e),
+    }
+
+
+def _internal_error(
+    code: str,
+    message: str,
+    path: Any = None,
+    value: Any = None,
+) -> Dict[str, Any]:
+    return {
+        "error_code": code,
+        "message": message,
+        "property_path": path,
+        "invalid_value": value,
+        "http_status": None,
+        "raw": message,
+    }
+
+
+def _error_result(
+    step: str,
+    error: Dict[str, Any],
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {"status": "FAILED", "step": step, "error": error}
+    if context:
+        result["context"] = context
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Public service
+# ---------------------------------------------------------------------------
 def place_gtt_order(
     instrument_token: str,
     sl_value: float,
@@ -178,157 +296,312 @@ def place_gtt_order(
     product: str = "I",
     symbol: Optional[str] = None,
     is_offset: bool = True,
+    lot_size_override: Optional[int] = None,
+    strict_lot_size: bool = False,
 ) -> Dict[str, Any]:
     """
     Places an intraday MULTIPLE-leg GTT order using live market price as ENTRY.
 
-    Args:
-        instrument_token: Instrument key (e.g., 'NSE_FO|64473' or 'NSE_FO%7C64473').
-        sl_value: Stop-loss points offset from entry (or absolute price if is_offset=False).
-        target_value: Target points offset from entry (or absolute price if is_offset=False).
-        lot: Number of lots to trade (defaults to 1).
-        transaction_type: 'BUY' or 'SELL' (defaults to 'BUY').
-        product: Upstox product code ('I' for Intraday, 'D' for Delivery). Defaults to 'I'.
-        symbol: Optional underlying symbol ('NIFTY', 'SENSEX', etc.) for lot size lookup.
-        is_offset: If True, computes SL/Target relative to live LTP; if False, uses raw values.
+    On failure returns a structured FAILED payload with `step` + `error`.
+    On success returns {"status": "SUCCESS", "request", "response"}.
 
-    Returns:
-        Dict containing serialized request data and Upstox official response data.
+    New in this version
+    -------------------
+    * Lot-size resolution now uses the shared ``sandbox_services.lot_size_resolver``
+      (Tier 1 Upstox instruments master → Tier 2 symbol map → Tier 3 exchange
+      default). ``lot_size_override`` still wins.
+    * ``strict_lot_size`` — when True, raises at LOT_SIZE_RESOLUTION if the
+      instruments master has no entry for this instrument. Recommended for
+      LIVE trading; leave False in sandbox.
     """
-    clean_token = _normalize_instrument_token(instrument_token)
-    tx_type = transaction_type.upper().strip()
-    prod_code = product.upper().strip()
 
-    if lot < 1:
-        raise ValueError(f"Lot count must be >= 1, got {lot}")
-    if tx_type not in {"BUY", "SELL"}:
-        raise ValueError(f"Invalid transaction_type '{tx_type}'. Expected 'BUY' or 'SELL'.")
+    # ------------------------------------------------------------------
+    # STEP 1 — VALIDATION
+    # ------------------------------------------------------------------
+    try:
+        clean_token = _normalize_instrument_token(instrument_token)
+        tx_type = transaction_type.upper().strip()
+        prod_code = product.upper().strip()
 
-    logger.info(
-        f"Initiating GTT order | token={clean_token} | lot={lot} | "
-        f"sl_value={sl_value} | target_value={target_value} | product={prod_code}"
-    )
+        if not clean_token:
+            raise ValueError("instrument_token cannot be empty.")
+        if lot < 1:
+            raise ValueError(f"Lot count must be >= 1, got {lot}")
+        if tx_type not in VALID_TX_TYPES:
+            raise ValueError(
+                f"Invalid transaction_type '{tx_type}'. Expected 'BUY' or 'SELL'."
+            )
+        if prod_code not in VALID_PRODUCTS:
+            raise ValueError(
+                f"Invalid product '{prod_code}'. Expected 'D' or 'I'."
+            )
 
-    api_client = _get_upstox_api_client()
-    order_api = upstox_client.OrderApiV3(api_client)
-
-    # 1. Calculate quantity from lot size mapping
-    lot_size = resolve_lot_size(clean_token, symbol=symbol)
-    total_quantity = int(lot * lot_size)
-
-    # 2. Fetch live LTP for immediate market entry
-    live_ltp = _fetch_live_ltp(api_client, clean_token)
-    entry_price = round(live_ltp, 2)
-
-    # 3. Compute Stop-Loss and Target trigger prices
-    if is_offset:
-        if tx_type == "BUY":
-            sl_price = round(entry_price - float(sl_value), 2)
-            target_price = round(entry_price + float(target_value), 2)
-        else:  # SELL
-            sl_price = round(entry_price + float(sl_value), 2)
-            target_price = round(entry_price - float(target_value), 2)
-    else:
-        sl_price = round(float(sl_value), 2)
-        target_price = round(float(target_value), 2)
-
-    if sl_price <= 0 or target_price <= 0:
-        raise ValueError(
-            f"Computed trigger prices must be positive (entry={entry_price}, sl={sl_price}, target={target_price})."
+        logger.info(
+            f"Initiating GTT order | token={clean_token} | lot={lot} | "
+            f"sl_value={sl_value} | target_value={target_value} | "
+            f"product={prod_code}"
+        )
+    except Exception as e:
+        logger.exception("GTT validation failed")
+        return _error_result(
+            STEP_VALIDATION,
+            _internal_error("VALIDATION_ERROR", str(e)),
+            context={
+                "input": {
+                    "instrument_token": instrument_token,
+                    "sl_value": sl_value,
+                    "target_value": target_value,
+                    "lot": lot,
+                    "transaction_type": transaction_type,
+                    "product": product,
+                    "is_offset": is_offset,
+                }
+            },
         )
 
-    # 4. Construct GTT Rules & Request Body
-    entry_rule = upstox_client.GttRule(
-        strategy="ENTRY",
-        trigger_type="IMMEDIATE",
-        trigger_price=entry_price,
-    )
-    target_rule = upstox_client.GttRule(
-        strategy="TARGET",
-        trigger_type="IMMEDIATE",
-        trigger_price=target_price,
-    )
-    stoploss_rule = upstox_client.GttRule(
-        strategy="STOPLOSS",
-        trigger_type="IMMEDIATE",
-        trigger_price=sl_price,
-    )
+    # ------------------------------------------------------------------
+    # STEP 2 — API CLIENT
+    # ------------------------------------------------------------------
+    try:
+        api_client = _get_upstox_api_client()
+        order_api = upstox_client.OrderApiV3(api_client)
+    except Exception as e:
+        logger.exception("API client init failed")
+        err = (
+            _parse_api_exception(e)
+            if isinstance(e, ApiException)
+            else _internal_error("CLIENT_INIT_ERROR", str(e))
+        )
+        return _error_result(STEP_API_CLIENT, err)
 
-    body = upstox_client.GttPlaceOrderRequest(
-        type="MULTIPLE",
-        instrument_token=clean_token,
-        product=prod_code,
-        quantity=total_quantity,
-        rules=[entry_rule, target_rule, stoploss_rule],
-        transaction_type=tx_type,
-    )
+    # ------------------------------------------------------------------
+    # STEP 3 — LOT SIZE (via shared resolver)
+    # ------------------------------------------------------------------
+    lot_size_source = "override" if lot_size_override is not None else "resolver"
+    try:
+        lot_size = (
+            int(lot_size_override)
+            if lot_size_override is not None
+            else resolve_lot_size(clean_token, symbol=symbol, strict=strict_lot_size)
+        )
+        if lot_size < 1:
+            raise ValueError(f"Resolved lot_size must be >= 1, got {lot_size}.")
+        total_quantity = int(lot * lot_size)
+        logger.info(
+            f"Resolved quantity={total_quantity} | "
+            f"lot={lot} × lot_size={lot_size} (source={lot_size_source})"
+        )
+    except Exception as e:
+        logger.exception("Lot-size resolution failed")
+        return _error_result(
+            STEP_LOT_SIZE,
+            _internal_error(
+                "LOT_SIZE_ERROR", str(e),
+                path="symbol / lot_size_override", value=symbol,
+            ),
+            context={
+                "instrument_token": clean_token,
+                "symbol": symbol,
+                "lot": lot,
+                "lot_size_override": lot_size_override,
+                "strict_lot_size": strict_lot_size,
+            },
+        )
 
-    serialized_request = {
+    # ------------------------------------------------------------------
+    # STEP 4 — LIVE LTP
+    # ------------------------------------------------------------------
+    try:
+        live_ltp = _fetch_live_ltp(api_client, clean_token)
+        entry_price = round(live_ltp, 2)
+    except Exception as e:
+        logger.exception("LTP fetch failed")
+        err = (
+            _parse_api_exception(e)
+            if isinstance(e, ApiException)
+            else _internal_error("LTP_FETCH_ERROR", str(e))
+        )
+        return _error_result(
+            STEP_LTP,
+            err,
+            context={"instrument_token": clean_token, "symbol": symbol},
+        )
+
+    # ------------------------------------------------------------------
+    # STEP 5 — PRICE RESOLUTION (SL / Target)
+    # ------------------------------------------------------------------
+    try:
+        if is_offset:
+            if tx_type == "BUY":
+                sl_price = round(entry_price - float(sl_value), 2)
+                target_price = round(entry_price + float(target_value), 2)
+            else:  # SELL
+                sl_price = round(entry_price + float(sl_value), 2)
+                target_price = round(entry_price - float(target_value), 2)
+        else:
+            sl_price = round(float(sl_value), 2)
+            target_price = round(float(target_value), 2)
+
+        if sl_price <= 0 or target_price <= 0:
+            raise ValueError(
+                f"Computed trigger prices must be positive "
+                f"(entry={entry_price}, sl={sl_price}, target={target_price})."
+            )
+    except Exception as e:
+        logger.exception("SL/Target resolution failed")
+        return _error_result(
+            STEP_PRICE,
+            _internal_error(
+                "PRICE_RESOLUTION_ERROR", str(e),
+                path="sl_value / target_value",
+                value={"sl_value": sl_value, "target_value": target_value},
+            ),
+            context={
+                "instrument_token": clean_token,
+                "live_ltp": live_ltp,
+                "is_offset": is_offset,
+                "transaction_type": tx_type,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # STEP 6 — REQUEST BUILD
+    # ------------------------------------------------------------------
+    try:
+        entry_rule = upstox_client.GttRule(
+            strategy="ENTRY",
+            trigger_type="IMMEDIATE",
+            trigger_price=entry_price,
+        )
+        target_rule = upstox_client.GttRule(
+            strategy="TARGET",
+            trigger_type="IMMEDIATE",
+            trigger_price=target_price,
+        )
+        stoploss_rule = upstox_client.GttRule(
+            strategy="STOPLOSS",
+            trigger_type="IMMEDIATE",
+            trigger_price=sl_price,
+        )
+
+        body = upstox_client.GttPlaceOrderRequest(
+            type="MULTIPLE",
+            instrument_token=clean_token,
+            product=prod_code,
+            quantity=total_quantity,
+            rules=[entry_rule, target_rule, stoploss_rule],
+            transaction_type=tx_type,
+        )
+
+        serialized_request = {
+            "instrument_token": clean_token,
+            "symbol": symbol,
+            "lot": lot,
+            "lot_size": lot_size,
+            "lot_size_source": lot_size_source,
+            "quantity": total_quantity,
+            "product": prod_code,
+            "transaction_type": tx_type,
+            "is_offset": is_offset,
+            "entry_price": entry_price,
+            "sl_price": sl_price,
+            "target_price": target_price,
+            "live_ltp_at_order": live_ltp,
+            "sdk_payload": _serialize_sdk_object(body),
+        }
+    except Exception as e:
+        logger.exception("GTT request build failed")
+        return _error_result(
+            STEP_REQUEST,
+            _internal_error("REQUEST_BUILD_ERROR", str(e)),
+            context={
+                "instrument_token": clean_token,
+                "entry_price": entry_price,
+                "sl_price": sl_price,
+                "target_price": target_price,
+                "quantity": total_quantity,
+            },
+        )
+
+    base_context: Dict[str, Any] = {
         "instrument_token": clean_token,
-        "symbol": symbol,
         "lot": lot,
         "lot_size": lot_size,
+        "lot_size_source": lot_size_source,
         "quantity": total_quantity,
         "product": prod_code,
         "transaction_type": tx_type,
-        "live_ltp_at_order": live_ltp,
-        "sdk_payload": _serialize_sdk_object(body),
+        "entry_price": entry_price,
+        "sl_price": sl_price,
+        "target_price": target_price,
+        "live_ltp": live_ltp,
+        "request": serialized_request,
     }
 
-    # 5. Execute GTT Order and Persist Result
+    # ------------------------------------------------------------------
+    # STEP 7 — ORDER PLACEMENT
+    # ------------------------------------------------------------------
     try:
         api_response = order_api.place_gtt_order(body=body)
         serialized_response = _serialize_sdk_object(api_response)
 
         logger.info(
             f"GTT order placed successfully for {clean_token} | "
-            f"Qty={total_quantity} | Entry={entry_price} | SL={sl_price} | Target={target_price} | "
+            f"Qty={total_quantity} | Entry={entry_price} | "
+            f"SL={sl_price} | Target={target_price} | "
             f"Response={serialized_response}"
         )
 
+    except ApiException as e:
+        err = _parse_api_exception(e)
+        logger.error(f"ApiException in place_gtt_order for {clean_token}: {err}")
+        _safe_persist(serialized_request, err, "API_ERROR")
+        return _error_result(STEP_ORDER, err, context=base_context)
+
+    except Exception as e:
+        err = _internal_error("ORDER_PLACEMENT_ERROR", str(e))
+        logger.exception(f"Unexpected failure in place_gtt_order for {clean_token}")
+        _safe_persist(serialized_request, err, "FAILED")
+        return _error_result(STEP_ORDER, err, context=base_context)
+
+    # ------------------------------------------------------------------
+    # STEP 8 — PERSISTENCE
+    # ------------------------------------------------------------------
+    try:
         _persist_order_to_daily_doc(
             request_payload=serialized_request,
             response_payload=serialized_response,
             status="SUCCESS",
         )
-
-        return {
-            "status": "SUCCESS",
-            "request": serialized_request,
-            "response": serialized_response,
-        }
-
-    except ApiException as e:
-        error_payload = {
-            "status_code": getattr(e, "status", None),
-            "reason": getattr(e, "reason", str(e)),
-            "body": getattr(e, "body", None),
-        }
-        logger.error(f"Upstox ApiException in place_gtt_order for {clean_token}: {error_payload}")
-
-        _persist_order_to_daily_doc(
-            request_payload=serialized_request,
-            response_payload=error_payload,
-            status="API_ERROR",
-        )
-        raise
-
     except Exception as e:
-        error_payload = {"error": str(e)}
-        logger.exception(f"Unexpected failure in place_gtt_order for {clean_token}: {e}")
-
-        _persist_order_to_daily_doc(
-            request_payload=serialized_request,
-            response_payload=error_payload,
-            status="FAILED",
+        # GTT is already placed — persistence failure is non-fatal.
+        logger.exception("Persistence failed after successful GTT placement")
+        base_context.update(
+            {
+                "status": "SUCCESS",
+                "response": serialized_response,
+                "persistence_warning": {
+                    "step": STEP_PERSIST,
+                    "error": str(e),
+                },
+            }
         )
-        raise
+        return base_context
+
+    base_context.update({"status": "SUCCESS", "response": serialized_response})
+    return base_context
 
 
+# ---------------------------------------------------------------------------
+# Manual smoke test
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-
-        # Default 1 lot (65 qty for NSE_FO), SL = LTP - 30, Target = LTP + 50, Intraday ('I')
+    # Default 1 lot (resolved via master), SL = LTP - 30, Target = LTP + 50, Intraday
     result = place_gtt_order("NSE_FO%7C64473", 30, 50)
+    print(result)
 
-    # Custom 2 lots for BSE_FO (2 * 20 = 40 qty), SL = LTP - 40, Target = LTP + 100
-    result_sensex = place_gtt_order("BSE_FO|825123", sl_value=40, target_value=100, lot=2)        
+    # Custom 2 lots for BSE_FO, SL = LTP - 40, Target = LTP + 100
+    result_sensex = place_gtt_order(
+        "BSE_FO|825123", sl_value=40, target_value=100, lot=2
+    )
+    print(result_sensex)
