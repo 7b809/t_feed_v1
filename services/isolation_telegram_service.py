@@ -296,7 +296,7 @@ def _build_group_isolation_message(record: dict) -> str:
     links = format_option_chart_links(isolated, opposite)
     if links:
         lines += ["", "📊 <b>OPTION CHARTS</b>", *links]
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 
 def _build_isolation_message(record: dict) -> str:
@@ -443,7 +443,7 @@ def notify_isolation_created(record: dict, archive_path: str | None = None) -> b
 def send_existing_isolation_test(record: dict) -> bool:
     """Send the saved isolation snapshot as a clearly labelled test."""
     try:
-        message = _build_isolation_message(record)
+        message = _build_group_isolation_message(record)
         message = "🧪 <b>TEST MESSAGE · EXISTING ISOLATION DATA</b>\n\n" + message
         return send_group_html(message)
     except Exception:
