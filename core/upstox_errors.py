@@ -33,7 +33,8 @@ from typing import Any, Optional
 class UpstoxErrorMeta:
     code: str
     http_status: int
-    category: str                       # request | auth | network | rate_limit | server | broker
+    category: str                       # request | auth | network | market_hours |
+                                        # rate_limit | server | broker
     title: str
     message: str
     remediation: Optional[str] = None
@@ -112,6 +113,49 @@ _REGISTRY: dict[str, UpstoxErrorMeta] = {
         message="Your 'client_id' is inactive.",
         remediation="Contact Upstox support to reactivate the app.",
     ),
+    # ---- Order-placement window (05:30–00:00 IST daily) ---------------
+    # The Place / Modify / Cancel order APIs are gated by Upstox's daily
+    # order-window. Requests outside that window return HTTP 423 Locked
+    # with these codes. AMO orders bypass the gate — the remediation hint
+    # points callers at is_amo=True.
+    "UDAPI100074": UpstoxErrorMeta(
+        code="UDAPI100074",
+        http_status=423,
+        category="market_hours",
+        title="Outside order-placement hours",
+        message=(
+            "The Place order API is accessible only between 05:30 and 00:00 IST."
+        ),
+        remediation=(
+            "Retry during the Upstox order-placement window (05:30–00:00 IST), "
+            "or submit the request with is_amo=True to queue it as an "
+            "after-market order."
+        ),
+    ),
+    "UDAPI100075": UpstoxErrorMeta(
+        code="UDAPI100075",
+        http_status=423,
+        category="market_hours",
+        title="Outside order-modification hours",
+        message=(
+            "The Modify order API is accessible only between 05:30 and 00:00 IST."
+        ),
+        remediation=(
+            "Retry during the Upstox order-modification window (05:30–00:00 IST)."
+        ),
+    ),
+    "UDAPI100076": UpstoxErrorMeta(
+        code="UDAPI100076",
+        http_status=423,
+        category="market_hours",
+        title="Outside order-cancellation hours",
+        message=(
+            "The Cancel order API is accessible only between 05:30 and 00:00 IST."
+        ),
+        remediation=(
+            "Retry during the Upstox order-cancellation window (05:30–00:00 IST)."
+        ),
+    ),
     "UDAPI100500": UpstoxErrorMeta(
         code="UDAPI100500",
         http_status=500,
@@ -172,6 +216,20 @@ def _compact_raw(http_status: Optional[int], reason: Optional[str]) -> str:
     return " ".join(parts) if parts else ""
 
 
+def _fallback_title(code: Optional[str], reason: Optional[str]) -> str:
+    """Title for an unregistered error code.
+
+    Upstox's HTTP ``reason`` phrase ("Locked", "Forbidden") is too generic to
+    serve as a useful title — the same phrase covers multiple codes. When the
+    code is known but unregistered, surface it verbatim so the developer can
+    add it to the registry. Only fall back to ``reason`` when we have no code
+    at all.
+    """
+    if code:
+        return f"Upstox error {code}"
+    return reason or "Upstox API error"
+
+
 def parse_api_exception(exc: BaseException) -> dict[str, Any]:
     """
     Convert an Upstox SDK exception (typically ``ApiException``) into a
@@ -184,7 +242,7 @@ def parse_api_exception(exc: BaseException) -> dict[str, Any]:
         {"error_code": "...", "message": "..."}                 (flat form)
 
     ``raw`` behaviour:
-        * Known code  → "(status) reason" (no header/body dump)
+        * Known code   → "(status) reason" (no header/body dump)
         * Unknown code → full ``str(exc)`` so the payload is still recoverable
     """
     http_status = getattr(exc, "status", None)
@@ -233,7 +291,7 @@ def parse_api_exception(exc: BaseException) -> dict[str, Any]:
         "error_code": code or "UNKNOWN",
         "category": meta.category if meta else "unknown",
         "http_status": http_status or (meta.http_status if meta else None),
-        "title": meta.title if meta else (reason or "Upstox API error"),
+        "title": meta.title if meta else _fallback_title(code, reason),
         "message": upstream_message or (meta.message if meta else reason),
         "remediation": meta.remediation if meta else None,
         "property_path": property_path,
