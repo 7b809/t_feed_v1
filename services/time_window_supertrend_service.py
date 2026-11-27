@@ -468,6 +468,10 @@ class TimeWindowSupertrendService:
                 state = self._load_state(day_root)
                 delivered = self._deliver_pending(state, trade_date=now.date())
                 _atomic_json(day_root / "signals.json", state)
+                cycle_state = _read_json(day_root / "state.json", {}) or {}
+                cycle_state["last_notification_retry_at_ist"] = _iso(now)
+                cycle_state["notifications_delivered_in_retry"] = delivered
+                _atomic_json(day_root / "state.json", cycle_state)
                 return {
                     "state": "notification_retry",
                     "notifications_delivered": delivered,
