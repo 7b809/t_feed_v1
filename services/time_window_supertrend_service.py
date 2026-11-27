@@ -379,9 +379,9 @@ class TimeWindowSupertrendService:
         )
         return group_message, private_message
 
-    def _deliver_pending(self, state: dict) -> int:
+    def _deliver_pending(self, state: dict, trade_date: date | None = None) -> int:
         delivered = 0
-        day_root = self._day_root(_now().date())
+        day_root = self._day_root(trade_date or _now().date())
         for record in state["signals"]:
             notification = record.setdefault("notification", {
                 "status": "pending",
@@ -430,7 +430,8 @@ class TimeWindowSupertrendService:
     def run_cycle(self, now: datetime | None = None) -> dict:
         if not TIME_WINDOW_SUPERTREND_ENABLED:
             return {"state": "disabled"}
-        now = (now or _now()).astimezone(IST)
+        now = now or _now()
+        now = now.replace(tzinfo=IST) if now.tzinfo is None else now.astimezone(IST)
         start = dt_time(TIME_WINDOW_SUPERTREND_START_HOUR, TIME_WINDOW_SUPERTREND_START_MINUTE)
         end = dt_time(TIME_WINDOW_SUPERTREND_END_HOUR, TIME_WINDOW_SUPERTREND_END_MINUTE)
         window_start = datetime.combine(now.date(), start, tzinfo=IST)
@@ -443,7 +444,7 @@ class TimeWindowSupertrendService:
             if now <= retry_deadline and TIME_WINDOW_SUPERTREND_NOTIFICATION_RETRY_MINUTES:
                 day_root = self._day_root(now.date())
                 state = self._load_state(day_root)
-                delivered = self._deliver_pending(state)
+                delivered = self._deliver_pending(state, trade_date=now.date())
                 _atomic_json(day_root / "signals.json", state)
                 return {
                     "state": "notification_retry",
@@ -551,7 +552,7 @@ class TimeWindowSupertrendService:
                             role, key, interval,
                         )
 
-            notifications_sent = self._deliver_pending(state)
+            notifications_sent = self._deliver_pending(state, trade_date=now.date())
             _atomic_json(day_root / "state.json", {
                 "trade_date_ist": now.date().isoformat(),
                 "last_cycle_at_ist": _iso(now),
