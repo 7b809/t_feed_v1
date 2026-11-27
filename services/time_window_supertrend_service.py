@@ -13,7 +13,6 @@ import math
 import os
 import tempfile
 import threading
-import time
 from datetime import date, datetime, time as dt_time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -358,21 +357,25 @@ class TimeWindowSupertrendService:
         side = html.escape(record["signal"])
         signal_time = html.escape(record["signal_time_ist"])
         instruments = record.get("instruments") or {}
-        chart_links = format_option_chart_links(
-            instruments.get("isolated") or {},
-            instruments.get("opposite") or {},
-        )
+        isolated_leg = instruments.get("isolated") or {}
+        opposite_leg = instruments.get("opposite") or {}
+        isolated_symbol = html.escape(str(isolated_leg.get("trading_symbol") or isolated_leg.get("instrument_key") or "—"))
+        opposite_symbol = html.escape(str(opposite_leg.get("trading_symbol") or opposite_leg.get("instrument_key") or "—"))
+        chart_links = format_option_chart_links(isolated_leg, opposite_leg)
         chart_block = "\n" + "\n".join(chart_links) if chart_links else ""
         group_message = (
             "<b>Time-Window Supertrend Signal</b>\n"
             f"Interval: <b>{interval}</b>\nDirection: <b>{side}</b>\n"
-            f"Signal time: {signal_time}\nInstrument: <code>{symbol}</code>\n"
-            f"Leg: {role}{chart_block}"
+            f"Signal time: {signal_time}\nSource: <code>{symbol}</code> ({role})\n"
+            f"Isolated: <code>{isolated_symbol}</code>\n"
+            f"Opposite: <code>{opposite_symbol}</code>{chart_block}"
         )
         private_message = (
             "<b>Time-Window Supertrend Signal — Details</b>\n"
             f"Instrument: <code>{symbol}</code>\n"
             f"Instrument key: <code>{html.escape(record['instrument_key'])}</code>\n"
+            f"Isolated: <code>{isolated_symbol}</code>\n"
+            f"Opposite: <code>{opposite_symbol}</code>\n"
             f"Leg role: <b>{role}</b>\nInterval: <b>{interval}</b>\n"
             f"Direction: <b>{side}</b>\nSignal candle: {signal_time}\n"
             f"Candle close: <b>{float(record['close_price']):.2f}</b>\n"
