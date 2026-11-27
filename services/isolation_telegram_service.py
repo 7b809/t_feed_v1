@@ -142,28 +142,30 @@ def send_isolation_notification_results(
 ) -> dict:
     """Deliver group/private variants independently and report each outcome.
 
-    Disabled destinations are treated as intentionally skipped. A duplicate
-    configured chat ID receives the group-safe message only, never a duplicate
-    private message containing additional details.
+    True means delivered (or already delivered/not requested), False means
+    enabled but failed/misconfigured, and None means intentionally disabled.
+    A duplicate configured chat ID receives only the group-safe message.
     """
-    results = {"group": True, "private": True}
+    results = {
+        "group": True if not send_group else (None if not TELEGRAM_GROUP_ENABLED else False),
+        "private": True if not send_private else (None if not TELEGRAM_ENABLED else False),
+    }
+    group_active = bool(send_group and TELEGRAM_GROUP_ENABLED)
+    private_active = bool(send_private and TELEGRAM_ENABLED)
+    if not group_active and not private_active:
+        return results
     if not TELEGRAM_BOT_TOKEN:
-        if send_group and TELEGRAM_GROUP_ENABLED:
-            results["group"] = False
-        if send_private and TELEGRAM_ENABLED:
-            results["private"] = False
         return results
 
     group_id = str(TELEGRAM_GROUP_CHAT_ID or "")
     private_id = str(TELEGRAM_CHAT_ID or "")
-    group_active = bool(send_group and TELEGRAM_GROUP_ENABLED)
-    private_active = bool(send_private and TELEGRAM_ENABLED)
 
     if group_active:
-        results["group"] = bool(group_id and _post_html(group_id, group_message, "time-window-group"))
+        results["group"] = bool(
+            group_id and _post_html(group_id, group_message, "time-window-group")
+        )
     if private_active:
         if private_id and group_id and private_id == group_id and TELEGRAM_GROUP_ENABLED:
-            # The same chat is already receiving the group-safe version.
             results["private"] = True
             logger.warning(
                 "Telegram group/private destinations share one chat ID; "
