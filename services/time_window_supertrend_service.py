@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import math
 import os
 import tempfile
 import threading
@@ -134,7 +135,11 @@ def _normalise_candles(rows: list) -> list[dict]:
                 "volume": float(volume or 0),
                 "open_interest": float(oi or 0),
             }
-            if candle["high"] < candle["low"] or candle["close"] <= 0:
+            if (
+                not all(math.isfinite(candle[field]) for field in ("open", "high", "low", "close"))
+                or candle["high"] < candle["low"]
+                or candle["close"] <= 0
+            ):
                 continue
             result.append(candle)
         except (TypeError, ValueError, OverflowError):
