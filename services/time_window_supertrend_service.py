@@ -40,7 +40,10 @@ from core.config import (
 from core.logger import get_logger
 from core.token_service import fetch_access_token
 from services.isolated_archive_service import IsolatedArchiveService
-from services.isolation_telegram_service import send_isolation_notifications
+from services.isolation_telegram_service import (
+    format_option_chart_links,
+    send_isolation_notifications,
+)
 
 logger = get_logger(__file__)
 IST = ZoneInfo(TIMEZONE)
@@ -365,6 +368,7 @@ class TimeWindowSupertrendService:
             f"Signal ID: <code>{html.escape(record['signal_id'])}</code>\n"
             f"Supertrend: ATR {TIME_WINDOW_SUPERTREND_ATR_PERIOD}, "
             f"multiplier {TIME_WINDOW_SUPERTREND_MULTIPLIER:g}"
+            f"{chart_block}"
         )
         return group_message, private_message
 
@@ -468,6 +472,10 @@ class TimeWindowSupertrendService:
                                 "leg_role": role,
                                 "instrument_key": key,
                                 "trading_symbol": symbol,
+                                "instruments": {
+                                    "isolated": dict(legs.get("isolated") or {}),
+                                    "opposite": dict(legs.get("opposite") or {}),
+                                },
                                 "interval": interval,
                                 "signal": side,
                                 "trend_before": previous,
