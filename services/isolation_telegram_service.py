@@ -133,6 +133,49 @@ def send_isolation_notifications(group_message: str, private_message: str) -> bo
     return delivered
 
 
+def send_isolation_notification_results(
+    group_message: str,
+    private_message: str,
+    *,
+    send_group: bool = True,
+    send_private: bool = True,
+) -> dict:
+    """Deliver group/private variants independently and report each outcome.
+
+    Disabled destinations are treated as intentionally skipped. A duplicate
+    configured chat ID receives the group-safe message only, never a duplicate
+    private message containing additional details.
+    """
+    results = {"group": True, "private": True}
+    if not TELEGRAM_BOT_TOKEN:
+        if send_group and TELEGRAM_GROUP_ENABLED:
+            results["group"] = False
+        if send_private and TELEGRAM_ENABLED:
+            results["private"] = False
+        return results
+
+    group_id = str(TELEGRAM_GROUP_CHAT_ID or "")
+    private_id = str(TELEGRAM_CHAT_ID or "")
+    group_active = bool(send_group and TELEGRAM_GROUP_ENABLED)
+    private_active = bool(send_private and TELEGRAM_ENABLED)
+
+    if group_active:
+        results["group"] = bool(group_id and _post_html(group_id, group_message, "time-window-group"))
+    if private_active:
+        if private_id and group_active and group_id and private_id == group_id:
+            # The same chat is already receiving the group-safe version.
+            results["private"] = True
+            logger.warning(
+                "Telegram group/private destinations share one chat ID; "
+                "only the group-safe message is delivered."
+            )
+        else:
+            results["private"] = bool(
+                private_id and _post_html(private_id, private_message, "time-window-private")
+            )
+    return results
+
+
 def _post_html(chat_id: str, message: str, label: str) -> bool:
     try:
         response = requests.post(
