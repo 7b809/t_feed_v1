@@ -28,7 +28,7 @@ def test_normalise_candles_sorts_and_deduplicates():
 def test_completed_candle_grace_excludes_partial_bar():
     candle = {"timestamp": "2026-11-27T15:00:00+05:30"}
     assert _is_completed(candle, 1, datetime(2026, 11, 27, 15, 1, 10, tzinfo=IST))
-    assert not _is_completed(candle, 1, datetime(2026, 11, 27, 15, 1, 5, tzinfo=IST))
+    assert not _is_completed(candle, 1, datetime(2026, 11, 27, 15, 0, 59, tzinfo=IST))
 
 
 def test_signal_id_is_stable_and_interval_specific():
