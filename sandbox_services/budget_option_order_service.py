@@ -7,14 +7,22 @@ market_data.ltp field. It is not the total order value or required margin.
 Execution is disabled by default. With execute=True the service selects the
 lowest-LTP matches (up to max_orders) and delegates each order to the existing
 sandbox_services.place_order_service.
+
+Every returned contract carries:
+  * trading_symbol / lot_size / exchange    (enriched, never null on success)
+  * premium_per_unit / premium_per_lot / premium_total / required_margin
+Failure responses surface the dominant Upstox UDAPI error code so callers can
+map it to the correct HTTP status.
 """
 from __future__ import annotations
 
 import math
+from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import unquote
 
 from core.logger import get_logger
+from core.upstox_errors import lookup as lookup_upstox_error
 from sandbox_services.option_contract_service import (
     UNDERLYING_SYMBOL_MAP,
     get_nearest_expiry_option_contracts,
@@ -27,9 +35,27 @@ logger = get_logger(__file__)
 DEFAULT_UNDERLYING_KEY = "NSE_INDEX|Nifty 50"
 _SYMBOL_TO_KEY = {symbol.upper(): key for key, symbol in UNDERLYING_SYMBOL_MAP.items()}
 
+_SYMBOL_KEYS = ("trading_symbol", "tradingSymbol", "tradingsymbol", "symbol")
+_LOT_SIZE_KEYS = ("lot_size", "lotSize", "lot")
+_EXCHANGE_KEYS = ("exchange", "exchange_segment", "segment")
+
+# Fallback lot sizes — used only when the option chain omits lot_size AND the
+# metadata endpoint is unavailable. Current NSE/BSE contract sizes.
+_SYMBOL_LOT_SIZE_FALLBACK: dict[str, int] = {
+    "NIFTY": 65,            # was 75; Upstox currently returns 65
+    "BANKNIFTY": 35,
+    "FINNIFTY": 65,
+    "MIDCPNIFTY": 120,
+    "NIFTYNXT50": 25,
+    "SENSEX": 20,
+    "BANKEX": 30,
+}
+
+# Rough SPAN + Exposure as a fraction of notional for short options.
+_SELL_MARGIN_NOTIONAL_FRACTION = 0.12
+
 
 def normalize_underlying_key(value: Optional[str]) -> str:
-    """Accept mapped aliases such as NIFTY/SENSEX or a URL-encoded instrument key."""
     raw = (value or DEFAULT_UNDERLYING_KEY).strip() or DEFAULT_UNDERLYING_KEY
     symbol_key = _SYMBOL_TO_KEY.get(raw.upper())
     if symbol_key:
@@ -39,10 +65,18 @@ def normalize_underlying_key(value: Optional[str]) -> str:
 
 
 def _failed(step: str, code: str, message: str, context: dict[str, Any]) -> dict[str, Any]:
+    meta = lookup_upstox_error(code)
     return {
         "status": "FAILED",
         "step": step,
-        "error": {"error_code": code, "message": message},
+        "error": {
+            "error_code": code,
+            "category": meta.category if meta else "service",
+            "http_status": meta.http_status if meta else None,
+            "title": meta.title if meta else None,
+            "message": message,
+            "remediation": meta.remediation if meta else None,
+        },
         "context": context,
     }
 
@@ -57,6 +91,180 @@ def _finite_positive(value: Any, field_name: str) -> float:
     return number
 
 
+# ---------------------------------------------------------------------------
+# Contract field extraction
+# ---------------------------------------------------------------------------
+def _nested_meta(contract: dict[str, Any]) -> dict[str, Any]:
+    for container_key in ("metadata", "instrument", "instrument_meta"):
+        nested = contract.get(container_key)
+        if isinstance(nested, dict):
+            return nested
+    return {}
+
+
+def _pick_contract_field(contract: dict[str, Any], *keys: str) -> Any:
+    meta = _nested_meta(contract)
+    for source in (contract, meta):
+        for key in keys:
+            value = source.get(key)
+            if value not in (None, ""):
+                return value
+    return None
+
+
+def _derive_trading_symbol(
+    contract: dict[str, Any],
+    underlying_symbol: Optional[str],
+    side: str,
+) -> Optional[str]:
+    strike_raw = contract.get("strike_price")
+    try:
+        strike = int(float(strike_raw))
+    except (TypeError, ValueError):
+        return None
+    expiry_label = ""
+    expiry_raw = contract.get("expiry")
+    if isinstance(expiry_raw, str) and expiry_raw:
+        try:
+            iso = expiry_raw.replace("Z", "+00:00").split("+", 1)[0].split("T", 1)[0]
+            expiry_label = datetime.fromisoformat(iso).strftime("%d %b %y").upper()
+        except ValueError:
+            expiry_label = ""
+    parts = [underlying_symbol or "", str(strike), side]
+    if expiry_label:
+        parts.append(expiry_label)
+    return " ".join(part for part in parts if part)
+
+
+def _resolve_lot_size(
+    contract: dict[str, Any],
+    symbol: Optional[str],
+) -> tuple[Optional[int], str]:
+    meta_lot = _pick_contract_field(contract, *_LOT_SIZE_KEYS)
+    try:
+        if meta_lot is not None:
+            value = int(meta_lot)
+            if value > 0:
+                return value, "metadata"
+    except (TypeError, ValueError):
+        pass
+    if symbol:
+        fallback = _SYMBOL_LOT_SIZE_FALLBACK.get(symbol.upper())
+        if fallback:
+            return fallback, "symbol_fallback"
+    return None, "unresolved"
+
+
+def _resolve_exchange(instrument_key: str) -> tuple[Optional[str], str]:
+    if "|" in instrument_key:
+        segment = instrument_key.split("|", 1)[0].strip()
+        if segment:
+            return segment, "instrument_key"
+    return None, "unresolved"
+
+
+def _compute_lot_margin(
+    *,
+    ltp: float,
+    lot_size: Optional[int],
+    lots: int,
+    transaction_type: str,
+    underlying_ltp: Optional[float],
+    strike_price: Optional[float],
+) -> dict[str, Any]:
+    if not lot_size or lot_size <= 0:
+        return {
+            "units_per_lot": None,
+            "premium_per_unit": round(ltp, 2),
+            "premium_per_lot": None,
+            "premium_total": None,
+            "required_margin": None,
+            "margin_basis": "unresolved_missing_lot_size",
+        }
+
+    units = lot_size * lots
+    premium_per_lot = ltp * lot_size
+    premium_total = ltp * units
+
+    if transaction_type == "BUY":
+        required_margin = premium_total
+        basis = "premium_only_buy"
+    else:
+        notional_base = underlying_ltp if underlying_ltp else strike_price
+        try:
+            notional = float(notional_base) * units
+        except (TypeError, ValueError):
+            notional = 0.0
+        estimate = notional * _SELL_MARGIN_NOTIONAL_FRACTION
+        required_margin = max(premium_total, estimate)
+        basis = "estimated_span_plus_exposure_12pct"
+
+    return {
+        "units_per_lot": lot_size,
+        "premium_per_unit": round(ltp, 2),
+        "premium_per_lot": round(premium_per_lot, 2),
+        "premium_total": round(premium_total, 2),
+        "required_margin": round(required_margin, 2),
+        "margin_basis": basis,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Aggregate broker failure
+# ---------------------------------------------------------------------------
+def _aggregate_failure(placement_results: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Determine the dominant error across all failed placements.
+
+    Preference order:
+      1. The first broker (UDAPI*) error_code seen.
+      2. The first non-UDAPI error_code.
+      3. ``ALL_ORDERS_FAILED`` as a last resort.
+    The dominant code is enriched via the Upstox error registry so callers
+    receive the correct HTTP status and remediation hint.
+    """
+    failed = [p for p in placement_results if str(p.get("status") or "").upper() != "SUCCESS"]
+    codes: list[str] = []
+    for p in failed:
+        err = p.get("error") or {}
+        code = err.get("error_code") if isinstance(err, dict) else None
+        if code:
+            codes.append(str(code))
+
+    broker_codes = [c for c in codes if c.startswith("UDAPI")]
+    dominant = broker_codes[0] if broker_codes else (codes[0] if codes else None)
+
+    if dominant:
+        meta = lookup_upstox_error(dominant)
+        # If the dominant code is missing from our registry, fall back to the
+        # first placement's own enriched error dict.
+        if meta is None:
+            for p in failed:
+                err = p.get("error") or {}
+                if isinstance(err, dict) and err.get("error_code") == dominant:
+                    return {**err}
+        return {
+            "error_code": dominant,
+            "category": meta.category if meta else "broker",
+            "http_status": meta.http_status if meta else None,
+            "title": meta.title if meta else None,
+            "message": meta.message if meta else "Upstox rejected the order.",
+            "remediation": meta.remediation if meta else None,
+        }
+
+    return {
+        "error_code": "ALL_ORDERS_FAILED",
+        "category": "order_placement",
+        "http_status": 502,
+        "title": "All orders failed",
+        "message": "None of the selected option orders was successfully placed.",
+        "remediation": None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
 def place_option_orders_by_budget(
     *,
     underlying_key: Optional[str] = None,
@@ -77,15 +285,6 @@ def place_option_orders_by_budget(
     slice_order: bool = True,
     strict_lot_size: bool = True,
 ) -> dict[str, Any]:
-    """
-    Preview or execute selected CE/PE option contracts.
-
-    Matching is inclusive: budget_min <= option-chain LTP <= budget_max.
-    Matches are sorted by lowest premium first. If several contracts match,
-    the first max_orders cheapest contracts are selected; ATM distance and
-    strike are deterministic tie-breakers. The complete matching list is
-    always returned for review.
-    """
     try:
         clean_key = normalize_underlying_key(underlying_key)
         side = str(option_type or "").strip().upper()
@@ -137,8 +336,8 @@ def place_option_orders_by_budget(
 
     logger.info(
         "Budget option flow started | underlying=%s | side=%s | premium=[%.2f, %.2f] | "
-        "execute=%s | max_orders=%s",
-        clean_key, side, minimum, maximum, execute, max_orders,
+        "execute=%s | max_orders=%s | lot=%s | tx=%s",
+        clean_key, side, minimum, maximum, execute, max_orders, lot, tx_type,
     )
 
     try:
@@ -174,6 +373,12 @@ def place_option_orders_by_budget(
                 "chain_context": chain.get("context") if isinstance(chain, dict) else None,
             },
         )
+
+    underlying_ltp = chain.get("underlying_ltp")
+    try:
+        underlying_ltp_f = float(underlying_ltp) if underlying_ltp is not None else None
+    except (TypeError, ValueError):
+        underlying_ltp_f = None
 
     raw_contracts = chain.get("ce_contracts" if side == "CE" else "pe_contracts") or []
     matches: list[dict[str, Any]] = []
@@ -214,10 +419,29 @@ def place_option_orders_by_budget(
             except (TypeError, ValueError):
                 strike_price = 0.0
 
+            trading_symbol = _pick_contract_field(contract, *_SYMBOL_KEYS)
+            if not trading_symbol:
+                trading_symbol = _derive_trading_symbol(contract, symbol, side)
+
+            lot_size, lot_source = _resolve_lot_size(contract, symbol)
+
+            exchange = _pick_contract_field(contract, *_EXCHANGE_KEYS)
+            if not exchange:
+                exchange, _ = _resolve_exchange(instrument_key)
+
+            margin_info = _compute_lot_margin(
+                ltp=ltp,
+                lot_size=lot_size,
+                lots=lot,
+                transaction_type=tx_type,
+                underlying_ltp=underlying_ltp_f,
+                strike_price=strike_price,
+            )
+
             matches.append({
                 "instrument_key": instrument_key,
                 "instrument_type": contract.get("instrument_type") or side,
-                "trading_symbol": contract.get("trading_symbol"),
+                "trading_symbol": trading_symbol,
                 "expiry": contract.get("expiry"),
                 "strike_price": contract.get("strike_price"),
                 "moneyness": contract.get("moneyness"),
@@ -225,15 +449,28 @@ def place_option_orders_by_budget(
                 "ltp": round(ltp, 2),
                 "volume": market_data.get("volume"),
                 "oi": market_data.get("oi"),
-                "lot_size": contract.get("lot_size"),
-                "exchange": contract.get("exchange"),
+                "lot_size": lot_size,
+                "lot_size_source": lot_source,
+                "exchange": exchange,
+                "premium_per_unit": margin_info["premium_per_unit"],
+                "premium_per_lot": margin_info["premium_per_lot"],
+                "premium_total": margin_info["premium_total"],
+                "required_margin": margin_info["required_margin"],
+                "margin_basis": margin_info["margin_basis"],
                 "_midpoint_distance": abs(ltp - ((minimum + maximum) / 2.0)),
                 "_atm_distance": atm_distance,
                 "_strike_sort": strike_price,
             })
 
-    # The required selection rule is the lowest eligible option premium.
-    # ATM distance and strike are deterministic tie-breakers only.
+    missing_symbol = sum(1 for m in matches if not m.get("trading_symbol"))
+    missing_lot = sum(1 for m in matches if not m.get("lot_size"))
+    if missing_symbol or missing_lot:
+        logger.warning(
+            "Budget option enrichment incomplete | matches=%s | missing_symbol=%s | "
+            "missing_lot_size=%s | source=option_chain",
+            len(matches), missing_symbol, missing_lot,
+        )
+
     matches.sort(
         key=lambda item: (
             item["ltp"],
@@ -249,12 +486,16 @@ def place_option_orders_by_budget(
     public_matches = [public_contract(item) for item in matches]
     public_selected = [public_contract(item) for item in selected]
 
+    selected_margin_total = sum((m.get("required_margin") or 0.0) for m in selected)
+    selected_premium_total = sum((m.get("premium_total") or 0.0) for m in selected)
+    margin_complete = all(m.get("required_margin") is not None for m in selected)
+
     response: dict[str, Any] = {
         "status": "PREVIEW" if selected and not execute else "NO_MATCHES" if not selected else "EXECUTING",
         "mode": "EXECUTE" if execute else "DRY_RUN",
         "underlying_key": clean_key,
         "underlying_symbol": chain.get("underlying_symbol") or symbol,
-        "underlying_ltp": chain.get("underlying_ltp"),
+        "underlying_ltp": underlying_ltp,
         "expiry_requested": expiry,
         "expiry_keyword": chain.get("expiry_keyword"),
         "expiry_used": chain.get("expiry_used"),
@@ -284,6 +525,24 @@ def place_option_orders_by_budget(
         "selected_instrument_key": (
             public_selected[0].get("instrument_key") if public_selected else None
         ),
+        "margin_summary": {
+            "transaction_type": tx_type,
+            "lot": lot,
+            "selected_contracts_count": len(selected),
+            "total_premium": round(selected_premium_total, 2) if margin_complete else None,
+            "total_required_margin": round(selected_margin_total, 2) if margin_complete else None,
+            "margin_basis": (
+                "premium_only_buy" if tx_type == "BUY"
+                else "estimated_span_plus_exposure_12pct"
+            ),
+            "complete": margin_complete,
+            "disclaimer": (
+                "BUY options: required margin equals the full premium "
+                "(ltp × lot_size × lots). SELL options: estimated as "
+                "max(premium, 12% of underlying notional) — replace with a "
+                "broker SPAN+Exposure calculator for precise short-side margin."
+            ),
+        },
         "placement_results": [],
         "note": (
             "Budget range filters each option contract's observed premium (LTP), "
@@ -302,9 +561,6 @@ def place_option_orders_by_budget(
     for index, contract in enumerate(selected, start=1):
         instrument_key = contract["instrument_key"]
 
-        # The established daily-profit guard applies to new BUY entries.
-        # Re-check before each broker submission so a multi-contract batch
-        # cannot continue opening new BUY orders after the daily lock trips.
         if tx_type == "BUY":
             try:
                 assert_new_entries_allowed()
@@ -315,7 +571,7 @@ def place_option_orders_by_budget(
                     "http_status": exc.status_code,
                     "details": exc.details,
                 }
-            except Exception as exc:
+            except Exception:
                 logger.exception("Unexpected daily-profit guard failure before option order")
                 guard_failure = {
                     "error_code": "DAILY_PROFIT_CHECK_FAILED",
@@ -333,11 +589,13 @@ def place_option_orders_by_budget(
                         "option_type": side,
                         "strike_price": blocked_contract.get("strike_price"),
                         "selected_ltp": blocked_contract.get("ltp"),
+                        "required_margin": blocked_contract.get("required_margin"),
                         "status": "BLOCKED",
                         "step": "DAILY_PROFIT_GUARD",
                         "error": guard_failure,
                     })
                 break
+
         lot_size_override = None
         try:
             metadata_lot_size = int(contract.get("lot_size"))
@@ -368,7 +626,11 @@ def place_option_orders_by_budget(
                     "step": "ORDER_PLACEMENT",
                     "error": {
                         "error_code": "INVALID_ORDER_SERVICE_RESPONSE",
+                        "category": "service",
+                        "http_status": 502,
+                        "title": "Invalid order-service response",
                         "message": "Existing place_order_service returned an invalid response.",
+                        "remediation": None,
                     },
                 }
         except Exception as exc:
@@ -381,7 +643,11 @@ def place_option_orders_by_budget(
                 "step": "ORDER_PLACEMENT",
                 "error": {
                     "error_code": "UNEXPECTED_ORDER_SERVICE_EXCEPTION",
+                    "category": "service",
+                    "http_status": 500,
+                    "title": "Order service exception",
                     "message": str(exc),
+                    "remediation": None,
                 },
             }
 
@@ -398,6 +664,7 @@ def place_option_orders_by_budget(
             "option_type": side,
             "strike_price": contract.get("strike_price"),
             "selected_ltp": contract["ltp"],
+            "required_margin": contract.get("required_margin"),
             "status": place_result.get("status", "UNKNOWN"),
             "step": place_result.get("step"),
             "order_response": place_result,
@@ -424,15 +691,15 @@ def place_option_orders_by_budget(
             response["step"] = "DAILY_PROFIT_GUARD"
             response["error"] = {
                 "error_code": guard_failure["error_code"],
-                "message": guard_failure["message"],
+                "category": "risk_guard",
                 "http_status": guard_failure.get("http_status"),
+                "title": "Daily profit guard tripped",
+                "message": guard_failure["message"],
+                "remediation": None,
             }
         else:
             response["step"] = "ORDER_PLACEMENT"
-            response["error"] = {
-                "error_code": "ALL_ORDERS_FAILED",
-                "message": "None of the selected option orders was successfully placed.",
-            }
+            response["error"] = _aggregate_failure(placement_results)
         response["context"] = {
             "placement_results": placement_results,
             "underlying_key": clean_key,

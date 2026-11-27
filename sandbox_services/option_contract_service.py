@@ -171,14 +171,33 @@ def _today_iso() -> str:
 
 
 def _expiry_str(value: Union[str, datetime, date, None]) -> str:
-    """Normalise an ``expiry`` value to an ISO string."""
+    """
+    Normalise an ``expiry`` value to a ``YYYY-MM-DD`` string.
+
+    Upstox ``/v2/option/contract`` rejects anything carrying a time component
+    (e.g. ``2026-12-01T00:00:00``) with ``UDAPI1175: Invalid expiry``, while
+    ``/v2/option/chain`` rows sometimes embed one. Returning date-only here
+    keeps the downstream metadata call, the strike-row filter and the
+    response field ``expiry_used`` all mutually consistent and compliant.
+    """
     if value is None:
         return ""
     if isinstance(value, datetime):
-        return value.isoformat()
+        return value.date().isoformat()
     if isinstance(value, date):
-        return datetime(value.year, value.month, value.day).isoformat()
-    return str(value)
+        return value.isoformat()
+    text = str(value).strip()
+    if not text:
+        return ""
+    # ISO datetime form: "2026-12-01T00:00:00(+...)": keep only the date
+    if "T" in text:
+        return text.split("T", 1)[0]
+    # Some serialisers emit "2026-12-01 00:00:00": keep only the date
+    if " " in text:
+        head = text.split(" ", 1)[0]
+        if len(head) == 10:
+            return head
+    return text
 
 
 def _get_upstox_api_client() -> upstox_client.ApiClient:
@@ -339,12 +358,21 @@ def _fetch_contracts_metadata(
     Fetch contract metadata for the given expiry and return a lookup keyed
     by ``instrument_key``. Returns an empty dict on failure (caller treats
     metadata as optional).
+
+    ``/v2/option/contract`` requires ``YYYY-MM-DD`` and rejects anything with
+    a time component (``UDAPI1175: Invalid expiry``), so we normalise before
+    dispatch even though callers now pass a date-only string.
     """
+    expiry_date = _expiry_str(expiry)
+    if not expiry_date:
+        logger.warning("Skipping contract metadata fetch: empty expiry.")
+        return {}
+
     try:
         options_api = upstox_client.OptionsApi(api_client)
         response = options_api.get_option_contracts(
             instrument_key=underlying_key,
-            expiry_date=expiry,
+            expiry_date=expiry_date,
         )
         resp_dict = (
             response.to_dict() if hasattr(response, "to_dict") else dict(response)
@@ -357,7 +385,7 @@ def _fetch_contracts_metadata(
                 lookup[key] = c
         logger.info(
             f"Fetched {len(lookup)} contract metadata rows for {underlying_key} "
-            f"(expiry={expiry})"
+            f"(expiry={expiry_date})"
         )
         return lookup
     except Exception as exc:

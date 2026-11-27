@@ -10,7 +10,11 @@ Key features
     VALIDATION, API_CLIENT_INIT, LOT_SIZE_RESOLUTION, LTP_FETCH,
     PRICE_RESOLUTION, REQUEST_BUILD, ORDER_PLACEMENT, PERSISTENCE
 * Official Upstox error parsing — ApiException.body is decoded into the
-  documented schema: {error_code, message, property_path, invalid_value}.
+  documented schema AND enriched via core.upstox_errors (category, title,
+  remediation, http_status). UDAPI* codes resolve to accurate HTTP statuses.
+* Compact exception logging — known UDAPI codes log a single WARNING line;
+  unknown codes log a single bounded ERROR line. The full ApiException string
+  (header dump + body bytes) is never interpolated into logs or responses.
 * Lot-size resolution delegated to ``sandbox_services.lot_size_resolver``:
       Tier 1  Upstox instruments master keyed by instrument_key  [authoritative]
       Tier 2  SYMBOL_LOT_SIZE_MAP                                [fallback]
@@ -29,14 +33,22 @@ Return on failure
     "step":   "LTP_FETCH",
     "error": {
         "error_code"   : "UDAPI100050",
+        "category"     : "auth",
+        "http_status"  : 401,
+        "title"        : "Invalid access token",
         "message"      : "Invalid token used to access API",
+        "remediation"  : "Refresh the access token and retry.",
         "property_path": null,
         "invalid_value": null,
-        "http_status"  : 401,
-        "raw"          : "<full exception string>"
+        "raw"          : "(401) Unauthorized"
     },
     "context": { ...whatever was built before the failure... }
 }
+
+Internal (non-broker) failures use the same shape with category="internal",
+title=null, remediation=null, and an http_status that reflects the failure class
+(400 validation / lot-size / price, 500 client build or unexpected placement,
+502 upstream LTP fetch).
 """
 
 import json
@@ -48,12 +60,13 @@ import upstox_client
 from upstox_client.rest import ApiException
 
 from core.config import (
-    ORDERS_COLLECTION,
+    get_orders_collection,
     UPSTOX_HTTP_TIMEOUT_SECONDS,
     UPSTOX_SANDBOX,
 )
 from core.logger import get_logger
 from core.token_service import fetch_access_token
+from core.upstox_errors import log_api_exception, parse_api_exception
 
 # Shared resolver — Tier 1 (master) → Tier 2 (symbol) → Tier 3 (exchange)
 from sandbox_services.lot_size_resolver import (
@@ -130,6 +143,8 @@ def _fetch_live_ltp(api_client: upstox_client.ApiClient, instrument_token: str) 
         return ltp
 
     except ApiException:
+        # Let the caller (STEP 4) route this through log_api_exception so a
+        # known UDAPI code doesn't dump the full HTTPHeaderDict into the log.
         raise
     except Exception as e:
         logger.exception(f"Unexpected LTP fetch error for {instrument_token}: {e}")
@@ -165,7 +180,8 @@ def _persist_order_to_daily_doc(
     }
 
     try:
-        ORDERS_COLLECTION.update_one(
+        collection = get_orders_collection()
+        collection.update_one(
             {"_id": date_id},
             {
                 "$setOnInsert": {"date": date_id, "created_at": now},
@@ -201,59 +217,24 @@ def _safe_persist(
 
 
 # ---------------------------------------------------------------------------
-# Official Upstox error parsing
+# Internal-error builder
 # ---------------------------------------------------------------------------
-def _parse_api_exception(e: ApiException) -> Dict[str, Any]:
-    http_status = getattr(e, "status", None)
-    reason = getattr(e, "reason", str(e))
-    raw_body = getattr(e, "body", None)
-
-    parsed: Dict[str, Any] = {}
-    if raw_body:
-        try:
-            decoded = json.loads(raw_body) if isinstance(raw_body, str) else raw_body
-            if isinstance(decoded, dict):
-                errors = decoded.get("errors") or []
-                if errors and isinstance(errors, list):
-                    first = errors[0]
-                    parsed = {
-                        "error_code": first.get("error_code") or first.get("errorCode"),
-                        "message": first.get("message"),
-                        "property_path": first.get("property_path") or first.get("propertyPath"),
-                        "invalid_value": first.get("invalid_value") or first.get("invalidValue"),
-                    }
-                elif decoded.get("error_code") or decoded.get("errorCode"):
-                    parsed = {
-                        "error_code": decoded.get("error_code") or decoded.get("errorCode"),
-                        "message": decoded.get("message"),
-                        "property_path": decoded.get("property_path") or decoded.get("propertyPath"),
-                        "invalid_value": decoded.get("invalid_value") or decoded.get("invalidValue"),
-                    }
-        except Exception:
-            pass
-
-    return {
-        "error_code": parsed.get("error_code") or "UNKNOWN",
-        "message": parsed.get("message") or reason or "Unknown API error",
-        "property_path": parsed.get("property_path"),
-        "invalid_value": parsed.get("invalid_value"),
-        "http_status": http_status,
-        "raw": str(e),
-    }
-
-
 def _internal_error(
     code: str,
     message: str,
     path: Any = None,
     value: Any = None,
+    http_status: Optional[int] = None,
 ) -> Dict[str, Any]:
     return {
         "error_code": code,
+        "category": "internal",
+        "http_status": http_status,
+        "title": None,
         "message": message,
+        "remediation": None,
         "property_path": path,
         "invalid_value": value,
-        "http_status": None,
         "raw": message,
     }
 
@@ -369,14 +350,17 @@ def place_order(
     """
     Places ONE regular order via OrderApiV3 and returns a structured result.
 
-    New in this version
-    -------------------
-    * ``strict_lot_size`` — when True, raises at the LOT_SIZE_RESOLUTION step
-      if the Upstox instruments master has no entry for this instrument. Set
-      True for LIVE trading (safety) and False for sandbox/dev.
-    * Lot-size resolution now goes through the shared
-      ``sandbox_services.lot_size_resolver`` (Tier 1 master → Tier 2 symbol
-      → Tier 3 exchange default). ``lot_size_override`` still wins.
+    Error handling
+    --------------
+    * Broker ApiExceptions are parsed via ``parse_api_exception`` (known
+      UDAPI* codes get their ``raw`` trimmed to "(status) reason"; unknown
+      codes keep the full SDK string).
+    * Logging is delegated to ``log_api_exception`` — one WARNING line for
+      known codes, one bounded ERROR line for unknowns. The bulk
+      ``str(ApiException)`` (header dump + body bytes) is never interpolated
+      into a log line.
+    * Non-broker failures continue to use ``logger.exception`` so real bugs
+      keep full tracebacks.
     """
     # ------------------------------------------------------------------
     # STEP 1 — VALIDATION
@@ -411,7 +395,7 @@ def place_order(
         logger.exception("Validation failed")
         return _error_result(
             STEP_VALIDATION,
-            _internal_error("VALIDATION_ERROR", str(e)),
+            _internal_error("VALIDATION_ERROR", str(e), http_status=400),
             context={"input": {
                 "instrument_token": instrument_token,
                 "order_type": order_type,
@@ -427,13 +411,16 @@ def place_order(
     try:
         api_client = _get_upstox_api_client()
         order_api = upstox_client.OrderApiV3(api_client)
+    except ApiException as e:
+        err = parse_api_exception(e)
+        log_api_exception(err, action="API client init", log=logger)
+        return _error_result(STEP_API_CLIENT, err)
     except Exception as e:
         logger.exception("API client init failed")
-        err = (
-            _parse_api_exception(e) if isinstance(e, ApiException)
-            else _internal_error("CLIENT_INIT_ERROR", str(e))
+        return _error_result(
+            STEP_API_CLIENT,
+            _internal_error("CLIENT_INIT_ERROR", str(e), http_status=500),
         )
-        return _error_result(STEP_API_CLIENT, err)
 
     # ------------------------------------------------------------------
     # STEP 3 — LOT SIZE (via shared resolver)
@@ -459,6 +446,7 @@ def place_order(
             _internal_error(
                 "LOT_SIZE_ERROR", str(e),
                 path="symbol / lot_size_override", value=symbol,
+                http_status=400,
             ),
             context={
                 "instrument_token": clean_token,
@@ -474,14 +462,18 @@ def place_order(
     # ------------------------------------------------------------------
     try:
         live_ltp = _fetch_live_ltp(api_client, clean_token)
-    except Exception as e:
-        logger.exception("LTP fetch failed")
-        err = (
-            _parse_api_exception(e) if isinstance(e, ApiException)
-            else _internal_error("LTP_FETCH_ERROR", str(e))
-        )
+    except ApiException as e:
+        err = parse_api_exception(e)
+        log_api_exception(err, action="LTP fetch", log=logger)
         return _error_result(
             STEP_LTP, err,
+            context={"instrument_token": clean_token},
+        )
+    except Exception as e:
+        logger.exception("LTP fetch failed")
+        return _error_result(
+            STEP_LTP,
+            _internal_error("LTP_FETCH_ERROR", str(e), http_status=502),
             context={"instrument_token": clean_token},
         )
 
@@ -511,6 +503,7 @@ def place_order(
             _internal_error(
                 "PRICE_RESOLUTION_ERROR", str(e),
                 path="entry / sl / sl_limit",
+                http_status=400,
             ),
             context={
                 "live_ltp": live_ltp,
@@ -541,7 +534,7 @@ def place_order(
         logger.exception("SDK request body construction failed")
         return _error_result(
             STEP_REQUEST,
-            _internal_error("REQUEST_BUILD_ERROR", str(e)),
+            _internal_error("REQUEST_BUILD_ERROR", str(e), http_status=500),
         )
 
     serialized_request = {
@@ -599,13 +592,13 @@ def place_order(
         )
 
     except ApiException as e:
-        err = _parse_api_exception(e)
-        logger.error(f"ApiException on order placement: {err}")
+        err = parse_api_exception(e)
+        log_api_exception(err, action="Order placement", log=logger)
         _safe_persist(clean_token, serialized_request, err, "API_ERROR")
         return _error_result(STEP_ORDER, err, context=base_context)
 
     except Exception as e:
-        err = _internal_error("ORDER_PLACEMENT_ERROR", str(e))
+        err = _internal_error("ORDER_PLACEMENT_ERROR", str(e), http_status=500)
         logger.exception("Unexpected order placement failure")
         _safe_persist(clean_token, serialized_request, err, "FAILED")
         return _error_result(STEP_ORDER, err, context=base_context)

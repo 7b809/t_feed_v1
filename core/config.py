@@ -17,12 +17,52 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-# MongoDB token source and daily order ledger.
+# ---------------------------------------------------------------------------
+# MongoDB
+#
+# The ``*_COLLECTION`` values below are collection *names* (strings), not
+# PyMongo collection objects. Code that needs to run queries must use the
+# lazy accessors defined at the bottom of this section:
+#
+#     from core.config import get_orders_collection
+#     get_orders_collection().update_one(...)
+#
+# Calling PyMongo methods directly on the raw string
+# (``ORDERS_COLLECTION.update_one(...)``) raises
+# ``AttributeError: 'str' object has no attribute 'update_one'`` — which is
+# the failure that used to break the daily order ledger before this was fixed.
+#
+# The helpers defer-import ``core.mongo_client`` to avoid a circular import
+# (``mongo_client`` imports the Mongo settings above at module load).
+# ---------------------------------------------------------------------------
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "UPSTOX_APP_V2")
 APP_TOKENS_COLLECTION = os.getenv("APP_TOKENS_COLLECTION", "app_tokens")
 TOKEN_DOC_ID = os.getenv("TOKEN_DOC_ID", "upstox_access_token")
 ORDERS_COLLECTION = os.getenv("ORDERS_COLLECTION", "sandbox_orders")
+
+
+def _get_collection(name: str):
+    """Lazily resolve a PyMongo collection by name.
+
+    Deferred import of ``core.mongo_client`` avoids the circular import that
+    would otherwise exist (mongo_client imports Mongo settings from this
+    module). Safe to call at any point in the app lifecycle.
+    """
+    from core.mongo_client import get_mongo_db
+
+    return get_mongo_db()[name]
+
+
+def get_orders_collection():
+    """Return the daily sandbox-orders collection (PyMongo object)."""
+    return _get_collection(ORDERS_COLLECTION)
+
+
+def get_tokens_collection():
+    """Return the app_tokens collection (Upstox access-token storage)."""
+    return _get_collection(APP_TOKENS_COLLECTION)
+
 
 # Upstox SDK and trade-safety controls.
 # UPSTOX_API_VERSION must be "1.0" or "2.0". An empty value from .env
@@ -91,6 +131,12 @@ MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
 MEGA_BACKUP_ROOT = os.getenv("MEGA_BACKUP_ROOT", "sandbox_v1").strip().strip("/")
 APP_NAME = os.getenv("APP_NAME", "sandbox_v1").strip() or "sandbox_v1"
 
+
+def get_daily_data_backup_collection():
+    """Return the daily_data_backup_state collection (PyMongo object)."""
+    return _get_collection(DAILY_DATA_BACKUP_COLLECTION)
+
+
 # Optional Telegram notifications (isolation_v1-compatible settings).
 TELEGRAM_ENABLED = env_bool("TELEGRAM_ENABLED", True)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -136,3 +182,8 @@ DAILY_PROFIT_LOCKOUT_UNTIL_NEXT_DAY = env_bool("DAILY_PROFIT_LOCKOUT_UNTIL_NEXT_
 DAILY_PROFIT_GUARD_COLLECTION = os.getenv(
     "DAILY_PROFIT_GUARD_COLLECTION", "daily_profit_guard"
 ).strip() or "daily_profit_guard"
+
+
+def get_daily_profit_guard_collection():
+    """Return the daily_profit_guard collection (PyMongo object)."""
+    return _get_collection(DAILY_PROFIT_GUARD_COLLECTION)

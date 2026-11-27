@@ -1,117 +1,101 @@
-"""Shared helpers for the external order-mutation API routes.
+"""Shared helpers for external API routes.
 
-Centralises two things so every sub-router behaves identically:
-
-1. ``raise_from_service_result`` – translates the structured ``FAILED`` payload
-   produced by the new sandbox services (``place_order_service``,
-   ``place_gtt_order``, ``place_dual_gtt_service``, ``gtt_modify_service``)
-   into the correct ``HTTPException`` status and detail shape.
-
-2. ``handle_api_exception`` – legacy ``ApiException`` translator used by the
-   routes that still call the older ``services.*`` layer (which raises).
-
-Callers importing from this module do not need to know which of the two
-exception contracts the underlying service uses – the route code just calls
-the appropriate helper based on how that service reports errors.
+Centralises the conversion of service-layer results and raw exceptions into
+FastAPI ``HTTPException`` responses, using the Upstox error registry to
+surface accurate HTTP statuses, categories, and remediation hints.
 """
 
-from typing import Any, Dict
+from __future__ import annotations
+
+from typing import Any
 
 from fastapi import HTTPException
-from upstox_client.rest import ApiException
 
 from core.logger import get_logger
+from core.upstox_errors import parse_api_exception
 
 logger = get_logger(__file__)
 
-
-# ---------------------------------------------------------------------------
-# Step → HTTP status mapping
-# ---------------------------------------------------------------------------
-# The new services tag every failure with a ``step`` field. That step tells
-# us whether the failure is the caller's fault (4xx), ours (5xx), or the
-# broker's (5xx/4xx depending on the broker response).
-STEP_TO_HTTP_STATUS: Dict[str, int] = {
-    # Caller / input problems → 400
-    "VALIDATION":          400,
-    "PRICE_RESOLUTION":    400,
-    "OFFSET_RESOLUTION":   400,
-    "LOT_SIZE_RESOLUTION": 400,
-    # Internal bugs → 500
-    "REQUEST_BUILD":       500,
-    "PERSISTENCE":         500,
-    # Upstream failures → 502 (broker unreachable / bad response)
-    "API_CLIENT_INIT":     502,
-    "LTP_FETCH":           502,
-    "OPTION_CHAIN":         502,
-    "DAILY_PROFIT_GUARD":   403,
-    "FETCH_STATE":         502,
-    "ORDER_PLACEMENT":     502,
-    "MODIFY_PLACEMENT":    502,
-    # Fallback
-    "UNKNOWN":             500,
-}
+_DEFAULT_FAILURE_STATUS = 502  # Bad Gateway for opaque service-level failures
 
 
-def raise_from_service_result(
-    result: Dict[str, Any],
-    action: str = "order",
-) -> None:
-    """Raise an ``HTTPException`` if ``result['status'] == 'FAILED'``.
+def _extract_http_status(result: dict[str, Any], default: int = _DEFAULT_FAILURE_STATUS) -> int:
+    error = result.get("error")
+    if not isinstance(error, dict):
+        return default
+    status = error.get("http_status")
+    if isinstance(status, int) and 100 <= status < 600:
+        return status
+    return default
 
-    Otherwise it is a no-op, so callers can write::
 
-        result = place_order(...)
-        raise_from_service_result(result, action="order")
-        return result
+def _build_error_detail(result: dict[str, Any], action: str) -> dict[str, Any]:
+    error = result.get("error") or {}
+    if not isinstance(error, dict):
+        error = {"message": str(error) if error else "Unknown error."}
 
-    ``ORDER_PLACEMENT`` / ``MODIFY_PLACEMENT`` failures honour the broker's
-    own HTTP status when it is a 4xx/5xx (e.g. Upstox returned 400 for a
-    bad trigger price – we surface it as 400, not blanket 502).
+    return {
+        "error": error.get("message") or error.get("title") or "Request failed.",
+        "code": error.get("error_code") or "UNKNOWN",
+        "category": error.get("category"),
+        "title": error.get("title"),
+        "step": result.get("step"),
+        "property_path": error.get("property_path"),
+        "invalid_value": error.get("invalid_value"),
+        "remediation": error.get("remediation"),
+        "broker_http_status": error.get("http_status"),
+        "context": result.get("context"),
+        "action": action,
+    }
+
+
+def raise_from_service_result(result: Any, *, action: str) -> None:
     """
-    if not isinstance(result, dict) or result.get("status") != "FAILED":
+    Inspect a sandbox-service result and raise an ``HTTPException`` for FAILED.
+
+    SUCCESS and PARTIAL_SUCCESS results pass through unchanged (the caller
+    decides whether to wrap them in a 207). FAILED results raise with the
+    broker's HTTP status when available, falling back to 502 for opaque
+    service-level failures.
+    """
+    if not isinstance(result, dict):
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": f"Invalid service response for {action}.",
+                "code": "INVALID_SERVICE_RESPONSE",
+                "action": action,
+            },
+        )
+
+    status = str(result.get("status") or "").upper()
+    if status in {"SUCCESS", "PARTIAL_SUCCESS"}:
         return
 
-    step = result.get("step", "UNKNOWN")
-    err = result.get("error") or {}
+    http_status = _extract_http_status(result)
+    detail = _build_error_detail(result, action)
 
-    # Prefer the broker's HTTP status when placement failed and it was a
-    # proper 4xx/5xx code – otherwise fall back to the step mapping.
-    broker_http = err.get("http_status")
-    if (
-        step in ("ORDER_PLACEMENT", "MODIFY_PLACEMENT", "DAILY_PROFIT_GUARD")
-        and isinstance(broker_http, int)
-        and 400 <= broker_http <= 599
-    ):
-        http_status = broker_http
-    else:
-        http_status = STEP_TO_HTTP_STATUS.get(step, 500)
-
-    detail: Dict[str, Any] = {
-        "error":               err.get("message") or f"{action} failed",
-        "code":                err.get("error_code"),
-        "step":                step,
-        "property_path":       err.get("property_path"),
-        "invalid_value":       err.get("invalid_value"),
-        "broker_http_status":  broker_http,
-    }
-    if result.get("context"):
-        detail["context"] = result["context"]
-
-    # Preserve the action label for logging / caller introspection
-    detail["action"] = action
-
+    logger.warning(
+        "Service %s returned %s | code=%s | step=%s | http=%s",
+        action, status or "FAILED", detail.get("code"), detail.get("step"), http_status,
+    )
     raise HTTPException(status_code=http_status, detail=detail)
 
 
-def handle_api_exception(exc: ApiException) -> None:
-    """Legacy translator for the older ``services.*`` layer that still raises.
+def handle_api_exception(exc: Exception, *, action: str) -> None:
+    """Convert an exception raised inside a legacy route into an HTTPException."""
+    error = parse_api_exception(exc)
+    http_status = error.get("http_status") or 500
 
-    Decodes the exception's HTTP status/reason/body into an ``HTTPException``
-    that mirrors what the ``raise_from_service_result`` helper would produce.
-    """
-    status_code = getattr(exc, "status", None) or 502
-    detail: Dict[str, Any] = {"error": getattr(exc, "reason", str(exc))}
-    if getattr(exc, "body", None):
-        detail["broker_error"] = exc.body
-    raise HTTPException(status_code=status_code, detail=detail) from None
+    logger.exception("Legacy route %s raised %s", action, type(exc).__name__)
+    raise HTTPException(
+        status_code=http_status,
+        detail={
+            "error": error.get("message") or str(exc),
+            "code": error.get("error_code") or "UNKNOWN",
+            "category": error.get("category"),
+            "title": error.get("title"),
+            "remediation": error.get("remediation"),
+            "action": action,
+        },
+    )
