@@ -1,6 +1,8 @@
 ---
 name: upstox-gtt-trailing-sl
 description: Enter at live market price and manage a fixed target plus step-trailing stop-loss on Upstox. Use when the user requests market entry with SL distance, target distance and trailing jump.
+category: Risk Management
+access: write-capable
 ---
 
 # Upstox Market Entry + Trailing Stop Skill

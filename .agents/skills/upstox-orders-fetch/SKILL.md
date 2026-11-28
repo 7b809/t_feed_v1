@@ -1,6 +1,8 @@
 ---
 name: upstox-orders-fetch
 description: Read and filter the user's Upstox normal order book and GTT orders, including lookup of a specific normal order ID or GTT order ID. Read-only; never places, modifies, or cancels orders.
+category: Orders
+access: read-only
 ---
 
 # Upstox Order Fetch

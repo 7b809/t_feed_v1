@@ -1,6 +1,8 @@
 ---
 name: upstox-order
 description: Place a live MARKET or LIMIT order on Upstox using UPSTOX_ACCESS_TOKEN from the environment. Never read .env or add extra commentary.
+category: Orders
+access: write-capable
 ---
 
 # Upstox Order Execution

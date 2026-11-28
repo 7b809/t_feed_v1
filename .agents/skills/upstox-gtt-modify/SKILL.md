@@ -1,6 +1,8 @@
 ---
 name: upstox-gtt-modify
 description: Safely inspect and modify one or more trigger prices (ENTRY, STOPLOSS, and/or TARGET) on an existing Upstox GTT in one modification request while retaining all other GTT rules and settings. Use when the user asks to change an existing GTT order.
+category: Orders
+access: write-capable
 ---
 
 # Upstox GTT Modification

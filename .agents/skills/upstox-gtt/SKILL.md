@@ -1,6 +1,8 @@
 ---
 name: upstox-gtt
 description: Place a GTT order on Upstox using UPSTOX_ACCESS_TOKEN from the environment. Use when the user asks to place a GTT order.
+category: Orders
+access: write-capable
 ---
 
 # Upstox GTT Order Skill

@@ -1,6 +1,8 @@
 ---
 name: upstox-pnl
 description: Fetch today's Upstox positions and P&L using UPSTOX_ACCESS_TOKEN from the environment. Never read .env or print tokens.
+category: Portfolio
+access: read-only
 ---
 
 # Upstox Today P&L Skill

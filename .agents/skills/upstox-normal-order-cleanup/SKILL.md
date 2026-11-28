@@ -1,6 +1,8 @@
 ---
 name: upstox-normal-order-cleanup
 description: Safely cancel pending Upstox normal orders and exit open positions exactly reconciled to today's normal order trades. Preview and exact-state confirmation required; emits JSON only.
+category: Risk Management
+access: write-capable
 ---
 
 # Upstox Normal Order Cleanup Skill

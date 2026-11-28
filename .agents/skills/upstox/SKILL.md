@@ -12,6 +12,8 @@ description: >-
   portfolio updates. Relevant whenever a request involves Upstox, the Upstox API,
   Upstox orders or portfolios, or Indian equity, derivatives, and F&O trading on
   NSE, BSE, or MCX.
+category: Upstox
+access: write-capable
 ---
 
 # Upstox Agent Skill

@@ -1,6 +1,8 @@
 ---
 name: upstox-gtt-cleanup
 description: Safely inspect, cancel untriggered Upstox GTT orders, and exit positions created by triggered GTT entries. Preview and exact-state confirmation required; emits JSON only.
+category: Risk Management
+access: write-capable
 ---
 
 # Upstox GTT Cleanup Skill

@@ -1,6 +1,8 @@
 ---
 name: upstox-gtt-variants
 description: Place Upstox GTT orders with IMMEDIATE or ABOVE/BELOW entry triggers and optional SL only, Target only, or both SL and Target using UPSTOX_ACCESS_TOKEN from the environment. Never read .env.
+category: Orders
+access: write-capable
 ---
 
 # Upstox GTT Variants Skill
