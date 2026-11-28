@@ -1,25 +1,25 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Upstox Available Funds and Margin Balances",
+  "title": "Upstox Funds Result",
   "type": "object",
-  "required": ["status", "segments"],
+  "required": ["status", "message", "error", "segments", "raw_response"],
   "additionalProperties": false,
   "properties": {
-    "status": {"type": "string", "const": "success"},
+    "status": {"type": "string", "enum": ["success", "error"]},
+    "message": {"type": "string"},
+    "error": {
+      "type": ["object", "null"],
+      "required": ["type", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {"type": "string"},
+        "message": {"type": "string"}
+      }
+    },
     "segments": {
-      "type": "object",
-      "minProperties": 1,
+      "type": ["object", "null"],
       "additionalProperties": {
         "type": "object",
-        "required": [
-          "available_margin",
-          "used_margin",
-          "payin_amount",
-          "span_margin",
-          "adhoc_margin",
-          "exposure_margin",
-          "notional_cash"
-        ],
         "properties": {
           "available_margin": {"type": ["number", "integer", "null"]},
           "used_margin": {"type": ["number", "integer", "null"]},
@@ -31,6 +31,7 @@
         },
         "additionalProperties": true
       }
-    }
+    },
+    "raw_response": {"type": ["object", "array", "string", "number", "boolean", "null"]}
   }
 }
