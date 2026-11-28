@@ -5,7 +5,21 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/"upstox"/"scripts"))
 from upstox_helpers import get_client
-from order_filters import to_plain
+
+def to_plain(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [to_plain(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): to_plain(item) for key, item in value.items()}
+    converter = getattr(value, "to_dict", None)
+    if callable(converter):
+        return to_plain(converter())
+    attrs = getattr(value, "__dict__", None)
+    if isinstance(attrs, dict):
+        return {key: to_plain(item) for key, item in attrs.items() if not key.startswith("_")}
+    return str(value)
 
 
 def main() -> int:
