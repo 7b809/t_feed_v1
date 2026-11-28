@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from algoai.cli.arguments import parse_args
+from algoai.utils.json_contract import validate_json_contract
 from algoai.utils.skill_parser import discover_skills, parse_frontmatter
 
 class FrontmatterTests(unittest.TestCase):
@@ -22,13 +23,16 @@ class DiscoveryTests(unittest.TestCase):
             root1, root2 = Path(first), Path(second)
             (root1 / "alpha").mkdir()
             (root2 / "alpha").mkdir()
-            (root1 / "alpha" / "SKILL.md").write_text("---\nname: alpha\ncategory: market-data\naccess: read-only\ndescription: First root\n---\n# A\n", encoding="utf-8")
+            (root1 / "alpha" / "SKILL.md").write_text("---\nname: alpha\ncategory: market-data\naccess: read-only\ndescription: First root\nexecution: direct-python\nscript: scripts/run.py\nresult_schema: schema.json\n---\n# A\n", encoding="utf-8")
             (root2 / "alpha" / "SKILL.md").write_text("---\nname: alpha\ndescription: Second root\n---\n# B\n", encoding="utf-8")
             skills = discover_skills([root1, root2])
             self.assertEqual(len(skills), 1)
             self.assertEqual(skills[0].description, "First root")
             self.assertEqual(skills[0].access, "read-only")
             self.assertEqual(skills[0].category, "Market Data")
+            self.assertEqual(skills[0].execution, "direct-python")
+            self.assertEqual(skills[0].script, "scripts/run.py")
+            self.assertEqual(skills[0].result_schema, "schema.json")
 
 class ArgumentTests(unittest.TestCase):
     def test_legacy_prompt_is_preserved(self):
@@ -36,6 +40,14 @@ class ArgumentTests(unittest.TestCase):
         self.assertEqual(args.command, "prompt")
         self.assertEqual(args.prompt, "hello")
         self.assertTrue(args.skip_permissions)
+    def test_run_result_format_after_skill_name(self):
+        args = parse_args(["run", "upstox-pnl", "--result-format", "json"])
+        self.assertEqual(args.skill_name, "upstox-pnl")
+        self.assertEqual(args.result_format, "json")
+    def test_run_options_before_skill_name(self):
+        args = parse_args(["run", "--result-format", "json", "upstox-pnl"])
+        self.assertEqual(args.skill_name, "upstox-pnl")
+        self.assertEqual(args.result_format, "json")
     def test_run_command(self):
         args = parse_args(["run", "--allow-write", "sample", "do", "this"])
         self.assertEqual(args.command, "run")
@@ -45,6 +57,20 @@ class ArgumentTests(unittest.TestCase):
     def test_help_and_version(self):
         self.assertEqual(parse_args(["--help"]).command, "help")
         self.assertEqual(parse_args(["--version"]).command, "version")
+
+class JsonContractTests(unittest.TestCase):
+    def test_valid_payload(self):
+        schema = {"type":"object","required":["status","positions_count"],
+                  "properties":{"status":{"type":"string"},"positions_count":{"type":"integer"}}}
+        self.assertEqual(validate_json_contract({"status":"success","positions_count":0}, schema), [])
+    def test_missing_and_wrong_types(self):
+        schema = {"type":"object","required":["positions_count"],
+                  "properties":{"positions_count":{"type":"integer"}}}
+        errors = validate_json_contract({"positions_count":"0"}, schema)
+        self.assertTrue(any("expected integer" in item for item in errors))
+    def test_rejects_unexpected_fields(self):
+        schema = {"type":"object","properties":{},"additionalProperties":False}
+        self.assertTrue(validate_json_contract({"unexpected":1}, schema))
 
 if __name__ == "__main__":
     unittest.main()

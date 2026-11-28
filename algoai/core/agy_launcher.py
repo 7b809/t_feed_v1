@@ -1,4 +1,4 @@
-"""Launch AGY with the existing Upstox token and safe execution logging."""
+"""Launch AGY or deterministic Python skill scripts with safe execution logging."""
 from __future__ import annotations
 import json
 import os
@@ -38,6 +38,73 @@ def _write_execution_log(record: dict) -> None:
     except OSError as exc:
         print(f"[WARN] Could not write execution log: {exc}", file=sys.stderr)
 
+def _tokenized_environment(env_path: str) -> dict:
+    try:
+        from dotenv import load_dotenv
+    except ImportError as exc:
+        raise RuntimeError("python-dotenv is required in the ALGOAI virtual environment.") from exc
+    env_file = resolve_env_file(env_path)
+    load_dotenv(dotenv_path=env_file, override=False)
+    from .token_manager import load_access_token
+    token = load_access_token(env_file)
+    child_env = os.environ.copy()
+    child_env["UPSTOX_ACCESS_TOKEN"] = token
+    gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
+    if gemini_key:
+        child_env["GEMINI_API_KEY"] = gemini_key
+    return child_env
+
+def run_python_json(script: Path, schema: dict, env_path: str = ".env",
+                    skill_name: str = "unknown", access_level: str = "unknown") -> int:
+    """Run a skill script and emit only validated JSON on stdout."""
+    from algoai.utils.json_contract import validate_json_contract
+    start_dt = datetime.now().astimezone()
+    start_perf = time.perf_counter()
+    return_code = 1
+    error_type = None
+    try:
+        child_env = _tokenized_environment(env_path)
+        result = subprocess.run([sys.executable, str(script)], cwd=str(app_dir()),
+                                env=child_env, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            if result.stderr.strip():
+                print(result.stderr.rstrip(), file=sys.stderr)
+            else:
+                print(f"[ERROR] Skill script exited with code {result.returncode}.", file=sys.stderr)
+            return_code = result.returncode or 1
+            return return_code
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            error_type = "InvalidJSON"
+            print(f"[ERROR] Skill returned invalid JSON: {exc}", file=sys.stderr)
+            return 1
+        errors = validate_json_contract(payload, schema)
+        if errors:
+            error_type = "SchemaValidationError"
+            for error in errors:
+                print(f"[ERROR] JSON contract: {error}", file=sys.stderr)
+            return 1
+        print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return_code = 0
+        return 0
+    except Exception as exc:
+        error_type = type(exc).__name__
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
+    finally:
+        ended = datetime.now().astimezone()
+        elapsed = time.perf_counter() - start_perf
+        _write_execution_log({
+            "command": "run", "skill": skill_name,
+            "started_at": start_dt.isoformat(timespec="milliseconds"),
+            "ended_at": ended.isoformat(timespec="milliseconds"),
+            "duration_seconds": round(elapsed, 3), "exit_code": return_code,
+            "output_format": "validated-json", "permission_bypass": False,
+            "write_authorized": False, "access_level": access_level,
+            "error_type": error_type,
+        })
+
 def launch_agy_with_token(prompt: Optional[str] = None, model: Optional[str] = None,
         skip_permissions: bool = False, output_format: Optional[str] = None,
         env_path: str = ".env", show_progress: bool = False, progress_interval: int = 5,
@@ -51,19 +118,7 @@ def launch_agy_with_token(prompt: Optional[str] = None, model: Optional[str] = N
     return_code = 1
     error_type = None
     try:
-        try:
-            from dotenv import load_dotenv
-        except ImportError as exc:
-            raise RuntimeError("python-dotenv is required in the ALGOAI virtual environment.") from exc
-        env_file = resolve_env_file(env_path)
-        load_dotenv(dotenv_path=env_file, override=False)
-        from .token_manager import load_access_token
-        token = load_access_token(env_file)
-        child_env = os.environ.copy()
-        child_env["UPSTOX_ACCESS_TOKEN"] = token
-        gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-        if gemini_key:
-            child_env["GEMINI_API_KEY"] = gemini_key
+        child_env = _tokenized_environment(env_path)
         agy_path = resolve_agy_path()
         if not agy_path or not os.path.isfile(agy_path):
             raise FileNotFoundError("Could not find 'agy'. Install it with: curl -fsSL https://antigravity.google/cli/install.sh | bash")

@@ -1,16 +1,45 @@
-"""Run a discovered skill through AGY."""
+"""Run a discovered skill through AGY or its declared machine-readable handler."""
 from __future__ import annotations
+import json
 import sys
-from algoai.core.agy_launcher import launch_agy_with_token
+from pathlib import Path
+from algoai.core.agy_launcher import launch_agy_with_token, run_python_json
 from algoai.utils.skill_parser import SkillMeta
+
+def _safe_skill_file(skill: SkillMeta, relative: str) -> Path:
+    candidate = (skill.path.parent / relative).resolve()
+    try:
+        candidate.relative_to(skill.path.parent.resolve())
+    except ValueError:
+        raise ValueError("Skill script/schema path must remain inside the skill directory.")
+    if not candidate.is_file():
+        raise FileNotFoundError(f"Declared skill file not found: {candidate}")
+    return candidate
 
 def run_skill(skill: SkillMeta, context: str, args) -> int:
     if skill.access == "write-capable" and not args.allow_write:
         print(f"[BLOCKED] Skill '{skill.name}' is marked write-capable. Re-run with --allow-write after reviewing its instructions.", file=sys.stderr)
         print("[SAFETY] --allow-write is separate from --skip-permissions and does not replace action-specific confirmations.", file=sys.stderr)
         return 2
+    if args.result_format == "json":
+        if skill.execution != "direct-python" or not skill.script or not skill.result_schema:
+            print(f"[ERROR] Skill '{skill.name}' does not declare a validated JSON execution handler.", file=sys.stderr)
+            print("[ERROR] Add execution: direct-python, script and result_schema to its SKILL.md before using --result-format json.", file=sys.stderr)
+            return 2
+        if context.strip():
+            print("[ERROR] This direct JSON skill does not accept free-form context arguments.", file=sys.stderr)
+            return 2
+        try:
+            script = _safe_skill_file(skill, skill.script)
+            schema_path = _safe_skill_file(skill, skill.result_schema)
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            print(f"[ERROR] {exc}", file=sys.stderr)
+            return 1
+        return run_python_json(script, schema, env_path=args.env_file,
+                               skill_name=skill.name, access_level=skill.access)
     if skill.access == "unknown":
-        print(f"[WARN] Access level for '{skill.name}' is unknown; review its SKILL.md. Add access: read-only or access: write-capable to its frontmatter.", file=sys.stderr)
+        print(f"[WARN] Skill access level is unknown; review its SKILL.md.", file=sys.stderr)
     if args.allow_write:
         print("[SAFETY] Write-capable skill execution explicitly enabled for this invocation.")
     prompt = (

@@ -12,6 +12,9 @@ class SkillMeta:
     access: str
     path: Path
     root: Path
+    execution: str = "agy"
+    script: Optional[str] = None
+    result_schema: Optional[str] = None
 
 def _unquote(value: str) -> str:
     value = value.strip()
@@ -20,7 +23,6 @@ def _unquote(value: str) -> str:
     return value
 
 def parse_frontmatter(markdown: str) -> Tuple[Dict[str, str], str]:
-    """Read simple YAML frontmatter, including folded/literal block values."""
     lines = markdown.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}, markdown
@@ -75,7 +77,6 @@ def _access_level(meta: Dict[str, str]) -> str:
     return "unknown"
 
 def discover_skills(roots: List[Path]) -> List[SkillMeta]:
-    """Earlier roots win when duplicate skill names are found."""
     discovered: List[SkillMeta] = []
     seen_names = set()
     for root in roots:
@@ -104,6 +105,9 @@ def discover_skills(roots: List[Path]) -> List[SkillMeta]:
                 name=name, description=" ".join(description.split()),
                 category=category, access=_access_level(meta),
                 path=md_file.resolve(), root=root.resolve(),
+                execution=meta.get("execution", "agy").strip().lower() or "agy",
+                script=meta.get("script", "").strip() or None,
+                result_schema=meta.get("result_schema", "").strip() or None,
             ))
     return sorted(discovered, key=lambda item: (item.category.casefold(), item.name.casefold()))
 

@@ -16,19 +16,12 @@ Usage:
   algoai [run-options] --prompt "<prompt>"
   algoai [run-options] "<prompt>"
 
-Commands:
-  help                 Show this help.
-  status               Show launcher, AGY, environment and skill status.
-  skills               Discover and list skills with descriptions and access levels.
-  skills <name>        Show the complete SKILL.md for one skill.
-  skills --search      Search skill names, descriptions and categories.
-  run <name>           Execute a discovered skill through AGY.
-
 Run options:
   -m, --model MODEL    Override the AGY model.
-  --skip-permissions   Pass --dangerously-skip-permissions to AGY (not trade approval).
-  --allow-write        Explicitly allow a skill marked write-capable to run.
-  --output-format FMT  text, json, or stream-json.
+  --skip-permissions   Bypass AGY approval prompts (not trade authorization).
+  --allow-write        Explicitly permit a write-capable skill.
+  --output-format FMT  AGY output protocol: text, json, or stream-json.
+  --result-format FMT  Skill result: text or validated json (default: text).
   --env-file PATH      Environment file (default: project .env).
   -y, --elapsed-log    Show elapsed-time progress.
   --progress-interval N
@@ -37,13 +30,13 @@ Run options:
 Examples:
   algoai skills
   algoai skills --search pnl
-  algoai skills upstox-pnl
   algoai run upstox-pnl
+  algoai run upstox-pnl --result-format json
+  algoai run upstox-orders-fetch
   algoai --skip-permissions --prompt "Fetch today's positions and P&L"
-  algoai run --allow-write upstox-order "Place the order described here"
 
-Safety:
-  --skip-permissions only bypasses AGY approval prompts. It is independent of
-  --allow-write, and neither flag replaces action-specific trading confirmations.
+JSON mode:
+  Available only for skills declaring a direct handler and JSON Schema.
+  Prints validated JSON to stdout only. Errors go to stderr with non-zero exit.
 """)
     return 0

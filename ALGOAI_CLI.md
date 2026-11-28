@@ -1,11 +1,10 @@
 # ALGOAI CLI v2
 
-The modular CLI retains the existing launch_upstox_agy.py entry point and the current ~/.local/bin/algoai wrapper contract. The wrapper can keep changing into the application directory and invoking the Python entry point with the project virtual environment.
+The modular CLI retains the existing launch_upstox_agy.py entry point and ~/.local/bin/algoai wrapper contract.
 
 ## Commands
 
     algoai help
-    algoai --help
     algoai --version
     algoai status
     algoai skills
@@ -13,29 +12,36 @@ The modular CLI retains the existing launch_upstox_agy.py entry point and the cu
     algoai skills --search "order fetch"
     algoai skills --json
     algoai run upstox-pnl
+    algoai run upstox-pnl --result-format json
     algoai run upstox-orders-fetch "Show today's pending orders"
     algoai --skip-permissions --prompt "Existing free-form prompt"
-    algoai "Existing positional prompt"
 
-## Skill discovery precedence
+## JSON result mode
 
-1. ALGOAI_SKILLS_DIR (paths separated by the platform path separator)
+--output-format controls AGY's output protocol. It does not define a skill's business-data schema.
+
+--result-format json is a separate machine-readable result contract. It is available only for skills that declare a deterministic handler and JSON Schema in SKILL.md:
+
+    execution: direct-python
+    script: scripts/handler.py
+    result_schema: schemas/result.schema.json
+
+The CLI runs the declared Python script with the same injected Upstox access token, captures stdout, parses JSON, validates the schema, and emits only the validated JSON object to stdout. No AGY prose, timing lines, progress text, or logging metadata are written to stdout. Errors go to stderr and the process exits non-zero. This mode fails closed when a skill has no declared handler/schema.
+
+The P&L skill defines status, positions_count, total_pnl, and positions, including typed position fields, in .agents/skills/upstox-pnl/schemas/result.schema.json.
+
+## Skill discovery
+
+Search precedence:
+1. ALGOAI_SKILLS_DIR
 2. ~/.config/algoai/skills
-3. Application-root/.agents/skills
-4. Current-workspace/.agents/skills
+3. Application-root .agents/skills
+4. Current-workspace .agents/skills
 
-Earlier roots win when duplicate skill names are found. Relative ALGOAI_SKILLS_DIR entries resolve against the application root. ALGOAI_APP_DIR can override the application root. AGY runs with the application root as its working directory, and the exact absolute SKILL.md path is included in the skill task prompt.
+Earlier roots win on duplicate skill names. Relative explicit paths resolve against the application root. ALGOAI_APP_DIR can override the application root.
 
-## Skill metadata and safety
+## Safety and logs
 
-Each SKILL.md can declare name, description, category, and access in YAML frontmatter. Use access: read-only or access: write-capable. A skill marked write-capable is blocked unless --allow-write is supplied. Unknown access levels are shown as unknown and generate a warning.
+Write-capable skills require --allow-write; --skip-permissions independently bypasses AGY approval prompts and is not trade authorization. Exact action confirmations remain mandatory.
 
---skip-permissions is an independent AGY option. It only passes --dangerously-skip-permissions to AGY; it does not imply --allow-write and is not a trade authorization. Skill-specific exact-state and action confirmations remain mandatory.
-
-## Execution logs
-
-JSON Lines metadata is appended to ~/.local/state/algoai/executions.jsonl (or ALGOAI_LOG_FILE). The directory and file use restrictive permissions where supported. Records contain command, skill, timestamps, duration, exit code, output format, permission-bypass state, write-authorization flag, access classification, and error type. Prompt text, access tokens, and environment values are never logged.
-
-## Dependencies
-
-The new CLI modules use only the Python standard library. Existing token retrieval continues to use the project's python-dotenv and pymongo dependencies.
+Execution metadata is appended to ~/.local/state/algoai/executions.jsonl (or ALGOAI_LOG_FILE). Prompts, tokens, and environment values are never logged. The CLI modules use the standard library; existing token retrieval still requires python-dotenv and pymongo.

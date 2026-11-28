@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Upstox Today's Positions and P&L",
+  "type": "object",
+  "required": ["status", "positions_count", "total_pnl", "positions"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {"type": "string", "enum": ["success"]},
+    "positions_count": {"type": "integer", "minimum": 0},
+    "total_pnl": {"type": "number"},
+    "positions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["symbol", "instrument_token", "product", "net_quantity", "pnl"],
+        "additionalProperties": false,
+        "properties": {
+          "symbol": {"type": ["string", "null"]},
+          "instrument_token": {"type": ["string", "null"]},
+          "product": {"type": ["string", "null"]},
+          "net_quantity": {"type": ["integer", "number", "null"]},
+          "pnl": {"type": "number"}
+        }
+      }
+    }
+  }
+}

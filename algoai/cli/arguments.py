@@ -7,7 +7,10 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-m", "--model", default=None)
     parser.add_argument("--skip-permissions", action="store_true")
     parser.add_argument("--allow-write", action="store_true")
-    parser.add_argument("--output-format", choices=["text", "json", "stream-json"], default=None)
+    parser.add_argument("--output-format", choices=["text", "json", "stream-json"], default=None,
+                        help="AGY transport/output format (not the skill result schema).")
+    parser.add_argument("--result-format", choices=["text", "json"], default="text",
+                        help="Skill result format; json emits only schema-validated JSON.")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("-y", "--elapsed-log", action="store_true")
     parser.add_argument("--progress-interval", type=int, default=5)
@@ -49,8 +52,8 @@ def parse_subcommand_args(argv: List[str]) -> argparse.Namespace:
         parser = argparse.ArgumentParser(prog="algoai run", allow_abbrev=False)
         _add_run_options(parser)
         parser.add_argument("skill_name")
-        parser.add_argument("context", nargs=argparse.REMAINDER)
-        args = parser.parse_args(argv[1:])
+        parser.add_argument("context", nargs="*")
+        args = parser.parse_intermixed_args(argv[1:])
         if args.progress_interval < 1:
             parser.error("--progress-interval must be at least 1")
         args.command = "run"
