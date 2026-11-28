@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Upstox Funds Result",
   "type": "object",
-  "required": ["status", "message", "error", "segments", "raw_response"],
+  "required": ["status", "message", "error", "funds", "raw_response"],
   "additionalProperties": false,
   "properties": {
     "status": {"type": "string", "enum": ["success", "error"]},
@@ -16,22 +16,22 @@
         "message": {"type": "string"}
       }
     },
-    "segments": {
+    "funds": {
       "type": ["object", "null"],
-      "additionalProperties": {
-        "type": "object",
-        "properties": {
-          "available_margin": {"type": ["number", "integer", "null"]},
-          "used_margin": {"type": ["number", "integer", "null"]},
-          "payin_amount": {"type": ["number", "integer", "null"]},
-          "span_margin": {"type": ["number", "integer", "null"]},
-          "adhoc_margin": {"type": ["number", "integer", "null"]},
-          "exposure_margin": {"type": ["number", "integer", "null"]},
-          "notional_cash": {"type": ["number", "integer", "null"]}
+      "additionalProperties": true,
+      "properties": {
+        "available_to_trade": {
+          "type": "object",
+          "additionalProperties": true
         },
-        "additionalProperties": true
+        "unavailable_to_trade": {
+          "type": "object",
+          "additionalProperties": true
+        }
       }
     },
-    "raw_response": {"type": ["object", "array", "string", "number", "boolean", "null"]}
+    "raw_response": {
+      "type": ["object", "array", "string", "number", "boolean", "null"]
+    }
   }
 }
