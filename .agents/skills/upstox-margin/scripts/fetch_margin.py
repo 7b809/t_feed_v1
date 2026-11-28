@@ -62,7 +62,13 @@ def fetch_market_quote(client: Any, instrument_key: str) -> tuple[dict, Any]:
 
 
 def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict) -> dict:
-    """Resolve lot size using the quote's trading symbol, then verify exact key."""
+    """Resolve lot size from Instrument Search and verify the exact returned key.
+
+    Exchange tokens cannot be queried directly by Upstox Instrument Search.
+    Search by the underlying symbol, then match the returned instrument_key or
+    exchange_token locally. Search all relevant expiry buckets with pagination.
+    """
+    import re
     import upstox_client
 
     prefix = instrument_key.split("|", 1)[0]
@@ -73,41 +79,111 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict) -> 
     exchange = {"NCD": "NSE", "BCD": "BSE"}.get(exchange_code, exchange_code)
     if exchange not in {"NSE", "BSE", "MCX"}:
         raise ValueError(f"Unsupported exchange prefix for metadata lookup: {exchange_code}")
-    segment = "FO" if segment_code in {"FO"} else "EQ" if segment_code == "EQ" else None
+    segment = "FO" if segment_code == "FO" else "EQ" if segment_code == "EQ" else None
     if segment is None:
         raise ValueError(
-            f"Margin/brokerage lot-size lookup is not configured for segment {prefix!r}."
+            f"Lot-size metadata lookup is not configured for segment {prefix!r}."
         )
 
     response_key = str(quote.get("response_key", ""))
     if ":" not in response_key:
         raise ValueError("LTP response did not provide an exchange:symbol quote key.")
     trading_symbol = response_key.split(":", 1)[1]
-    response = upstox_client.InstrumentsApi(client).search_instrument(
-        trading_symbol, exchanges=exchange, segments=segment, records=30
+    token = instrument_key.split("|", 1)[1]
+
+    # For derivatives the exchange token is not a searchable query value.
+    # Extract the alphabetic underlying prefix (NIFTY, BANKNIFTY, SENSEX, etc.)
+    # and search the matching segment/type, then compare returned metadata.
+    underlying_match = re.match(r"^([A-Z]+)", trading_symbol.upper())
+    query = underlying_match.group(1) if underlying_match else trading_symbol
+    suffix_match = re.search(r"(CE|PE|FUT)$", trading_symbol.upper())
+    instrument_type = suffix_match.group(1) if suffix_match else None
+
+    api = upstox_client.InstrumentsApi(client)
+    results_by_key: dict[str, dict] = {}
+    search_queries = [query]
+    if trading_symbol.upper() != query:
+        search_queries.append(trading_symbol)
+
+    expiry_filter = (
+        "current_week,next_week,current_month,next_month,far_month"
+        if segment == "FO" and instrument_type in {"CE", "PE", "FUT"}
+        else None
     )
-    results = to_plain(response_data(response))
-    if not isinstance(results, list):
-        raise ValueError("Instrument Search returned an unexpected response format.")
+    search_errors: list[str] = []
+    for search_query in search_queries:
+        for page in range(1, 101):
+            kwargs = {
+                "exchanges": exchange,
+                "segments": segment,
+                "page_number": page,
+                "records": 30,
+            }
+            if instrument_type:
+                kwargs["instrument_types"] = instrument_type
+            if expiry_filter:
+                kwargs["expiry"] = expiry_filter
+            try:
+                response = api.search_instrument(search_query, **kwargs)
+                plain = to_plain(response)
+                rows = plain.get("data", []) if isinstance(plain, dict) else []
+                if not isinstance(rows, list):
+                    raise ValueError("Instrument Search returned a non-list data field.")
+                for row in rows:
+                    if isinstance(row, dict) and row.get("instrument_key"):
+                        results_by_key[str(row["instrument_key"])] = row
+                page_meta = (
+                    plain.get("meta_data", {}).get("page", {})
+                    if isinstance(plain, dict) else {}
+                )
+                total_pages = int(page_meta.get("total_pages") or page)
+                if page >= total_pages or not rows:
+                    break
+            except Exception as exc:
+                search_errors.append(
+                    f"query={search_query!r}, page={page}: {type(exc).__name__}: {exc}"
+                )
+                break
 
-    exact = [
-        row for row in results
-        if isinstance(row, dict) and row.get("instrument_key") == instrument_key
+    # Prefer exact canonical instrument_key. For legacy exchange-token keys,
+    # also match the exchange_token field from the result.
+    matches = [
+        row for row in results_by_key.values()
+        if str(row.get("instrument_key", "")) == instrument_key
     ]
-    if len(exact) != 1:
-        candidates = [
-            {"instrument_key": row.get("instrument_key"),
-             "trading_symbol": row.get("trading_symbol"),
-             "lot_size": row.get("lot_size")}
-            for row in results if isinstance(row, dict)
+    if not matches and segment == "FO":
+        matches = [
+            row for row in results_by_key.values()
+            if str(row.get("exchange_token", "")) == token
+            and str(row.get("segment", "")) == prefix
         ]
-        raise ValueError(
-            f"Could not uniquely resolve metadata for {instrument_key!r} using "
-            f"trading symbol {trading_symbol!r}. Exact matches: {len(exact)}; "
-            f"candidates: {candidates}"
-        )
 
-    item = exact[0]
+    if len(matches) != 1:
+        candidates = [
+            {
+                "instrument_key": row.get("instrument_key"),
+                "exchange_token": row.get("exchange_token"),
+                "trading_symbol": row.get("trading_symbol"),
+                "lot_size": row.get("lot_size"),
+                "expiry": row.get("expiry"),
+            }
+            for row in list(results_by_key.values())[:15]
+        ]
+        detail = (
+            f"Could not uniquely resolve metadata for {instrument_key!r}. "
+            f"Search query={query!r}, instrument_type={instrument_type!r}, "
+            f"pages searched across {len(search_queries)} query variant(s), "
+            f"exact matches={len(matches)}. Sample candidates={candidates}."
+        )
+        if search_errors:
+            detail += " Search errors: " + " | ".join(search_errors[:3])
+        detail += (
+            " Upstox Instrument Search does not support searching by exchange_token; "
+            "the handler searches by symbol and verifies the returned token."
+        )
+        raise ValueError(detail)
+
+    item = matches[0]
     try:
         lot_size = int(item["lot_size"])
     except (KeyError, TypeError, ValueError):
@@ -116,6 +192,7 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict) -> 
         raise ValueError(f"Instrument metadata returned invalid lot_size={lot_size}.")
     return {
         "instrument_key": item["instrument_key"],
+        "exchange_token": item.get("exchange_token"),
         "trading_symbol": item.get("trading_symbol", trading_symbol),
         "name": item.get("name"),
         "exchange": item.get("exchange", exchange),
@@ -125,8 +202,8 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict) -> 
         "tick_size": item.get("tick_size"),
         "expiry": item.get("expiry"),
         "underlying_symbol": item.get("underlying_symbol"),
+        "metadata_source": "UPSTOX_INSTRUMENT_SEARCH",
     }
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
