@@ -1,14 +1,28 @@
 {
- "$schema":"https://json-schema.org/draft/2020-12/schema",
- "type":"object",
- "required":["status","kind","request","data","raw_response","error"],
- "properties":{
-  "status":{"type":"string","enum":["success","error"]},
-  "kind":{"type":"string","enum":["required-margin","brokerage"]},
-  "request":{"type":"object"},
-  "data":{},
-  "raw_response":{},
-  "error":{"type":["object","null"]}
- },
- "additionalProperties":true
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["status", "kind", "request", "data", "raw_response", "errors", "error"],
+  "properties": {
+    "status": {"type": "string", "enum": ["success", "partial", "error"]},
+    "kind": {"type": "string", "enum": ["required-margin", "brokerage", "both"]},
+    "request": {
+      "type": "object",
+      "required": ["instrument", "quantity", "transaction_type", "product", "requested_price", "price", "price_source"],
+      "properties": {
+        "instrument": {"type": "string"},
+        "quantity": {"type": "integer"},
+        "transaction_type": {"type": "string", "enum": ["BUY", "SELL"]},
+        "product": {"type": "string"},
+        "requested_price": {"type": "string"},
+        "price": {"type": ["number", "null"]},
+        "price_source": {"type": ["string", "null"], "enum": ["LIVE_LTP", "PROVIDED", null]}
+      },
+      "additionalProperties": true
+    },
+    "data": {},
+    "raw_response": {},
+    "errors": {"type": "array", "items": {"type": "object"}},
+    "error": {"type": ["object", "null"]}
+  },
+  "additionalProperties": true
 }
