@@ -8,12 +8,12 @@ The modular CLI retains the existing launch_upstox_agy.py entry point and ~/.loc
     algoai --version
     algoai status
     algoai skills
-    algoai skills upstox-pnl
-    algoai skills --search "order fetch"
-    algoai skills --json
-    algoai run upstox-pnl
-    algoai run upstox-pnl --result-format json
-    algoai run upstox-orders-fetch "Show today's pending orders"
+    algoai skills upstox-funds
+    algoai run upstox-funds --result-format json
+    algoai run upstox-orders-fetch --result-format json --script-args-json '["--kind","all"]'
+    algoai run upstox-portfolio --result-format json --script-args-json '["--kind","holdings"]'
+    algoai run upstox-margin --result-format json --script-args-json '["--kind","brokerage","--instrument","NSE_EQ|<ISIN>","--quantity","1","--transaction-type","BUY","--product","D","--price","100"]'
+    algoai run upstox-gtt-modify --allow-write --result-format json --script-args-json '["--gtt-order-id","<id>","--update","TARGET=300"]'
     algoai --skip-permissions --prompt "Existing free-form prompt"
 
 ## JSON result mode
@@ -26,9 +26,11 @@ The modular CLI retains the existing launch_upstox_agy.py entry point and ~/.loc
     script: scripts/handler.py
     result_schema: schemas/result.schema.json
 
-The CLI runs the declared Python script with the same injected Upstox access token, captures stdout, parses JSON, validates the schema, and emits only the validated JSON object to stdout. No AGY prose, timing lines, progress text, or logging metadata are written to stdout. Errors go to stderr and the process exits non-zero. This mode fails closed when a skill has no declared handler/schema.
+The CLI runs the declared Python script with the same injected Upstox access token and passes only explicit string arguments supplied in --script-args-json (a JSON array). It captures stdout, parses JSON, validates the schema, and emits only the validated JSON object to stdout. Errors and handler stderr go to stderr. Credentials and environment values are never included in output or execution logs.
 
-The P&L skill defines status, positions_count, total_pnl, and positions, including typed position fields, in .agents/skills/upstox-pnl/schemas/result.schema.json.
+Read-only JSON skills now include funds, order fetch (normal and GTT), portfolio holdings/positions, and margin/brokerage calculations. GTT modification has a direct JSON handler but remains write-capable: --allow-write is required, and its own preview + exact state_fingerprint confirmation + re-fetch/verification flow remains mandatory.
+
+Normal order placement and GTT placement remain on their existing AGY workflows until their scripts are converted to safe preview-by-default handlers. Do not use --skip-permissions or --allow-write as a substitute for explicit approval of the exact live order.
 
 ## Skill discovery
 
@@ -44,4 +46,4 @@ Earlier roots win on duplicate skill names. Relative explicit paths resolve agai
 
 Write-capable skills require --allow-write; --skip-permissions independently bypasses AGY approval prompts and is not trade authorization. Exact action confirmations remain mandatory.
 
-Execution metadata is appended to ~/.local/state/algoai/executions.jsonl (or ALGOAI_LOG_FILE). Prompts, tokens, and environment values are never logged. The CLI modules use the standard library; existing token retrieval still requires python-dotenv and pymongo.
+Execution metadata is appended to ~/.local/state/algoai/executions.jsonl (or ALGOAI_LOG_FILE). Prompts, tokens, and environment values are never logged. CLI modules use the standard library; existing token retrieval still requires python-dotenv and pymongo.
