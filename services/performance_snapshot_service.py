@@ -447,6 +447,144 @@ class PerformanceSnapshotService:
                 **{"source": base["source"]},
             }
 
+
+    def _isolation_events_collection(self):
+        """Return the upstream isolation_events collection (read-only use)."""
+        if not config.PERFORMANCE_SNAPSHOT_ENABLED:
+            raise RuntimeError("Performance snapshot reading is disabled")
+        if not config.MONGO_URI:
+            raise RuntimeError("MONGO_URL/MONGO_URI is not configured")
+        return self._mongo()[config.PERFORMANCE_SNAPSHOT_MONGO_DB][
+            config.PERFORMANCE_ISOLATION_EVENTS_COLLECTION
+        ]
+
+    @staticmethod
+    def _isolation_event_sort():
+        return [
+            ("trade_date_ist", -1),
+            ("isolation_created_at", -1),
+            ("isolation_touch_time", -1),
+            ("_id", -1),
+        ]
+
+    def get_today_isolation_events(self) -> dict[str, Any]:
+        """Fetch today's isolation_events records, newest first."""
+        now = datetime.now(_market_timezone())
+        today = now.date().isoformat()
+        source = {
+            "database": config.PERFORMANCE_SNAPSHOT_MONGO_DB,
+            "collection": config.PERFORMANCE_ISOLATION_EVENTS_COLLECTION,
+            "mode": "read_only",
+        }
+        base = {"date": today, "checked_at": now.isoformat(), "source": source}
+        if not config.PERFORMANCE_SNAPSHOT_ENABLED:
+            return {"status": "disabled", "events": [], "count": 0, **base}
+        if not config.MONGO_URI:
+            return {
+                "status": "unavailable", "events": [], "count": 0,
+                "error": "MongoDB connection is not configured.", **base,
+            }
+        try:
+            collection = self._isolation_events_collection()
+            query = {"trade_date_ist": today}
+            count = collection.count_documents(query)
+            cursor = collection.find(query).sort(self._isolation_event_sort()).limit(250)
+            events = [_json_safe(doc) for doc in cursor]
+            return {
+                "status": "found" if events else "not_found",
+                "events": events,
+                "count": count,
+                "returned": len(events),
+                "truncated": count > len(events),
+                **base,
+            }
+        except Exception as exc:
+            logger.warning(
+                "[isolation-history] today's event lookup failed date=%s error=%s",
+                today, type(exc).__name__,
+            )
+            return {
+                "status": "unavailable", "events": [], "count": 0,
+                "error": "Today's isolation events are temporarily unavailable.",
+                **base,
+            }
+
+    def get_isolation_event_history(
+        self,
+        page: int = 1,
+        page_size: int = 10,
+        search: str | None = None,
+        trade_date: str | None = None,
+    ) -> dict[str, Any]:
+        """Return date-descending isolation event cards using DB pagination."""
+        page = max(1, int(page))
+        page_size = max(1, min(10, int(page_size)))
+        source = {
+            "database": config.PERFORMANCE_SNAPSHOT_MONGO_DB,
+            "collection": config.PERFORMANCE_ISOLATION_EVENTS_COLLECTION,
+            "mode": "read_only",
+        }
+        if not config.PERFORMANCE_SNAPSHOT_ENABLED:
+            return {"status": "disabled", "items": [], "total": 0, "page": page, "page_size": page_size, "source": source}
+        if not config.MONGO_URI:
+            return {
+                "status": "unavailable", "items": [], "total": 0,
+                "page": page, "page_size": page_size,
+                "error": "MongoDB connection is not configured.", "source": source,
+            }
+
+        try:
+            query: dict[str, Any] = {}
+            if trade_date:
+                query["trade_date_ist"] = date.fromisoformat(str(trade_date)).isoformat()
+            term = str(search or "").strip()[:80]
+            if term:
+                pattern = re.escape(term)
+                query["$or"] = [
+                    {"trading_symbol": {"$regex": pattern, "$options": "i"}},
+                    {"instrument_key": {"$regex": pattern, "$options": "i"}},
+                    {"trigger_index": {"$regex": pattern, "$options": "i"}},
+                    {"trigger_index_canonical": {"$regex": pattern, "$options": "i"}},
+                    {"trigger_side": {"$regex": pattern, "$options": "i"}},
+                    {"option_type": {"$regex": pattern, "$options": "i"}},
+                    {"status": {"$regex": pattern, "$options": "i"}},
+                ]
+            collection = self._isolation_events_collection()
+            total = collection.count_documents(query)
+            cursor = (
+                collection.find(query)
+                .sort(self._isolation_event_sort())
+                .skip((page - 1) * page_size)
+                .limit(page_size)
+            )
+            items = [_json_safe(doc) for doc in cursor]
+            total_pages = math.ceil(total / page_size) if total else 0
+            return {
+                "status": "ok", "items": items, "total": total,
+                "page": page, "page_size": page_size,
+                "total_pages": total_pages,
+                "has_previous": page > 1 and total > 0,
+                "has_next": page < total_pages,
+                "source": source,
+            }
+        except ValueError:
+            return {
+                "status": "invalid_request", "items": [], "total": 0,
+                "page": page, "page_size": page_size,
+                "error": "trade_date must use YYYY-MM-DD format.", "source": source,
+            }
+        except Exception as exc:
+            logger.warning(
+                "[isolation-history] history lookup failed page=%s error=%s",
+                page, type(exc).__name__,
+            )
+            return {
+                "status": "unavailable", "items": [], "total": 0,
+                "page": page, "page_size": page_size,
+                "error": "Isolation event history is temporarily unavailable.",
+                "source": source,
+            }
+
     def close(self) -> None:
         """Close the read-only MongoDB connection during app shutdown."""
         with self._client_lock:

@@ -22,6 +22,31 @@ def today_snapshot(response: Response) -> dict[str, Any]:
     return performance_snapshot_service.get_today_snapshot()
 
 
+
+@router.get("/isolation-events/today")
+def today_isolation_events(response: Response) -> dict[str, Any]:
+    """Read today's upstream isolation_events records (read-only)."""
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return performance_snapshot_service.get_today_isolation_events()
+
+
+@router.get("/isolation-events/history")
+def isolation_event_history(
+    response: Response,
+    page: int = Query(default=1, ge=1, le=1000000),
+    page_size: int = Query(default=10, ge=1, le=10),
+    search: str | None = Query(default=None, max_length=80),
+    trade_date: str | None = Query(default=None, max_length=10),
+) -> dict[str, Any]:
+    """Read date-wise isolation event cards, 10 per page, newest first."""
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return performance_snapshot_service.get_isolation_event_history(
+        page=page, page_size=page_size, search=search, trade_date=trade_date,
+    )
+
+
 @router.get("/today-orders")
 def today_orders(response: Response) -> dict[str, Any]:
     """Return today's saved dummy orders for the orders workspace."""

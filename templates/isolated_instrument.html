@@ -767,6 +767,41 @@
     font-size:.6rem;
   }
 }
+
+/* ---------- Isolation event archive ---------- */
+.pv-archive-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.pv-archive-tabs{display:inline-flex;gap:5px;padding:4px;background:#eef2ff;border:1px solid #dbe3f4;border-radius:12px}
+.pv-archive-tab{border:0;border-radius:9px;padding:9px 14px;background:transparent;color:#475569;font-size:.78rem;font-weight:850;cursor:pointer}
+.pv-archive-tab[aria-selected="true"]{background:#fff;color:#3730a3;box-shadow:0 2px 8px rgba(15,23,42,.1)}
+.pv-archive-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.pv-archive-tools input{min-width:150px;padding:9px 11px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:#0f172a;font-size:.78rem}
+.pv-archive-tools button,.pv-page-btn{border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;padding:9px 13px;border-radius:10px;font-size:.76rem;font-weight:800;cursor:pointer}
+.pv-archive-tools button:disabled,.pv-page-btn:disabled{opacity:.4;cursor:not-allowed}
+.pv-archive-meta{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;color:#64748b;font-size:.73rem;margin:14px 0}
+.pv-archive-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}
+.pv-archive-date{grid-column:1/-1;padding:8px 12px;border-radius:10px;background:#eef2ff;color:#3730a3;font-size:.72rem;font-weight:900;letter-spacing:.05em}
+.pv-event-card{min-width:0;border:1px solid #dbe3ef;border-radius:15px;background:#fff;box-shadow:0 3px 12px rgba(15,23,42,.045);overflow:hidden}
+.pv-event-card-head{padding:15px 16px;background:linear-gradient(135deg,#f8fafc,#eef2ff);border-bottom:1px solid #e2e8f0}
+.pv-event-card-top{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
+.pv-event-time{font-size:.68rem;color:#64748b;font-weight:750}
+.pv-event-symbol{font-size:1rem;font-weight:900;color:#0f172a;margin-top:8px;overflow-wrap:anywhere}
+.pv-event-key{font-size:.67rem;color:#64748b;margin-top:4px;overflow-wrap:anywhere}
+.pv-event-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.pv-event-badge{display:inline-flex;padding:5px 8px;border-radius:7px;background:#e0e7ff;color:#3730a3;font-size:.63rem;font-weight:900;letter-spacing:.025em}
+.pv-event-badge.ce{background:#dcfce7;color:#166534}.pv-event-badge.pe{background:#fee2e2;color:#991b1b}
+.pv-event-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:13px 15px}
+.pv-event-metric{padding:9px 10px;border:1px solid #edf0f5;border-radius:10px;background:#fbfcfe;min-width:0}
+.pv-event-metric span{display:block;color:#64748b;font-size:.59rem;font-weight:850;letter-spacing:.06em;text-transform:uppercase}
+.pv-event-metric strong{display:block;color:#0f172a;font-size:.81rem;font-weight:900;margin-top:5px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.pv-event-foot{padding:0 15px 14px}
+.pv-event-foot details{border-top:1px solid #edf0f5;padding-top:10px}
+.pv-event-foot summary{cursor:pointer;color:#4f46e5;font-size:.72rem;font-weight:850}
+.pv-event-json{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;padding:12px;margin-top:10px;border-radius:10px;background:#0f172a;color:#dbeafe;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
+.pv-archive-empty{padding:30px 18px;text-align:center;border:1px dashed #cbd5e1;border-radius:14px;background:#f8fafc;color:#64748b;font-size:.82rem}
+.pv-archive-pagination{display:flex;justify-content:center;align-items:center;gap:12px;margin-top:18px}
+.pv-archive-page-label{color:#64748b;font-size:.75rem;font-weight:800;font-variant-numeric:tabular-nums}
+@media(max-width:760px){.pv-archive-list{grid-template-columns:1fr}.pv-archive-toolbar{align-items:flex-start}.pv-archive-tools{width:100%}.pv-archive-tools input{flex:1;min-width:0}}
+
 </style>
 {% endblock %}
 
@@ -838,6 +873,42 @@
     </div>
     <div class="pv-section-body" id="pv-no-orders" hidden>
       <div class="pv-empty">No order records have been saved for today yet.</div>
+    </div>
+  </section>
+
+
+  <!-- ============ ISOLATION EVENT ARCHIVE ============ -->
+  <section class="pv-card pv-section" id="pv-isolation-archive">
+    <div class="pv-section-head">
+      <div>
+        <h2 class="pv-section-title"><i class="bi bi-activity"></i> Isolation event monitor</h2>
+        <div class="pv-hint">Read-only event records from UPSTOX_APP_V2 · isolation_events</div>
+      </div>
+      <span class="pv-status waiting" id="pv-archive-status">Loading events</span>
+    </div>
+    <div class="pv-section-body">
+      <div class="pv-archive-toolbar">
+        <div class="pv-archive-tabs" role="tablist" aria-label="Isolation event view">
+          <button class="pv-archive-tab" id="pv-archive-today-tab" type="button" role="tab" aria-selected="true">Today</button>
+          <button class="pv-archive-tab" id="pv-archive-history-tab" type="button" role="tab" aria-selected="false">History</button>
+        </div>
+        <div class="pv-archive-tools" id="pv-archive-history-tools" hidden>
+          <input id="pv-archive-search" type="search" maxlength="80" placeholder="Search symbol, index, side…" aria-label="Search isolation events">
+          <input id="pv-archive-date" type="date" aria-label="Filter by trading date">
+          <button id="pv-archive-apply" type="button">Apply filters</button>
+          <button id="pv-archive-clear" type="button">Clear</button>
+        </div>
+      </div>
+      <div class="pv-archive-meta">
+        <span id="pv-archive-summary">Checking today's saved isolation records…</span>
+        <span id="pv-archive-updated">—</span>
+      </div>
+      <div class="pv-archive-list" id="pv-archive-list" aria-live="polite"></div>
+      <div class="pv-archive-pagination" id="pv-archive-pagination" hidden>
+        <button class="pv-page-btn" id="pv-archive-prev" type="button">Previous</button>
+        <span class="pv-archive-page-label" id="pv-archive-page-label">Page 1</span>
+        <button class="pv-page-btn" id="pv-archive-next" type="button">Next</button>
+      </div>
     </div>
   </section>
 
@@ -965,6 +1036,7 @@
 
 {% block scripts %}
 <script src="/static/js/performance_dashboard.js"></script>
+<script src="/static/js/isolation_events_dashboard.js"></script>
 
 <!-- ============================================================
      Lot-aware profit calculator (runs after dashboard renders)
