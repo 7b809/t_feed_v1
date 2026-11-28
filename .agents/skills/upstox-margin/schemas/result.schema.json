@@ -1,0 +1,14 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "type":"object",
+ "required":["status","kind","request","data","raw_response","error"],
+ "properties":{
+  "status":{"type":"string","enum":["success","error"]},
+  "kind":{"type":"string","enum":["required-margin","brokerage"]},
+  "request":{"type":"object"},
+  "data":{},
+  "raw_response":{},
+  "error":{"type":["object","null"]}
+ },
+ "additionalProperties":true
+}
