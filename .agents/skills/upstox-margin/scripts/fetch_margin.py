@@ -105,44 +105,76 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict) -> 
     if trading_symbol.upper() != query:
         search_queries.append(trading_symbol)
 
-    expiry_filter = (
-        "current_week,next_week,current_month,next_month,far_month"
-        if segment == "FO" and instrument_type in {"CE", "PE", "FUT"}
-        else None
-    )
+    expiry_candidates: list[str | None] = [None]
+    if segment == "FO" and instrument_type in {"CE", "PE", "FUT"}:
+        # Upstox expiry is a single keyword or YYYY-MM-DD, not a comma-separated list.
+        # Parse the expiry encoded in standard NSE option symbols where possible.
+        month_codes = {
+            "F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6,
+            "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12,
+            "A": 1, "B": 2, "C": 3, "D": 12,
+        }
+        expiry_match = re.search(r"(\\d{2})([A-Z])(\\d{2})\\d+(?:CE|PE|FUT)$",
+                                 trading_symbol.upper())
+        if expiry_match and expiry_match.group(2) in month_codes:
+            year = 2000 + int(expiry_match.group(1))
+            month = month_codes[expiry_match.group(2)]
+            day = int(expiry_match.group(3))
+            try:
+                from datetime import date
+                expiry_candidates = [date(year, month, day).isoformat()]
+            except ValueError:
+                pass
+        # Search expiry buckets individually if exact symbol-encoded date is
+        # unavailable or does not produce the requested instrument.
+        expiry_candidates += [
+            value for value in
+            ["current_week", "next_week", "current_month", "next_month", "far_month"]
+            if value not in expiry_candidates
+        ]
+
     search_errors: list[str] = []
     for search_query in search_queries:
-        for page in range(1, 101):
-            kwargs = {
-                "exchanges": exchange,
-                "segments": segment,
-                "page_number": page,
-                "records": 30,
-            }
-            if instrument_type:
-                kwargs["instrument_types"] = instrument_type
-            if expiry_filter:
-                kwargs["expiry"] = expiry_filter
-            try:
-                response = api.search_instrument(search_query, **kwargs)
-                plain = to_plain(response)
-                rows = plain.get("data", []) if isinstance(plain, dict) else []
-                if not isinstance(rows, list):
-                    raise ValueError("Instrument Search returned a non-list data field.")
-                for row in rows:
-                    if isinstance(row, dict) and row.get("instrument_key"):
-                        results_by_key[str(row["instrument_key"])] = row
-                page_meta = (
-                    plain.get("meta_data", {}).get("page", {})
-                    if isinstance(plain, dict) else {}
-                )
-                total_pages = int(page_meta.get("total_pages") or page)
-                if page >= total_pages or not rows:
+        for expiry_value in expiry_candidates:
+            for page in range(1, 101):
+                kwargs = {
+                    "exchanges": exchange,
+                    "segments": segment,
+                    "page_number": page,
+                    "records": 30,
+                }
+                if instrument_type:
+                    kwargs["instrument_types"] = instrument_type
+                if expiry_value:
+                    kwargs["expiry"] = expiry_value
+                try:
+                    response = api.search_instrument(search_query, **kwargs)
+                    plain = to_plain(response)
+                    rows = plain.get("data", []) if isinstance(plain, dict) else []
+                    if not isinstance(rows, list):
+                        raise ValueError("Instrument Search returned a non-list data field.")
+                    for row in rows:
+                        if isinstance(row, dict) and row.get("instrument_key"):
+                            results_by_key[str(row["instrument_key"])] = row
+                    page_meta = (
+                        plain.get("meta_data", {}).get("page", {})
+                        if isinstance(plain, dict) else {}
+                    )
+                    total_pages = int(page_meta.get("total_pages") or page)
+                    if page >= total_pages or not rows:
+                        break
+                except Exception as exc:
+                    search_errors.append(
+                        f"query={search_query!r}, expiry={expiry_value!r}, "
+                        f"page={page}: {type(exc).__name__}: {exc}"
+                    )
                     break
-            except Exception as exc:
-                search_errors.append(
-                    f"query={search_query!r}, page={page}: {type(exc).__name__}: {exc}"
-                )
+            if any(
+                str(row.get("instrument_key", "")) == instrument_key
+                or (segment == "FO" and str(row.get("exchange_token", "")) == token
+                    and str(row.get("segment", "")) == prefix)
+                for row in results_by_key.values()
+            ):
                 break
 
     # Prefer exact canonical instrument_key. For legacy exchange-token keys,
