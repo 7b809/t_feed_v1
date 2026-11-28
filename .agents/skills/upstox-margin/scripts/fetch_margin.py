@@ -36,6 +36,11 @@ def response_data(response: Any) -> Any:
 
 
 def fetch_market_price(client: Any, instrument_key: str) -> tuple[float, Any]:
+    """Fetch LTP and identify the quote by its instrument_token, not its map key.
+
+    Upstox V3 keys the response data by EXCHANGE:TRADING_SYMBOL while the
+    original EXCHANGE|token value is returned inside each quote.
+    """
     import upstox_client
 
     response = upstox_client.MarketQuoteV3Api(client).get_ltp(
@@ -43,20 +48,39 @@ def fetch_market_price(client: Any, instrument_key: str) -> tuple[float, Any]:
     )
     raw = to_plain(response)
     quotes = raw.get("data", {}) if isinstance(raw, dict) else {}
-    if not isinstance(quotes, dict) or instrument_key not in quotes:
-        available = list(quotes.keys()) if isinstance(quotes, dict) else []
-        raise ValueError(
-            f"LTP response did not contain the requested instrument {instrument_key!r}. "
-            f"Returned keys: {available}"
-        )
-    quote = quotes[instrument_key]
-    if not isinstance(quote, dict) or "last_price" not in quote:
-        raise ValueError("LTP response is missing last_price for the requested instrument.")
-    price = float(quote["last_price"])
-    if not math.isfinite(price) or price <= 0:
-        raise ValueError(f"Upstox returned an invalid LTP: {quote['last_price']!r}")
-    return price, raw
+    if not isinstance(quotes, dict) or not quotes:
+        raise ValueError("Upstox LTP response did not contain any quote data.")
 
+    matched_quote = None
+    returned_tokens: list[str] = []
+    for response_key, quote in quotes.items():
+        if not isinstance(quote, dict):
+            continue
+        token = quote.get("instrument_token")
+        if token is not None:
+            returned_tokens.append(str(token))
+            if str(token) == instrument_key:
+                matched_quote = quote
+                break
+
+    if matched_quote is None:
+        raise ValueError(
+            f"Upstox LTP response did not contain the requested instrument_token "
+            f"{instrument_key!r}. Returned instrument_tokens: {returned_tokens}; "
+            f"response keys: {list(quotes.keys())}"
+        )
+
+    if "last_price" not in matched_quote:
+        raise ValueError(
+            f"LTP quote for {instrument_key!r} is missing last_price."
+        )
+    price = float(matched_quote["last_price"])
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError(
+            f"Upstox returned an invalid LTP for {instrument_key!r}: "
+            f"{matched_quote['last_price']!r}"
+        )
+    return price, raw
 
 def main() -> int:
     parser = argparse.ArgumentParser(
