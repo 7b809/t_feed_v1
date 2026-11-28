@@ -1041,6 +1041,34 @@
   .pv-event-action-btn{font-size:.62rem;padding:6px 8px;gap:4px}
 }
 
+
+/* ---------- Per-event Supertrend analysis ---------- */
+.pv-event-action-btn.supertrend{background:linear-gradient(135deg,#eef2ff,#e0e7ff);color:#3730a3;border-color:#c7d2fe}
+.pv-event-action-btn.supertrend:hover{background:#dbeafe;border-color:#93c5fd}
+.pv-event-action-btn.supertrend:disabled{opacity:.65;cursor:wait;transform:none}
+.pv-supertrend-panel{margin:0 12px 12px;padding:12px;border:1px solid #c7d2fe;border-radius:12px;background:linear-gradient(180deg,#fff,#f8faff);color:#0f172a}
+.pv-supertrend-panel[hidden]{display:none!important}
+.pv-st-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.pv-st-title{font-size:.78rem;font-weight:900;color:#1e293b}
+.pv-st-status{font-size:.62rem;font-weight:850;padding:4px 7px;border-radius:7px;background:#e0e7ff;color:#3730a3}
+.pv-st-status.error{background:#fee2e2;color:#991b1b}
+.pv-st-status.loading{background:#fef3c7;color:#92400e}
+.pv-st-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
+.pv-st-metric{padding:8px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;min-width:0}
+.pv-st-metric span{display:block;color:#64748b;font-size:.55rem;font-weight:850;text-transform:uppercase;letter-spacing:.04em}
+.pv-st-metric strong{display:block;margin-top:4px;color:#0f172a;font-size:.76rem;font-weight:900;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.pv-st-section{margin-top:11px;padding-top:9px;border-top:1px solid #e2e8f0}
+.pv-st-section-title{font-size:.65rem;font-weight:900;text-transform:uppercase;letter-spacing:.06em;color:#475569;margin-bottom:7px}
+.pv-st-signal{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:.65rem}
+.pv-st-signal:last-child{border-bottom:0}
+.pv-st-buy{color:#047857;font-weight:900}.pv-st-sell{color:#b91c1c;font-weight:900}
+.pv-st-direction{display:inline-flex;padding:4px 7px;border-radius:7px;font-size:.62rem;font-weight:900}
+.pv-st-direction.bull{background:#dcfce7;color:#166534}.pv-st-direction.bear{background:#fee2e2;color:#991b1b}
+.pv-st-note{font-size:.62rem;line-height:1.5;color:#64748b;margin-top:8px}
+.pv-st-error{font-size:.7rem;color:#991b1b;line-height:1.5}
+.pv-st-refresh{margin-top:9px;border:1px solid #c7d2fe;border-radius:8px;padding:6px 9px;background:#fff;color:#3730a3;font-size:.65rem;font-weight:850;cursor:pointer}
+@media(max-width:480px){.pv-supertrend-panel{margin-left:8px;margin-right:8px;padding:9px}.pv-st-grid{gap:5px}.pv-st-metric{padding:6px}.pv-st-signal{gap:5px;font-size:.6rem}}
+
 </style>
 {% endblock %}
 
@@ -1887,6 +1915,21 @@
       "data.isolate_time", "data.isolated_at"
     ]) || "";
 
+    var tradeDate = firstOf(data, [
+      "trade_date_ist", "trading_date", "target_date",
+      "isolation_date", "event.trade_date_ist",
+      "payload.trade_date_ist", "data.trade_date_ist"
+    ]) || "";
+    if (!tradeDate && isolateTime) {
+      var dateMatch = String(isolateTime).match(/^(\\d{4}-\\d{2}-\\d{2})/);
+      if (dateMatch) tradeDate = dateMatch[1];
+    }
+    tradeDate = String(tradeDate || "").trim();
+    if (tradeDate && /^\\d{2}-\\d{2}-\\d{4}$/.test(tradeDate)) {
+      var dateParts = tradeDate.split("-");
+      tradeDate = dateParts[2] + "-" + dateParts[1] + "-" + dateParts[0];
+    }
+
     // ── FIX: declare `opposite` (was missing → ReferenceError) ──
     // Prefer an explicit opposite_* field if the doc has one.
     var opposite = firstOf(data, [
@@ -1920,6 +1963,7 @@
     return {
       symbol:        symbol ? String(symbol).trim() : "",
       token:         token  ? String(token).trim()  : "",
+      tradeDate:     tradeDate,
       isolateTime:   isolateTime ? String(isolateTime).trim() : "",
       opposite:      formatOpposite(opposite),
       oppositeToken: oppositeToken,
@@ -1928,6 +1972,135 @@
       data:          data,
       parsed:        parsed
     };
+  }
+
+  // ---- per-isolation Supertrend analysis --------------------------------
+  // Keep results keyed by instrument + trading date so they remain associated
+  // with the correct event when the history pagination replaces the cards.
+  window.__pvSupertrendCache = window.__pvSupertrendCache || Object.create(null);
+
+  function stCacheKey(info) {
+    return String(info.token || "") + "|" + String(info.tradeDate || "");
+  }
+
+  function stMetric(label, value) {
+    return '<div class="pv-st-metric"><span>' + escapeHtml(label) +
+      '</span><strong>' + escapeHtml(value === null || value === undefined || value === "" ? "—" : value) +
+      '</strong></div>';
+  }
+
+  function renderSupertrendPanel(panel, data, error) {
+    if (error) {
+      panel.innerHTML =
+        '<div class="pv-st-head"><span class="pv-st-title">Supertrend Analysis</span>' +
+        '<span class="pv-st-status error">Failed</span></div>' +
+        '<div class="pv-st-error">' + escapeHtml(error) + '</div>';
+      return;
+    }
+
+    var target = data.target_day || {};
+    var next = data.next_day || {};
+    var last = target.last_confirmed_signal_on_target_date || {};
+    var direction = String(target.direction_at_close || "UNKNOWN").toUpperCase();
+    var directionClass = direction === "BULLISH" ? "bull" : direction === "BEARISH" ? "bear" : "";
+    var signalRows = (target.signals || []).map(function (signal) {
+      var side = String(signal.signal || "").toUpperCase();
+      return '<div class="pv-st-signal"><span>' + escapeHtml(dt(signal.timestamp)) +
+        '</span><strong class="' + (side === "BUY" ? "pv-st-buy" : "pv-st-sell") + '">' +
+        escapeHtml(side) + '</strong><span>' + escapeHtml(n(signal.close)) + '</span></div>';
+    }).join("");
+    var signal = last.signal ? String(last.signal).toUpperCase() : "No confirmed signal";
+    var nextContent = next.available
+      ? stMetric("Next-day high", n(next.high)) +
+        stMetric("Next-day low", n(next.low)) +
+        stMetric("Next-day close", n(next.close)) +
+        stMetric("Next-day range", n(next.range))
+      : '<div class="pv-st-note">Next-day candle data is not available for ' +
+        escapeHtml(next.date || "the following date") + '.</div>';
+
+    panel.innerHTML =
+      '<div class="pv-st-head"><span class="pv-st-title">Supertrend Analysis · ' +
+      escapeHtml(data.target_date || "") + '</span><span class="pv-st-status">Loaded</span></div>' +
+      '<div class="pv-st-grid">' +
+        stMetric("Instrument", data.instrument_key) +
+        stMetric("Instrument mode", data.instrument_mode) +
+        stMetric("ATR / multiplier", (data.supertrend_parameters || {}).atr_period + " / " +
+          (data.supertrend_parameters || {}).multiplier) +
+        stMetric("Candles fetched", n(data.candles_fetched)) +
+      '</div>' +
+      '<div class="pv-st-section"><div class="pv-st-section-title">Target-day summary</div>' +
+        '<div class="pv-st-grid">' +
+          stMetric("Direction at close", direction) +
+          stMetric("Last confirmed signal", signal) +
+          stMetric("Signal time", last.timestamp ? dt(last.timestamp) : "—") +
+          stMetric("Supertrend at close", n(target.supertrend_at_close)) +
+          stMetric("Day high / low", n(target.high) + " / " + n(target.low)) +
+          stMetric("Day close / range", n(target.close) + " / " + n(target.range)) +
+        '</div>' +
+        '<div style="margin-top:8px"><span class="pv-st-direction ' + directionClass + '">' +
+        escapeHtml(direction) + '</span></div>' +
+      '</div>' +
+      '<div class="pv-st-section"><div class="pv-st-section-title">Next-day performance · ' +
+        escapeHtml(next.date || "") + '</div><div class="pv-st-grid">' + nextContent + '</div></div>' +
+      '<div class="pv-st-section"><div class="pv-st-section-title">Confirmed target-day signals (' +
+        (target.signals || []).length + ')</div>' +
+        (signalRows || '<div class="pv-st-note">No confirmed signals were returned.</div>') +
+      '</div>' +
+      '<div class="pv-st-note">Signals are confirmed on candle close. Next-day values are aggregated from returned candles.</div>' +
+      '<button type="button" class="pv-st-refresh">Reanalyse</button>';
+    panel.querySelector(".pv-st-refresh").addEventListener("click", function () {
+      panel.dispatchEvent(new CustomEvent("pv-supertrend-retry", {bubbles:false}));
+    });
+  }
+
+  async function requestSupertrend(card, info, button, force) {
+    var panel = card.querySelector(".pv-supertrend-panel");
+    if (!panel) return;
+    var key = stCacheKey(info);
+    panel.hidden = false;
+
+    if (!info.token || !info.token.includes("|")) {
+      renderSupertrendPanel(panel, null, "The isolation event does not contain a complete instrument_key.");
+      return;
+    }
+    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(info.tradeDate || "")) {
+      renderSupertrendPanel(panel, null, "The isolation event does not contain a valid trading date.");
+      return;
+    }
+
+    if (!force && window.__pvSupertrendCache[key]) {
+      renderSupertrendPanel(panel, window.__pvSupertrendCache[key], null);
+      return;
+    }
+
+    button.disabled = true;
+    button.innerHTML = '<i class="bi bi-hourglass-split"></i> Analysing…';
+    panel.innerHTML = '<div class="pv-st-head"><span class="pv-st-title">Supertrend Analysis</span>' +
+      '<span class="pv-st-status loading">Fetching candles…</span></div>' +
+      '<div class="pv-st-note">Loading historical candles and calculating confirmed signals.</div>';
+    try {
+      var params = new URLSearchParams({
+        instrument_key: info.token,
+        target_date: info.tradeDate
+      });
+      var response = await fetch("/admin/supertrend/analysis?" + params.toString(), {
+        method: "GET",
+        headers: {Accept: "application/json"},
+        credentials: "same-origin",
+        cache: "no-store"
+      });
+      var result = await response.json().catch(function () { return {}; });
+      if (!response.ok || result.status !== "success") {
+        throw new Error(result.detail || result.error || result.message || ("HTTP " + response.status));
+      }
+      window.__pvSupertrendCache[key] = result;
+      renderSupertrendPanel(panel, result, null);
+    } catch (error) {
+      renderSupertrendPanel(panel, null, error && error.message ? error.message : "Unable to load Supertrend analysis.");
+    } finally {
+      button.disabled = false;
+      button.innerHTML = '<i class="bi bi-activity"></i> Supertrend';
+    }
   }
 
   // ---- builders ----------------------------------------------------------
@@ -1962,7 +2135,7 @@
     return wrap;
   }
 
-  function buildActions(info) {
+  function buildActions(info, card) {
     var wrap = document.createElement("div");
     wrap.className = "pv-event-actions";
 
@@ -2039,6 +2212,23 @@
       wrap.appendChild(oppChart);
     }
 
+    // Supertrend analysis uses the event's complete instrument key and
+    // stored trading date; API defaults supply ATR=10 and multiplier=3.
+    var stBtn = document.createElement("button");
+    stBtn.type = "button";
+    stBtn.className = "pv-event-action-btn supertrend";
+    stBtn.title = "Analyse Supertrend for this isolation event";
+    stBtn.innerHTML = '<i class="bi bi-activity"></i> Supertrend';
+    stBtn.addEventListener("click", function () {
+      var panel = card.querySelector(".pv-supertrend-panel");
+      if (panel && !panel.hidden && window.__pvSupertrendCache[stCacheKey(info)]) {
+        panel.hidden = true;
+        return;
+      }
+      requestSupertrend(card, info, stBtn, false);
+    });
+    wrap.appendChild(stBtn);
+
     return wrap;
   }
 
@@ -2057,13 +2247,28 @@
     var rawJson = readRawJson(card);
     var info = extractInfo(card, rawJson);
 
-    var actions = buildActions(info);
+    var actions = buildActions(info, card);
     if (foot) {
       foot.parentNode.insertBefore(actions, foot);
       foot.parentNode.removeChild(foot);
     } else {
       card.appendChild(actions);
     }
+
+    var analysisPanel = card.querySelector(".pv-supertrend-panel");
+    if (!analysisPanel) {
+      analysisPanel = document.createElement("section");
+      analysisPanel.className = "pv-supertrend-panel";
+      analysisPanel.hidden = true;
+      card.appendChild(analysisPanel);
+    }
+    analysisPanel.addEventListener("pv-supertrend-retry", function () {
+      var button = card.querySelector(".pv-event-action-btn.supertrend");
+      if (button) requestSupertrend(card, info, button, true);
+    });
+
+    var cachedAnalysis = window.__pvSupertrendCache[stCacheKey(info)];
+    if (cachedAnalysis) renderSupertrendPanel(analysisPanel, cachedAnalysis, null);
 
     var head = card.querySelector(".pv-event-card-head");
     if (head) {
