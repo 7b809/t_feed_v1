@@ -975,7 +975,16 @@
   transform:translateY(-1px);
   box-shadow:0 4px 12px rgba(5,150,105,.18);
 }
-
+.pv-event-action-btn.chart.opposite{
+  background:linear-gradient(135deg,#fce7f3,#fbcfe8);
+  border-color:#f9a8d4;
+  color:#9d174d;
+}
+.pv-event-action-btn.chart.opposite:hover{
+  background:linear-gradient(135deg,#fbcfe8,#f9a8d4);
+  transform:translateY(-1px);
+  box-shadow:0 4px 12px rgba(219,39,119,.18);
+}
 /* --- Empty state --- */
 .pv-archive-list > .pv-archive-empty{
   flex:1 1 100%;
@@ -1702,7 +1711,7 @@
      Replaces the old expandable JSON footer with:
        · Highlight chips (isolate time · symbol · opposite symbol)
        · "Copy raw" button (writes formatted JSON doc to clipboard)
-       · "Chart" link (built from instrument token)
+       · "Chart" link for isolated leg + "Opposite" link for opposite leg
      ============================================================ -->
 <script>
 (function () {
@@ -1806,10 +1815,17 @@
   // The chart route expects the complete Upstox instrument_key:
   // /chart/{instrument_key:path}, e.g. /chart/NSE_FO%7C64473.
   // Never strip the exchange segment or fall back to a trading symbol.
-  function chartUrl(instrumentKey) {
+  // The optional ?symbol= hint drives the top-bar display name
+  // (see chart_page route + chart.html display_symbol logic).
+  function chartUrl(instrumentKey, symbol) {
     var key = instrumentKey ? String(instrumentKey).trim() : "";
     if (!key) return null;
-    return "/chart/" + encodeURIComponent(key);
+
+    var pretty = symbol ? String(symbol).trim() : "";
+    var base = "/chart/" + encodeURIComponent(key);
+    return pretty
+      ? base + "?symbol=" + encodeURIComponent(pretty)
+      : base;
   }
 
   // ---- extraction --------------------------------------------------------
@@ -1871,8 +1887,9 @@
       "data.isolate_time", "data.isolated_at"
     ]) || "";
 
+    // ── FIX: declare `opposite` (was missing → ReferenceError) ──
+    // Prefer an explicit opposite_* field if the doc has one.
     var opposite = firstOf(data, [
-      "opposite_leg",
       "opposite_symbols", "oppositeSymbols",
       "opposite_symbol", "oppositeSymbol",
       "opposite_instruments", "oppositeInstruments",
@@ -1881,14 +1898,35 @@
       "payload.opposite_symbols"
     ]);
 
+    // Extract opposite leg instrument_key + trading_symbol from the full doc
+    var oppositeLeg = firstOf(data, [
+      "opposite_leg",
+      "explanation.opposite_leg"
+    ]) || null;
+    var oppositeToken = "";
+    var oppositeSymbol = "";
+    if (oppositeLeg && typeof oppositeLeg === "object") {
+      oppositeToken  = String(
+        firstOf(oppositeLeg, ["instrument_key", "instrumentKey", "token", "exchange_token"]) || ""
+      ).trim();
+      oppositeSymbol = String(
+        firstOf(oppositeLeg, ["trading_symbol", "tradingSymbol", "symbol"]) || ""
+      ).trim();
+      // Fallback: if no explicit opposite_* field exists, use the
+      // opposite_leg.trading_symbol so the chip still renders.
+      if (opposite == null && oppositeSymbol) opposite = oppositeSymbol;
+    }
+
     return {
-      symbol:      symbol ? String(symbol).trim() : "",
-      token:       token  ? String(token).trim()  : "",
-      isolateTime: isolateTime ? String(isolateTime).trim() : "",
-      opposite:    formatOpposite(opposite),
-      raw:         parsed.formattedText || rawJson,
-      data:        data,
-      parsed:      parsed
+      symbol:        symbol ? String(symbol).trim() : "",
+      token:         token  ? String(token).trim()  : "",
+      isolateTime:   isolateTime ? String(isolateTime).trim() : "",
+      opposite:      formatOpposite(opposite),
+      oppositeToken: oppositeToken,
+      oppositeSymbol: oppositeSymbol,
+      raw:           parsed.formattedText || rawJson,
+      data:          data,
+      parsed:        parsed
     };
   }
 
@@ -1967,18 +2005,38 @@
     });
     wrap.appendChild(copyBtn);
 
-    // Chart link
-    var url = chartUrl(info.token);
+    // ── Chart link — ISOLATED leg ──
+    var url = chartUrl(info.token, info.symbol);
     if (url) {
       var chart = document.createElement("a");
       chart.className = "pv-event-action-btn chart";
       chart.href = url;
       chart.target = "_blank";
       chart.rel = "noopener noreferrer";
-      chart.title = "Open chart for " + info.token;
+      chart.title = info.symbol
+        ? "Open chart for isolated leg: " + info.symbol
+        : "Open chart for isolated leg: " + info.token;
       chart.dataset.instrumentKey = info.token || "";
+      chart.dataset.instrumentSymbol = info.symbol || "";
       chart.innerHTML = '<i class="bi bi-graph-up-arrow"></i> Chart';
       wrap.appendChild(chart);
+    }
+
+    // ── Chart link — OPPOSITE leg ──
+    var oppUrl = chartUrl(info.oppositeToken, info.oppositeSymbol);
+    if (oppUrl) {
+      var oppChart = document.createElement("a");
+      oppChart.className = "pv-event-action-btn chart opposite";
+      oppChart.href = oppUrl;
+      oppChart.target = "_blank";
+      oppChart.rel = "noopener noreferrer";
+      oppChart.title = info.oppositeSymbol
+        ? "Open chart for opposite leg: " + info.oppositeSymbol
+        : "Open chart for opposite leg: " + info.oppositeToken;
+      oppChart.dataset.instrumentKey = info.oppositeToken || "";
+      oppChart.dataset.instrumentSymbol = info.oppositeSymbol || "";
+      oppChart.innerHTML = '<i class="bi bi-arrow-left-right"></i> Opposite';
+      wrap.appendChild(oppChart);
     }
 
     return wrap;
