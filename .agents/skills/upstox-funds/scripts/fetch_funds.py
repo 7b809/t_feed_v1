@@ -1,4 +1,4 @@
-"""Fetch Upstox funds/margin balances and emit schema-compatible JSON."""
+"""Fetch Upstox funds and always return a structured JSON result."""
 from __future__ import annotations
 
 import json
@@ -10,27 +10,26 @@ import upstox_client
 
 
 FUND_FIELDS = (
-    "available_margin",
-    "used_margin",
-    "payin_amount",
-    "span_margin",
-    "adhoc_margin",
-    "exposure_margin",
-    "notional_cash",
+    "available_margin", "used_margin", "payin_amount", "span_margin",
+    "adhoc_margin", "exposure_margin", "notional_cash",
 )
 
 
 def _plain(value: Any) -> Any:
-    """Convert SDK model objects into JSON-compatible values without secrets."""
+    """Convert SDK response/model objects recursively to JSON-compatible data."""
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     if isinstance(value, dict):
         return {str(k): _plain(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         return [_plain(v) for v in value]
-    if hasattr(value, "to_dict"):
-        return _plain(value.to_dict())
-    if hasattr(value, "to_dict") is False and hasattr(value, "__dict__"):
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        try:
+            return _plain(to_dict())
+        except Exception:
+            pass
+    if hasattr(value, "__dict__"):
         return {
             str(k): _plain(v)
             for k, v in vars(value).items()
@@ -45,49 +44,87 @@ def _get(item: Any, key: str) -> Any:
     return getattr(item, key, None)
 
 
+def _emit(payload: dict[str, Any]) -> int:
+    print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
+    return 0
+
+
+def _error(message: str, error_type: str, raw_response: Any = None) -> int:
+    return _emit({
+        "status": "error",
+        "message": message,
+        "error": {"type": error_type, "message": message},
+        "segments": None,
+        "raw_response": _plain(raw_response),
+    })
+
+
 def main() -> int:
     token = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip()
     if not token:
-        print("ERROR: UPSTOX_ACCESS_TOKEN is not set in environment.", file=sys.stderr)
-        return 1
+        return _error(
+            "UPSTOX_ACCESS_TOKEN is not set in the process environment.",
+            "MissingAccessToken",
+        )
 
+    response = None
     try:
         configuration = upstox_client.Configuration()
         configuration.access_token = token
-        # Upstox Python SDK ApiClient is not a context manager in all
-        # supported SDK versions; instantiate it directly.
         api_client = upstox_client.ApiClient(configuration)
         response = upstox_client.UserApi(api_client).get_user_fund_margin_v3()
+
         data = _get(response, "data")
         if data is None:
-            raise RuntimeError("Upstox funds response did not contain data.")
+            return _error(
+                "Upstox response did not contain a data field.",
+                "MissingResponseData",
+                response,
+            )
 
-        if isinstance(data, dict):
-            segment_items = data.items()
-        elif hasattr(data, "items"):
-            segment_items = data.items()
-        else:
-            raise RuntimeError("Unexpected Upstox funds response structure.")
+        # SDK versions may return generated model objects rather than dicts.
+        # Convert the complete response data before trying to enumerate segments.
+        normalized_data = _plain(data)
+        if not isinstance(normalized_data, dict) or not normalized_data:
+            return _error(
+                "Upstox returned funds data in an unrecognized structure. "
+                "The raw response is included for inspection.",
+                "UnexpectedResponseStructure",
+                response,
+            )
 
-        segments = {}
-        for segment, values in segment_items:
-            normalized = {}
-            for field in FUND_FIELDS:
-                value = _get(values, field)
-                normalized[field] = _plain(value)
-            # Preserve any additional fields exposed by the SDK/API.
-            raw_values = _plain(values)
-            if isinstance(raw_values, dict):
-                normalized.update({k: v for k, v in raw_values.items() if k not in normalized})
+        segments: dict[str, Any] = {}
+        for segment, values in normalized_data.items():
+            values_dict = values if isinstance(values, dict) else _plain(values)
+            if not isinstance(values_dict, dict):
+                values_dict = {"raw_value": values}
+            # Keep known fund fields explicit and preserve all additional API fields.
+            normalized = {field: values_dict.get(field) for field in FUND_FIELDS}
+            normalized.update({k: v for k, v in values_dict.items() if k not in normalized})
             segments[str(segment)] = normalized
 
-        print(json.dumps({"status": "success", "segments": segments}, indent=2, ensure_ascii=False))
-        return 0
+        if not segments:
+            return _error(
+                "Upstox returned an empty funds segment collection.",
+                "EmptyFundsResponse",
+                response,
+            )
+
+        return _emit({
+            "status": "success",
+            "message": "Funds data fetched successfully.",
+            "error": None,
+            "segments": segments,
+            "raw_response": _plain(response),
+        })
     except Exception as exc:
-        # SDK exceptions may contain request details; avoid dumping headers/configuration.
+        # Do not print SDK request objects, headers, or credentials.
         message = getattr(exc, "reason", None) or getattr(exc, "status", None) or str(exc)
-        print(f"ERROR: Unable to fetch Upstox funds: {message}", file=sys.stderr)
-        return 1
+        return _error(
+            f"Unable to fetch Upstox funds: {message}",
+            type(exc).__name__,
+            response,
+        )
 
 
 if __name__ == "__main__":
