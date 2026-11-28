@@ -2025,7 +2025,7 @@
       return '<div class="pv-st-signal"><span>' + escapeHtml(stDate(signal.timestamp)) +
         '</span><strong class="' + (side === "BUY" ? "pv-st-buy" : "pv-st-sell") + '">' +
         escapeHtml(side) + '</strong><span>' + escapeHtml(stNumber(signal.close)) + '</span></div>';
-    }).joistNumber("");
+    }).join("");
     var signal = last.signal ? String(last.signal).toUpperCase() : "No confirmed signal";
     var nextContent = next.available
       ? stMetric("Next-day high", stNumber(next.high)) +
@@ -2106,7 +2106,7 @@
         credentials: "same-origin",
         cache: "no-store"
       });
-      var result = await response.jsostNumber().catch(function () { return {}; });
+      var result = await response.json().catch(function () { return {}; });
       if (!response.ok || result.status !== "success") {
         throw new Error(result.detail || result.error || result.message || ("HTTP " + response.status));
       }
