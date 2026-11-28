@@ -2017,7 +2017,7 @@
 
     var target = data.target_day || {};
     var next = data.next_day || {};
-    var last = target.last_confirmed_signal_on_target_date || {};
+    var last = target.last_confirmed_signal_on_target_date || target.latest_confirmed_signal_as_of_target_close || {};
     var direction = String(target.direction_at_close || "UNKNOWN").toUpperCase();
     var directionClass = direction === "BULLISH" ? "bull" : direction === "BEARISH" ? "bear" : "";
     var signalRows = (target.signals || []).map(function (signal) {
@@ -2028,10 +2028,12 @@
     }).join("");
     var signal = last.signal ? String(last.signal).toUpperCase() : "No confirmed signal";
     var nextContent = next.available
-      ? stMetric("Next-day high", stNumber(next.high)) +
+      ? stMetric("Next-day open", stNumber(next.open)) +
+        stMetric("Next-day high", stNumber(next.high)) +
         stMetric("Next-day low", stNumber(next.low)) +
         stMetric("Next-day close", stNumber(next.close)) +
-        stMetric("Next-day range", stNumber(next.range))
+        stMetric("Next-day range", stNumber(next.range)) +
+        stMetric("Next-day candles", stNumber(next.candle_count))
       : '<div class="pv-st-note">Next-day candle data is not available for ' +
         escapeHtml(next.date || "the following date") + '.</div>';
 
@@ -2050,9 +2052,14 @@
           stMetric("Direction at close", direction) +
           stMetric("Last confirmed signal", signal) +
           stMetric("Signal time", last.timestamp ? stDate(last.timestamp) : "—") +
+          stMetric("Signal close", stNumber(last.close)) +
+          stMetric("Signal Supertrend", stNumber(last.supertrend)) +
+          stMetric("Signal ATR", stNumber(last.atr)) +
           stMetric("Supertrend at close", stNumber(target.supertrend_at_close)) +
+          stMetric("Target-day candles", stNumber(target.candle_count)) +
+          stMetric("Day open / close", stNumber(target.open) + " / " + stNumber(target.close)) +
           stMetric("Day high / low", stNumber(target.high) + " / " + stNumber(target.low)) +
-          stMetric("Day close / range", stNumber(target.close) + " / " + stNumber(target.range)) +
+          stMetric("Day range", stNumber(target.range)) +
         '</div>' +
         '<div style="margin-top:8px"><span class="pv-st-direction ' + directionClass + '">' +
         escapeHtml(direction) + '</span></div>' +
