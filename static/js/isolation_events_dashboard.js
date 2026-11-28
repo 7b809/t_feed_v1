@@ -129,6 +129,7 @@
       if (data.status === "unavailable" || data.status === "disabled") {
         throw new Error(data.error || "Isolation event reader is unavailable.");
       }
+      if (activeView !== "today") return;
       renderEvents(data.events || [], false);
       byId("pv-archive-summary").textContent = (data.count || 0) + " event(s) saved for " + (data.date || "today") +
         (data.truncated ? " · showing latest " + (data.returned || 0) : "");
@@ -154,6 +155,7 @@
       if (!response.ok) throw new Error("HTTP " + response.status);
       var data = await response.json();
       if (data.status !== "ok") throw new Error(data.error || "Unable to load isolation history.");
+      if (activeView !== "history") return;
       renderEvents(data.items || [], true);
       byId("pv-archive-summary").textContent = data.total + " matching event(s) · " +
         (data.source && data.source.collection ? data.source.collection : "isolation_events");
