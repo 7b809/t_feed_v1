@@ -12,12 +12,14 @@ from typing import Optional
 from .config import app_dir, execution_log_path, resolve_env_file
 from .timing import clear_current_line, format_duration, wait_with_progress
 
+
 def resolve_agy_path() -> Optional[str]:
     candidate = shutil.which("agy")
     if candidate:
         return candidate
     fallback = Path.home() / ".local" / "bin" / "agy"
     return str(fallback) if fallback.is_file() else None
+
 
 def _write_execution_log(record: dict) -> None:
     """Append metadata only; never record prompts, tokens, or environment values."""
@@ -38,6 +40,7 @@ def _write_execution_log(record: dict) -> None:
     except OSError as exc:
         print(f"[WARN] Could not write execution log: {exc}", file=sys.stderr)
 
+
 def _tokenized_environment(env_path: str) -> dict:
     try:
         from dotenv import load_dotenv
@@ -54,9 +57,12 @@ def _tokenized_environment(env_path: str) -> dict:
         child_env["GEMINI_API_KEY"] = gemini_key
     return child_env
 
+
 def run_python_json(script: Path, schema: dict, env_path: str = ".env",
-                    skill_name: str = "unknown", access_level: str = "unknown") -> int:
-    """Run a skill script and emit only validated JSON on stdout."""
+                    skill_name: str = "unknown", access_level: str = "unknown",
+                    script_args: Optional[list[str]] = None,
+                    write_authorized: bool = False) -> int:
+    """Run a skill script and emit only schema-validated JSON on stdout."""
     from algoai.utils.json_contract import validate_json_contract
     start_dt = datetime.now().astimezone()
     start_perf = time.perf_counter()
@@ -64,30 +70,32 @@ def run_python_json(script: Path, schema: dict, env_path: str = ".env",
     error_type = None
     try:
         child_env = _tokenized_environment(env_path)
-        result = subprocess.run([sys.executable, str(script)], cwd=str(app_dir()),
-                                env=child_env, capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            if result.stderr.strip():
-                print(result.stderr.rstrip(), file=sys.stderr)
-            else:
-                print(f"[ERROR] Skill script exited with code {result.returncode}.", file=sys.stderr)
-            return_code = result.returncode or 1
-            return return_code
+        command = [sys.executable, str(script), *(script_args or [])]
+        result = subprocess.run(command, cwd=str(app_dir()), env=child_env,
+                                capture_output=True, text=True, check=False)
         try:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError as exc:
             error_type = "InvalidJSON"
+            if result.stderr.strip():
+                print(result.stderr.rstrip(), file=sys.stderr)
             print(f"[ERROR] Skill returned invalid JSON: {exc}", file=sys.stderr)
-            return 1
+            return_code = result.returncode or 1
+            return return_code
         errors = validate_json_contract(payload, schema)
         if errors:
             error_type = "SchemaValidationError"
             for error in errors:
                 print(f"[ERROR] JSON contract: {error}", file=sys.stderr)
-            return 1
+            if result.stderr.strip():
+                print(result.stderr.rstrip(), file=sys.stderr)
+            return_code = result.returncode or 1
+            return return_code
         print(json.dumps(payload, indent=2, ensure_ascii=False))
-        return_code = 0
-        return 0
+        return_code = result.returncode
+        if result.stderr.strip():
+            print(result.stderr.rstrip(), file=sys.stderr)
+        return return_code
     except Exception as exc:
         error_type = type(exc).__name__
         print(f"[ERROR] {exc}", file=sys.stderr)
@@ -101,9 +109,10 @@ def run_python_json(script: Path, schema: dict, env_path: str = ".env",
             "ended_at": ended.isoformat(timespec="milliseconds"),
             "duration_seconds": round(elapsed, 3), "exit_code": return_code,
             "output_format": "validated-json", "permission_bypass": False,
-            "write_authorized": False, "access_level": access_level,
+            "write_authorized": bool(write_authorized), "access_level": access_level,
             "error_type": error_type,
         })
+
 
 def launch_agy_with_token(prompt: Optional[str] = None, model: Optional[str] = None,
         skip_permissions: bool = False, output_format: Optional[str] = None,
