@@ -245,7 +245,7 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict | No
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Preview or explicitly confirm a normal Upstox AMO order."
+        description="Preview or immediately place a normal Upstox order."
     )
     p.add_argument("--instrument", required=True,
                    help="Exact Upstox instrument key; it is never guessed.")
@@ -260,38 +260,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--transaction-type", choices=["BUY", "SELL"], default="BUY")
     p.add_argument("--product", choices=["I", "D", "MTF"], default="D")
     p.add_argument("--validity", choices=["DAY", "IOC"], default="DAY")
-    p.add_argument("--amo", dest="is_amo", action="store_true", default=True)
-    p.add_argument("--no-amo", dest="is_amo", action="store_false")
-    p.add_argument("--confirm", action="store_true")
-    p.add_argument("--expected-preview-hash")
+    # Supports both the requested positional form "is_amo=true" and flags.
+    p.add_argument("amo_setting", nargs="?", choices=["is_amo=true", "is_amo=false"])
+    p.add_argument("--is-amo", "--is_amo", dest="amo_option",
+                   choices=["true", "false"], default=None)
+    p.add_argument("--preview", action="store_true",
+                   help="Show the exact order payload without submitting it.")
     return p
 
 
 def main() -> int:
     args = build_parser().parse_args()
-    request = {
-        "instrument": args.instrument,
-        "quantity": args.quantity,
-        "lots": args.lots,
-        "order_type": args.order_type,
-        "requested_price": args.price,
-        "transaction_type": args.transaction_type,
-        "product": args.product,
-        "validity": args.validity,
-        "is_amo": args.is_amo,
-    }
     try:
         if args.quantity is not None and args.quantity <= 0:
             raise ValueError("--quantity must be greater than zero.")
         if args.lots is not None and args.lots <= 0:
             raise ValueError("--lots must be greater than zero.")
-        if args.confirm and not args.expected_preview_hash:
-            raise ValueError(
-                "--expected-preview-hash from the reviewed preview is required with --confirm."
-            )
+
+        if args.amo_setting and args.amo_option:
+            raise ValueError("Specify AMO only once: use is_amo=true or --is-amo true.")
+        if args.amo_setting:
+            is_amo = args.amo_setting == "is_amo=true"
+        elif args.amo_option is not None:
+            is_amo = args.amo_option == "true"
+        else:
+            is_amo = False
 
         client = get_client()
-        # Always resolve the canonical symbol from LTP before metadata lookup.
         quote, quote_raw = fetch_quote(client, args.instrument)
         metadata = fetch_instrument_metadata(client, args.instrument, quote)
         lot_size = metadata["lot_size"]
@@ -319,14 +314,11 @@ def main() -> int:
             price = 0.0
             price_source = "NOT_APPLICABLE_MARKET_ORDER"
         elif str(args.price).lower() == "market":
-            if quote is None:
-                quote, quote_raw = fetch_quote(client, args.instrument)
             ltp = float(quote["last_price"])
             price = round_to_tick(ltp, metadata["tick_size"])
             price_source = "LIVE_LTP_ROUNDED_TO_TICK"
         else:
-            supplied_price = float(args.price)
-            price = round_to_tick(supplied_price, metadata["tick_size"])
+            price = round_to_tick(float(args.price), metadata["tick_size"])
             price_source = "PROVIDED_ROUNDED_TO_TICK"
 
         payload = {
@@ -340,59 +332,41 @@ def main() -> int:
             "transaction_type": args.transaction_type,
             "disclosed_quantity": 0,
             "trigger_price": 0,
-            "is_amo": bool(args.is_amo),
+            "is_amo": is_amo,
         }
-        fingerprint = hashlib.sha256(
+        preview_hash = hashlib.sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
 
-        preview = {
-            "status": "PREVIEW",
+        details = {
             "order": payload,
             "instrument_metadata": metadata,
             "price_source": price_source,
-            "reference_ltp": quote.get("last_price") if quote else None,
+            "reference_ltp": quote.get("last_price"),
             "quantity_source": quantity_source,
+            "preview_hash": preview_hash,
             "market_quote": quote_raw,
-            "preview_hash": fingerprint,
-            "confirmation_required": True,
-            "amo_note": (
-                "AMO is requested by default. Upstox determines whether the request is "
-                "treated as AMO from the market session; an AMO request during active "
-                "market hours may be rejected or treated as a regular order. Check the "
-                "session before confirming."
-            ),
-            "message": (
-                "No order was placed. Review the exact order and preview_hash. "
-                "For confirmation, repeat with the resolved --quantity and numeric "
-                "--price shown here, plus --confirm and the hash."
-            ),
         }
-        if not args.confirm:
-            return emit(preview)
 
-        if fingerprint != args.expected_preview_hash:
-            raise ValueError(
-                "Order inputs differ from the reviewed preview hash. No order was placed. "
-                "For confirmation, use the exact resolved quantity and numeric order price "
-                "from the preview, and keep every other order parameter unchanged."
-            )
+        if args.preview:
+            return emit({
+                "status": "PREVIEW",
+                **details,
+                "submitted": False,
+                "message": "Preview only. No order was submitted.",
+            })
 
-        token = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip()
-        if not token:
-            raise RuntimeError("UPSTOX_ACCESS_TOKEN is not set in the process environment.")
-        # Use the project-verified SDK V3 order endpoint and typed request model.
+        # No --preview means submit immediately. The is_amo flag is false
+        # unless explicitly supplied as is_amo=true / --is-amo true.
         import upstox_client
-        body_model = upstox_client.PlaceOrderV3Request(**payload)
         try:
+            body_model = upstox_client.PlaceOrderV3Request(**payload)
             response = upstox_client.OrderApiV3(client).place_order(body_model)
-            body = to_plain(response)
             return emit({
                 "status": "SUCCESS",
-                "order": payload,
-                "instrument_metadata": metadata,
-                "preview_hash": fingerprint,
-                "api_response": body,
+                **details,
+                "submitted": True,
+                "api_response": to_plain(response),
                 "message": (
                     "Upstox accepted the order request. This does not confirm an execution/fill."
                 ),
@@ -406,21 +380,19 @@ def main() -> int:
                 detail = {"body": str(raw) if raw is not None else str(exc)}
             return emit({
                 "status": "API_ERROR",
-                "order": payload,
-                "instrument_metadata": metadata,
-                "preview_hash": fingerprint,
+                **details,
+                "submitted": False,
                 "http_status": status_code,
                 "api_response": detail,
+                "message": "Upstox did not accept the order request.",
             }, 1)
 
     except Exception as exc:
         return emit({
             "status": "ERROR",
-            "request": request,
-            "order": None,
-            "preview_hash": None,
+            "submitted": False,
             "error": {"type": type(exc).__name__, "message": str(exc)},
-            "message": "No order was placed.",
+            "message": "No order was submitted.",
         }, 1)
 
 
