@@ -7,11 +7,13 @@ _TYPE_MAP = {
     "integer": int, "number": (int, float), "null": type(None),
 }
 
+
 def validate_json_contract(value: Any, schema: Dict[str, Any], path: str = "$") -> List[str]:
     errors: List[str] = []
     expected = schema.get("type")
     if expected:
         allowed = expected if isinstance(expected, list) else [expected]
+
         def matches(kind: str) -> bool:
             pytype = _TYPE_MAP.get(kind)
             if pytype is None:
@@ -23,21 +25,31 @@ def validate_json_contract(value: Any, schema: Dict[str, Any], path: str = "$") 
             if kind == "boolean":
                 return isinstance(value, bool)
             return isinstance(value, pytype)
+
         if not any(matches(kind) for kind in allowed):
             return [f"{path}: expected {' or '.join(allowed)}, got {type(value).__name__}"]
+
+    if "const" in schema and value != schema["const"]:
+        errors.append(f"{path}: value must equal {schema['const']!r}")
     if "enum" in schema and value not in schema["enum"]:
         errors.append(f"{path}: value must be one of {schema['enum']!r}")
+
     if isinstance(value, dict):
         for key in schema.get("required", []):
             if key not in value:
                 errors.append(f"{path}: missing required field {key!r}")
         properties = schema.get("properties", {})
-        for key, child in value.items():
+        additional = schema.get("additionalProperties", True)
+        for key, child_value in value.items():
             if key in properties:
-                errors.extend(validate_json_contract(child, properties[key], f"{path}.{key}"))
-            elif schema.get("additionalProperties") is False:
+                errors.extend(validate_json_contract(child_value, properties[key], f"{path}.{key}"))
+            elif additional is False:
                 errors.append(f"{path}: unexpected field {key!r}")
+            elif isinstance(additional, dict):
+                errors.extend(validate_json_contract(child_value, additional, f"{path}.{key}"))
+
     if isinstance(value, list) and isinstance(schema.get("items"), dict):
         for index, child in enumerate(value):
             errors.extend(validate_json_contract(child, schema["items"], f"{path}[{index}]"))
+
     return errors
