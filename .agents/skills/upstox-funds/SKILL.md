@@ -18,5 +18,6 @@ Fetch the current funds/margin balance from Upstox using `UserApi.get_user_fund_
 - The `algoai` launcher loads the token through the existing MongoDB token loader and injects it into this script's environment.
 - This is a read-only API operation. Never place, modify, or cancel orders.
 - For `--result-format json`, the launcher executes the declared Python script directly and validates its output against `schemas/result.schema.json`.
+- Return structured JSON for API/response-shape failures using status=error, a clear message, error type, and the raw Upstox response when one was received. Do not emit these expected operational failures as unstructured stderr text.
 - Preserve every segment returned by the API. Do not assume only equity and commodity segments exist.
 - Report the API's available/used margin and other returned fund fields without calculating or inventing values.
