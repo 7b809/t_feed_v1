@@ -42,6 +42,104 @@ def _expired_key_expiry(instrument_key: str) -> date | None:
         ) from exc
 
 
+def _normalise_expiry_date(value: Any) -> date | None:
+    """Parse expiry values returned by Upstox (ISO or DD-MM-YYYY)."""
+    if isinstance(value, dict):
+        value = value.get("expiry_date") or value.get("expiry") or value.get("date") or value.get("expiryDate")
+    if value is None:
+        return None
+    raw = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw[:10], fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _contract_matches_key(contract: dict[str, Any], parts: list[str]) -> bool:
+    """Match a returned expired contract by its exchange token, not symbol."""
+    token, exchange = parts[1], parts[0]
+    exchange_token = str(contract.get("exchange_token") or contract.get("exchangeToken") or "").strip()
+    returned_key = str(contract.get("instrument_key") or contract.get("instrumentKey") or "").strip()
+    if returned_key:
+        returned_parts = [part.strip() for part in returned_key.split("|")]
+        if len(returned_parts) >= 3 and returned_parts[0] == exchange and returned_parts[1] == token:
+            return True
+    return exchange_token == token
+
+
+def _resolve_expired_instrument_key(
+    instrument_key: str,
+    underlying_key: str,
+    target_date: date,
+    expiry_date: str | None = None,
+) -> tuple[str, date]:
+    """Resolve a two-part F&O key through Upstox's expired-contract catalogue."""
+    parts = [part.strip() for part in str(instrument_key).split("|")]
+    if len(parts) != 2 or parts[0] not in {"NSE_FO", "BSE_FO"}:
+        raise HTTPException(status_code=400, detail="Expired-key resolution requires a two-part NSE_FO/BSE_FO key")
+    underlying = str(underlying_key or "").strip()
+    if not underlying or "|" not in underlying:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot resolve expired F&O key: underlying_key is missing from the isolation event metadata",
+        )
+
+    if expiry_date:
+        parsed_expiry = _normalise_expiry_date(expiry_date)
+        if parsed_expiry is None:
+            raise HTTPException(status_code=400, detail="expiry_date must use YYYY-MM-DD or DD-MM-YYYY")
+        expiry_candidates = [parsed_expiry]
+    else:
+        expiry_result = expired_instruments_service.get_expiries(underlying)
+        if expiry_result.get("status") != "ok":
+            status = expiry_result.get("status")
+            detail = expiry_result.get("error") or status or "Unable to retrieve expired contract expiries"
+            raise HTTPException(status_code=503 if status == "no_token" else 502,
+                                detail=f"Expired contract expiry lookup failed: {detail}")
+        expiry_candidates = [
+            parsed for item in (expiry_result.get("expiries") or [])
+            if (parsed := _normalise_expiry_date(item)) is not None and parsed >= target_date
+        ]
+        expiry_candidates.sort()
+
+    for expiry in expiry_candidates:
+        contracts_result = expired_instruments_service.get_expired_option_contracts(
+            underlying, expiry.isoformat()
+        )
+        if contracts_result.get("status") != "ok":
+            status = contracts_result.get("status")
+            detail = contracts_result.get("error") or status or "Unable to retrieve expired contracts"
+            raise HTTPException(status_code=503 if status == "no_token" else 502,
+                                detail=f"Expired contract lookup failed for {expiry.isoformat()}: {detail}")
+        for contract in contracts_result.get("contracts") or []:
+            if not isinstance(contract, dict) or not _contract_matches_key(contract, parts):
+                continue
+            returned_key = str(contract.get("instrument_key") or contract.get("instrumentKey") or "").strip()
+            contract_expiry = _normalise_expiry_date(contract) or expiry
+            if contract_expiry < target_date:
+                continue
+            if returned_key:
+                returned_parts = [part.strip() for part in returned_key.split("|")]
+                if len(returned_parts) >= 3:
+                    resolved_key = "|".join(returned_parts[:3])
+                else:
+                    resolved_key = f"{parts[0]}|{parts[1]}|{contract_expiry.strftime('%d-%m-%Y')}"
+            else:
+                # Appending the date is safe only after exact token verification
+                # against the expired-contract catalogue.
+                resolved_key = f"{parts[0]}|{parts[1]}|{contract_expiry.strftime('%d-%m-%Y')}"
+            if _expired_key_expiry(resolved_key) != contract_expiry:
+                continue
+            logger.info("Resolved expired instrument key %s to %s using underlying %s",
+                        instrument_key, resolved_key, underlying)
+            return resolved_key, contract_expiry
+
+    raise HTTPException(status_code=404,
+                        detail=f"No expired contract matched exchange token {parts[1]} for underlying {underlying}")
+
+
 def _parse_timestamp(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -118,6 +216,8 @@ def _fetch_active_candles(instrument_key: str, from_date: date, to_date: date) -
             "Upstox historical candle request returned HTTP %s for %s: %s",
             response.status_code, instrument_key, response.text[:250],
         )
+        if "UDAPI100011" in response.text:
+            raise HTTPException(status_code=502, detail="UPSTOX_INVALID_INSTRUMENT_KEY: Upstox rejected the two-part instrument key")
         raise HTTPException(
             status_code=502,
             detail=f"Upstox historical candle API returned HTTP {response.status_code}",
@@ -143,9 +243,14 @@ def _fetch_expired_candles(instrument_key: str, from_date: date, to_date: date) 
 
 
 def fetch_historical_candles(
-    instrument_key: str, from_date: date, to_date: date
+    instrument_key: str,
+    from_date: date,
+    to_date: date,
+    target_date: date | None = None,
+    underlying_key: str | None = None,
+    expiry_date: str | None = None,
 ) -> tuple[list[dict[str, Any]], str, date]:
-    """Select active History V3 or the existing expired-instrument service."""
+    """Select active History V3 or resolve and fetch an expired F&O contract."""
     parts = [part.strip() for part in instrument_key.split("|")]
     expiry = _expired_key_expiry(instrument_key)
     if len(parts) >= 3:
@@ -156,8 +261,35 @@ def fetch_historical_candles(
             return [], "expired", actual_to
         raw = _fetch_expired_candles(instrument_key, from_date, actual_to)
         return _normalise_candles(raw), "expired", actual_to
-    raw = _fetch_active_candles(instrument_key, from_date, to_date)
-    return _normalise_candles(raw), "active", to_date
+
+    reference_date = target_date or from_date
+    parsed_expiry = _normalise_expiry_date(expiry_date) if expiry_date else None
+    if (len(parts) == 2 and parts[0] in {"NSE_FO", "BSE_FO"}
+            and parsed_expiry is not None and parsed_expiry <= _market_today()):
+        resolved_key, resolved_expiry = _resolve_expired_instrument_key(
+            instrument_key, underlying_key or "", reference_date, expiry_date
+        )
+        actual_to = min(to_date, resolved_expiry)
+        if from_date > actual_to:
+            return [], "expired", actual_to
+        raw = _fetch_expired_candles(resolved_key, from_date, actual_to)
+        return _normalise_candles(raw), "expired", actual_to
+
+    try:
+        raw = _fetch_active_candles(instrument_key, from_date, to_date)
+        return _normalise_candles(raw), "active", to_date
+    except HTTPException as exc:
+        if (exc.status_code != 502 or "UPSTOX_INVALID_INSTRUMENT_KEY" not in str(exc.detail)
+                or len(parts) != 2 or parts[0] not in {"NSE_FO", "BSE_FO"}):
+            raise
+        resolved_key, resolved_expiry = _resolve_expired_instrument_key(
+            instrument_key, underlying_key or "", reference_date, expiry_date
+        )
+        actual_to = min(to_date, resolved_expiry)
+        if from_date > actual_to:
+            return [], "expired", actual_to
+        raw = _fetch_expired_candles(resolved_key, from_date, actual_to)
+        return _normalise_candles(raw), "expired", actual_to
 
 
 def calculate_supertrend(
@@ -253,7 +385,8 @@ def _bar_summary(bars: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def analyse_instrument(
-    instrument_key: str, target_date: date, atr_period: int = 10, multiplier: float = 3.0
+    instrument_key: str, target_date: date, atr_period: int = 10, multiplier: float = 3.0,
+    underlying_key: str | None = None, expiry_date: str | None = None,
 ) -> dict[str, Any]:
     key = str(instrument_key or "").strip()
     if not key or "|" not in key or len(key) > 180:
@@ -271,14 +404,16 @@ def analyse_instrument(
     from_date = target_date - timedelta(days=_LOOKBACK_CALENDAR_DAYS)
     requested_to = target_date + timedelta(days=1)
     fetch_to = min(requested_to, _market_today())
-    expiry = _expired_key_expiry(key)
+    expiry = _expired_key_expiry(key) or (_normalise_expiry_date(expiry_date) if expiry_date else None)
     if expiry is not None and target_date > expiry:
         raise HTTPException(
             status_code=400,
             detail=f"target_date is after instrument expiry ({expiry.isoformat()})",
         )
 
-    candles, mode, actual_to = fetch_historical_candles(key, from_date, fetch_to)
+    candles, mode, actual_to = fetch_historical_candles(
+        key, from_date, fetch_to, target_date, underlying_key, expiry_date
+    )
     indicator_bars = calculate_supertrend(candles, atr_period, multiplier)
     target_iso = target_date.isoformat()
     next_date = requested_to
