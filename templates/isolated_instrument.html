@@ -1979,6 +1979,23 @@
   // with the correct event when the history pagination replaces the cards.
   window.__pvSupertrendCache = window.__pvSupertrendCache || Object.create(null);
 
+
+  function stNumber(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    var numeric = Number(value);
+    return Number.isFinite(numeric)
+      ? numeric.toLocaleString("en-IN", {maximumFractionDigits:2})
+      : String(value);
+  }
+
+  function stDate(value) {
+    if (!value) return "—";
+    var date = new Date(value);
+    return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short"
+    });
+  }
+
   function stCacheKey(info) {
     return String(info.token || "") + "|" + String(info.tradeDate || "");
   }
@@ -2005,16 +2022,16 @@
     var directionClass = direction === "BULLISH" ? "bull" : direction === "BEARISH" ? "bear" : "";
     var signalRows = (target.signals || []).map(function (signal) {
       var side = String(signal.signal || "").toUpperCase();
-      return '<div class="pv-st-signal"><span>' + escapeHtml(dt(signal.timestamp)) +
+      return '<div class="pv-st-signal"><span>' + escapeHtml(stDate(signal.timestamp)) +
         '</span><strong class="' + (side === "BUY" ? "pv-st-buy" : "pv-st-sell") + '">' +
-        escapeHtml(side) + '</strong><span>' + escapeHtml(n(signal.close)) + '</span></div>';
-    }).join("");
+        escapeHtml(side) + '</strong><span>' + escapeHtml(stNumber(signal.close)) + '</span></div>';
+    }).joistNumber("");
     var signal = last.signal ? String(last.signal).toUpperCase() : "No confirmed signal";
     var nextContent = next.available
-      ? stMetric("Next-day high", n(next.high)) +
-        stMetric("Next-day low", n(next.low)) +
-        stMetric("Next-day close", n(next.close)) +
-        stMetric("Next-day range", n(next.range))
+      ? stMetric("Next-day high", stNumber(next.high)) +
+        stMetric("Next-day low", stNumber(next.low)) +
+        stMetric("Next-day close", stNumber(next.close)) +
+        stMetric("Next-day range", stNumber(next.range))
       : '<div class="pv-st-note">Next-day candle data is not available for ' +
         escapeHtml(next.date || "the following date") + '.</div>';
 
@@ -2026,16 +2043,16 @@
         stMetric("Instrument mode", data.instrument_mode) +
         stMetric("ATR / multiplier", (data.supertrend_parameters || {}).atr_period + " / " +
           (data.supertrend_parameters || {}).multiplier) +
-        stMetric("Candles fetched", n(data.candles_fetched)) +
+        stMetric("Candles fetched", stNumber(data.candles_fetched)) +
       '</div>' +
       '<div class="pv-st-section"><div class="pv-st-section-title">Target-day summary</div>' +
         '<div class="pv-st-grid">' +
           stMetric("Direction at close", direction) +
           stMetric("Last confirmed signal", signal) +
-          stMetric("Signal time", last.timestamp ? dt(last.timestamp) : "—") +
-          stMetric("Supertrend at close", n(target.supertrend_at_close)) +
-          stMetric("Day high / low", n(target.high) + " / " + n(target.low)) +
-          stMetric("Day close / range", n(target.close) + " / " + n(target.range)) +
+          stMetric("Signal time", last.timestamp ? stDate(last.timestamp) : "—") +
+          stMetric("Supertrend at close", stNumber(target.supertrend_at_close)) +
+          stMetric("Day high / low", stNumber(target.high) + " / " + stNumber(target.low)) +
+          stMetric("Day close / range", stNumber(target.close) + " / " + stNumber(target.range)) +
         '</div>' +
         '<div style="margin-top:8px"><span class="pv-st-direction ' + directionClass + '">' +
         escapeHtml(direction) + '</span></div>' +
@@ -2089,7 +2106,7 @@
         credentials: "same-origin",
         cache: "no-store"
       });
-      var result = await response.json().catch(function () { return {}; });
+      var result = await response.jsostNumber().catch(function () { return {}; });
       if (!response.ok || result.status !== "success") {
         throw new Error(result.detail || result.error || result.message || ("HTTP " + response.status));
       }
