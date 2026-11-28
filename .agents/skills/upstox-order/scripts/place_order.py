@@ -105,7 +105,7 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict | No
 
     expiry_value = None
     # NSE derivative symbol convention: UNDERLYING + YY + month-code + DD + strike + type.
-    expiry_match = re.search(r"(\\d{2})([A-Z])(\\d{2})\\d+(?:CE|PE|FUT)$",
+    expiry_match = re.search(r"(\d{2})([A-Z])(\d{2})\d+(?:CE|PE|FUT)$",
                              symbol_upper)
     month_codes = {
         "F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6,
@@ -282,7 +282,9 @@ def main() -> int:
             )
 
         client = get_client()
-        # Always resolve the canonical symbol from LTP before metadata lookup.\n        quote, quote_raw = fetch_quote(client, args.instrument)\n        metadata = fetch_instrument_metadata(client, args.instrument, quote)
+        # Always resolve the canonical symbol from LTP before metadata lookup.
+        quote, quote_raw = fetch_quote(client, args.instrument)
+        metadata = fetch_instrument_metadata(client, args.instrument, quote)
         lot_size = metadata["lot_size"]
 
         if args.lots is not None:
@@ -345,10 +347,12 @@ def main() -> int:
             "market_quote": quote_raw,
             "preview_hash": fingerprint,
             "confirmation_required": True,
-            "amo_note": (\n                "AMO is requested by default. Upstox determines whether the request is "
+            "amo_note": (
+                "AMO is requested by default. Upstox determines whether the request is "
                 "treated as AMO from the market session; an AMO request during active "
                 "market hours may be rejected or treated as a regular order. Check the "
-                "session before confirming."\n            ),
+                "session before confirming."
+            ),
             "message": (
                 "No order was placed. Review the exact order and preview_hash. "
                 "For confirmation, repeat with the resolved --quantity and numeric "
@@ -368,7 +372,12 @@ def main() -> int:
         token = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip()
         if not token:
             raise RuntimeError("UPSTOX_ACCESS_TOKEN is not set in the process environment.")
-        # Use the project-verified SDK V3 order endpoint and typed request model.\n        import upstox_client\n        body_model = upstox_client.PlaceOrderV3Request(**payload)\n        try:\n            response = upstox_client.OrderApiV3(client).place_order(body_model)\n            body = to_plain(response)
+        # Use the project-verified SDK V3 order endpoint and typed request model.
+        import upstox_client
+        body_model = upstox_client.PlaceOrderV3Request(**payload)
+        try:
+            response = upstox_client.OrderApiV3(client).place_order(body_model)
+            body = to_plain(response)
             return emit({
                 "status": "SUCCESS",
                 "order": payload,
@@ -379,7 +388,13 @@ def main() -> int:
                     "Upstox accepted the order request. This does not confirm an execution/fill."
                 ),
             })
-        except Exception as exc:\n            status_code = getattr(exc, "status", None)\n            raw = getattr(exc, "body", None)\n            try:\n                detail = json.loads(raw) if isinstance(raw, str) else to_plain(raw)\n            except (json.JSONDecodeError, TypeError):\n                detail = {"body": str(raw) if raw is not None else str(exc)}
+        except Exception as exc:
+            status_code = getattr(exc, "status", None)
+            raw = getattr(exc, "body", None)
+            try:
+                detail = json.loads(raw) if isinstance(raw, str) else to_plain(raw)
+            except (json.JSONDecodeError, TypeError):
+                detail = {"body": str(raw) if raw is not None else str(exc)}
             return emit({
                 "status": "API_ERROR",
                 "order": payload,
