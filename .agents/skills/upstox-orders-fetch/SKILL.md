@@ -1,71 +1,30 @@
 ---
 name: upstox-orders-fetch
-description: Read and filter the user's Upstox normal order book and GTT orders, including lookup of a specific normal order ID or GTT order ID. Read-only; never places, modifies, or cancels orders.
+description: Read and filter the user's Upstox normal order book and GTT orders, including lookup of a specific order. Read-only; never places, modifies, or cancels orders.
 category: Orders
 access: read-only
+execution: direct-python
+script: scripts/fetch_orders.py
+result_schema: schemas/result.schema.json
 ---
 
 # Upstox Order Fetch
 
-Use this skill whenever the user asks to view/list/fetch normal orders, GTT orders, all orders, or a specific order.
+This is a read-only JSON handler. It fetches today's normal order book and/or the GTT orders exposed by Upstox. It preserves the complete SDK response in `raw_response` and includes normalized/filterable order records in `orders`.
 
-## Supported data
+## JSON execution
 
-- Normal orders: today's order book via `OrderApi.get_order_book(api_version="2.0")`.
-- Specific normal order: lifecycle details via `OrderApi.get_order_details(api_version="2.0", order_id=...)`.
-- GTT orders: all GTT orders via `OrderApiV3.get_gtt_order_details()`.
-- Specific GTT: `OrderApiV3.get_gtt_order_details(gtt_order_id=...)`.
-
-## Filters
-
-- `--kind all|normal|gtt` (default: all).
-- `--order-id`: fetch a specific order. In `all` mode both normal and GTT endpoints are checked.
-- `--status`: exact status filter (case-insensitive).
-- `--symbol`: partial trading-symbol or instrument-key filter.
-- `--tag`: exact tag filter for normal orders.
-- `--segment`: exchange/segment prefix filter, e.g. `NSE_FO`.
-
-## Execution
-
-Fetch all normal and GTT orders:
+Use explicit script arguments through the CLI:
 
 ```bash
-python3 .agents/skills/upstox-orders-fetch/scripts/fetch_orders.py --kind all
+algoai run upstox-orders-fetch --result-format json --script-args-json '["--kind","all"]'
+algoai run upstox-orders-fetch --result-format json --script-args-json '["--kind","normal","--status","open"]'
+algoai run upstox-orders-fetch --result-format json --script-args-json '["--kind","gtt"]'
+algoai run upstox-orders-fetch --result-format json --script-args-json '["--order-id","<order_id>"]'
 ```
 
-Fetch normal orders only:
+Supported arguments: `--kind all|normal|gtt`, `--order-id`, `--status`, `--symbol`, `--tag`, and `--segment`.
 
-```bash
-python3 .agents/skills/upstox-orders-fetch/scripts/fetch_orders.py --kind normal
-```
+Normal `get_order_book` is today's order book, not an unlimited historical archive. Specific normal order details may return multiple lifecycle events; these are retained. A filter matching zero records is a valid empty result.
 
-Fetch GTT orders only:
-
-```bash
-python3 .agents/skills/upstox-orders-fetch/scripts/fetch_orders.py --kind gtt
-```
-
-Fetch a specific order ID (checks both normal and GTT order APIs):
-
-```bash
-python3 .agents/skills/upstox-orders-fetch/scripts/fetch_orders.py --order-id "<order_id>"
-```
-
-Examples of filters:
-
-```bash
-python3 .agents/skills/upstox-orders-fetch/scripts/fetch_orders.py --kind normal --status open
-python3 .agents/skills/upstox-orders-fetch/scripts/fetch_orders.py --kind all --symbol "NIFTY"
-python3 .agents/skills/upstox-orders-fetch/scripts/fetch_orders.py --kind normal --tag "intraday"
-python3 .agents/skills/upstox-orders-fetch/scripts/fetch_orders.py --kind all --segment NSE_FO
-```
-
-## Safety and interpretation
-
-- This module is strictly read-only. It does not place, modify, or cancel orders.
-- Never read `.env`, print tokens, or expose credentials.
-- Use the shared client in `.agents/skills/upstox/scripts/upstox_helpers.py`.
-- Do not claim that "all historical orders" are returned: normal `get_order_book` is the current day's order book; GTT listing returns the GTT orders exposed by Upstox.
-- Specific normal order details may return multiple lifecycle events for one order; preserve them rather than flattening away status history.
-- A filter returning zero records is a valid empty result, not proof that the order never existed.
-- The `all` mode attempts both order namespaces and reports an error only if neither returns usable data.
+This skill is read-only. It never places, modifies, or cancels orders. Never read `.env`, print tokens, or expose credentials.
