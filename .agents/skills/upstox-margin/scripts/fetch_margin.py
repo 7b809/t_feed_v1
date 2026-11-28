@@ -153,7 +153,7 @@ def main() -> int:
     requested_price = str(args.price)
     result_request = {
         "instrument": args.instrument,
-        "quantity": None,
+        "quantity": args.quantity,
         "lots": args.lots,
         "transaction_type": args.transaction_type,
         "product": args.product,
