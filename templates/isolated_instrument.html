@@ -1763,10 +1763,24 @@
 
   // ---- extraction --------------------------------------------------------
   function readRawJson(card) {
+    // Current event cards serialize the complete Mongo document directly
+    // into data-pv-raw-json. getAttribute() returns the browser-decoded
+    // attribute value, so JSON entities such as &quot; are handled safely.
+    var attributeJson = card.getAttribute("data-pv-raw-json");
+    if (attributeJson) {
+      card.dataset.pvRawJson = attributeJson;
+      return attributeJson;
+    }
+
+    // Backward compatibility with older cards that rendered a hidden
+    // .pv-event-json element.
     var jsonEl = card.querySelector(".pv-event-json");
     if (jsonEl) {
       var txt = (jsonEl.textContent || "").trim();
-      if (txt) card.dataset.pvRawJson = txt;
+      if (txt) {
+        card.dataset.pvRawJson = txt;
+        return txt;
+      }
     }
     return card.dataset.pvRawJson || "";
   }
