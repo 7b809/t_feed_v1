@@ -209,11 +209,15 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict | No
 
     item = matches[0]
     try:
-        lot_size = int(item.get("lot_size") or 1)
+        raw_lot_size = item.get("lot_size")
+        if raw_lot_size in (None, "", 0) and segment == "FO":
+            raise ValueError("F&O lot_size is missing from instrument metadata.")
+        lot_size = int(raw_lot_size or 1)  # EQ may default to one share if omitted.
         tick_size = float(item["tick_size"])
-    except (TypeError, ValueError, KeyError):
+    except (TypeError, ValueError, KeyError) as exc:
         raise ValueError(
-            f"Instrument metadata is missing valid lot_size/tick_size for {instrument_key!r}."
+            f"Instrument metadata is missing valid lot_size/tick_size for "
+            f"{instrument_key!r}: {exc}"
         )
     if lot_size <= 0 or not math.isfinite(tick_size) or tick_size <= 0:
         raise ValueError("Instrument metadata returned invalid lot_size or tick_size.")
