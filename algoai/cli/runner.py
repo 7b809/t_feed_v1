@@ -6,6 +6,7 @@ from pathlib import Path
 from algoai.core.agy_launcher import launch_agy_with_token, run_python_json
 from algoai.utils.skill_parser import SkillMeta
 
+
 def _safe_skill_file(skill: SkillMeta, relative: str) -> Path:
     candidate = (skill.path.parent / relative).resolve()
     try:
@@ -15,6 +16,21 @@ def _safe_skill_file(skill: SkillMeta, relative: str) -> Path:
     if not candidate.is_file():
         raise FileNotFoundError(f"Declared skill file not found: {candidate}")
     return candidate
+
+
+def _script_args(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--script-args-json must be a valid JSON array: {exc}") from None
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise ValueError("--script-args-json must be a JSON array containing only strings.")
+    if len(value) > 100:
+        raise ValueError("--script-args-json accepts at most 100 arguments.")
+    return value
+
 
 def run_skill(skill: SkillMeta, context: str, args) -> int:
     if skill.access == "write-capable" and not args.allow_write:
@@ -27,19 +43,26 @@ def run_skill(skill: SkillMeta, context: str, args) -> int:
             print("[ERROR] Add execution: direct-python, script and result_schema to its SKILL.md before using --result-format json.", file=sys.stderr)
             return 2
         if context.strip():
-            print("[ERROR] This direct JSON skill does not accept free-form context arguments.", file=sys.stderr)
+            print("[ERROR] Direct JSON skills accept explicit --script-args-json, not free-form context.", file=sys.stderr)
             return 2
         try:
             script = _safe_skill_file(skill, skill.script)
             schema_path = _safe_skill_file(skill, skill.result_schema)
             schema = json.loads(schema_path.read_text(encoding="utf-8"))
+            script_args = _script_args(args.script_args_json)
         except Exception as exc:
             print(f"[ERROR] {exc}", file=sys.stderr)
             return 1
-        return run_python_json(script, schema, env_path=args.env_file,
-                               skill_name=skill.name, access_level=skill.access)
+        return run_python_json(
+            script, schema, env_path=args.env_file, skill_name=skill.name,
+            access_level=skill.access, script_args=script_args,
+            write_authorized=bool(args.allow_write),
+        )
+    if args.script_args_json:
+        print("[ERROR] --script-args-json is only supported with --result-format json.", file=sys.stderr)
+        return 2
     if skill.access == "unknown":
-        print(f"[WARN] Skill access level is unknown; review its SKILL.md.", file=sys.stderr)
+        print("[WARN] Skill access level is unknown; review its SKILL.md.", file=sys.stderr)
     if args.allow_write:
         print("[SAFETY] Write-capable skill execution explicitly enabled for this invocation.")
     prompt = (
