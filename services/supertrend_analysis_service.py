@@ -71,73 +71,121 @@ def _contract_matches_key(contract: dict[str, Any], parts: list[str]) -> bool:
 
 def _resolve_expired_instrument_key(
     instrument_key: str,
-    underlying_key: str,
+    underlying_key: str | None,
     target_date: date,
     expiry_date: str | None = None,
 ) -> tuple[str, date]:
-    """Resolve a two-part F&O key through Upstox's expired-contract catalogue."""
+    """Resolve a two-part F&O key against Upstox's expired-contract catalogue.
+
+    If the isolation event has no underlying key, search the known index
+    underlyings for the same exchange and accept only an exact token match.
+    """
     parts = [part.strip() for part in str(instrument_key).split("|")]
     if len(parts) != 2 or parts[0] not in {"NSE_FO", "BSE_FO"}:
-        raise HTTPException(status_code=400, detail="Expired-key resolution requires a two-part NSE_FO/BSE_FO key")
-    underlying = str(underlying_key or "").strip()
-    if not underlying or "|" not in underlying:
         raise HTTPException(
-            status_code=422,
-            detail="Cannot resolve expired F&O key: underlying_key is missing from the isolation event metadata",
+            status_code=400,
+            detail="Expired-key resolution requires a two-part NSE_FO/BSE_FO key",
         )
+
+    if underlying_key and "|" in str(underlying_key):
+        underlyings = [str(underlying_key).strip()]
+    elif parts[0] == "NSE_FO":
+        underlyings = [
+            "NSE_INDEX|Nifty 50",
+            "NSE_INDEX|Nifty Bank",
+            "NSE_INDEX|NIFTY MID SELECT",
+            "NSE_INDEX|NIFTY FIN SERVICE",
+        ]
+    else:
+        underlyings = ["BSE_INDEX|SENSEX"]
 
     if expiry_date:
         parsed_expiry = _normalise_expiry_date(expiry_date)
         if parsed_expiry is None:
-            raise HTTPException(status_code=400, detail="expiry_date must use YYYY-MM-DD or DD-MM-YYYY")
-        expiry_candidates = [parsed_expiry]
+            raise HTTPException(
+                status_code=400,
+                detail="expiry_date must use YYYY-MM-DD or DD-MM-YYYY",
+            )
+        fixed_expiries = [parsed_expiry]
     else:
-        expiry_result = expired_instruments_service.get_expiries(underlying)
-        if expiry_result.get("status") != "ok":
-            status = expiry_result.get("status")
-            detail = expiry_result.get("error") or status or "Unable to retrieve expired contract expiries"
-            raise HTTPException(status_code=503 if status == "no_token" else 502,
-                                detail=f"Expired contract expiry lookup failed: {detail}")
-        expiry_candidates = [
-            parsed for item in (expiry_result.get("expiries") or [])
-            if (parsed := _normalise_expiry_date(item)) is not None and parsed >= target_date
-        ]
-        expiry_candidates.sort()
+        fixed_expiries = None
 
-    for expiry in expiry_candidates:
-        contracts_result = expired_instruments_service.get_expired_option_contracts(
-            underlying, expiry.isoformat()
-        )
-        if contracts_result.get("status") != "ok":
-            status = contracts_result.get("status")
-            detail = contracts_result.get("error") or status or "Unable to retrieve expired contracts"
-            raise HTTPException(status_code=503 if status == "no_token" else 502,
-                                detail=f"Expired contract lookup failed for {expiry.isoformat()}: {detail}")
-        for contract in contracts_result.get("contracts") or []:
-            if not isinstance(contract, dict) or not _contract_matches_key(contract, parts):
+    lookup_errors: list[str] = []
+    for underlying in underlyings:
+        if fixed_expiries is not None:
+            expiry_candidates = fixed_expiries
+        else:
+            expiry_result = expired_instruments_service.get_expiries(underlying)
+            if expiry_result.get("status") != "ok":
+                status = expiry_result.get("status")
+                detail = expiry_result.get("error") or status or "expiry lookup failed"
+                if status == "no_token":
+                    raise HTTPException(status_code=503, detail="Expired contract lookup requires an Upstox access token")
+                lookup_errors.append(f"{underlying}: {detail}")
                 continue
-            returned_key = str(contract.get("instrument_key") or contract.get("instrumentKey") or "").strip()
-            contract_expiry = _normalise_expiry_date(contract) or expiry
-            if contract_expiry < target_date:
+            expiry_candidates = [
+                parsed for item in (expiry_result.get("expiries") or [])
+                if (parsed := _normalise_expiry_date(item)) is not None
+                and parsed >= target_date
+            ]
+            expiry_candidates.sort()
+
+        for expiry in expiry_candidates:
+            contracts_result = expired_instruments_service.get_expired_option_contracts(
+                underlying, expiry.isoformat()
+            )
+            if contracts_result.get("status") != "ok":
+                status = contracts_result.get("status")
+                detail = contracts_result.get("error") or status or "contract lookup failed"
+                if status == "no_token":
+                    raise HTTPException(status_code=503, detail="Expired contract lookup requires an Upstox access token")
+                lookup_errors.append(f"{underlying} @ {expiry.isoformat()}: {detail}")
                 continue
-            if returned_key:
-                returned_parts = [part.strip() for part in returned_key.split("|")]
-                if len(returned_parts) >= 3:
-                    resolved_key = "|".join(returned_parts[:3])
+
+            for contract in contracts_result.get("contracts") or []:
+                if not isinstance(contract, dict) or not _contract_matches_key(contract, parts):
+                    continue
+                returned_key = str(
+                    contract.get("instrument_key") or contract.get("instrumentKey") or ""
+                ).strip()
+                contract_expiry = _normalise_expiry_date(contract) or expiry
+                if contract_expiry < target_date:
+                    continue
+                if returned_key:
+                    returned_parts = [part.strip() for part in returned_key.split("|")]
+                    if len(returned_parts) >= 3:
+                        resolved_key = "|".join(returned_parts[:3])
+                    else:
+                        resolved_key = (
+                            f"{parts[0]}|{parts[1]}|"
+                            f"{contract_expiry.strftime('%d-%m-%Y')}"
+                        )
                 else:
-                    resolved_key = f"{parts[0]}|{parts[1]}|{contract_expiry.strftime('%d-%m-%Y')}"
-            else:
-                # Appending the date is safe only after exact token verification
-                # against the expired-contract catalogue.
-                resolved_key = f"{parts[0]}|{parts[1]}|{contract_expiry.strftime('%d-%m-%Y')}"
-            if _expired_key_expiry(resolved_key) != contract_expiry:
-                continue
-            logger.info("Resolved expired instrument key %s to %s using underlying %s",
-                        instrument_key, resolved_key, underlying)
-            return resolved_key, contract_expiry
+                    # The expired-contract catalogue verified this exact token.
+                    resolved_key = (
+                        f"{parts[0]}|{parts[1]}|"
+                        f"{contract_expiry.strftime('%d-%m-%Y')}"
+                    )
+                if _expired_key_expiry(resolved_key) != contract_expiry:
+                    continue
+                logger.info(
+                    "Resolved expired instrument key %s to %s using underlying %s",
+                    instrument_key, resolved_key, underlying,
+                )
+                return resolved_key, contract_expiry
 
-    raise HTTPException(status_code=404,
-                        detail=f"No expired contract matched exchange token {parts[1]} for underlying {underlying}")
+    if lookup_errors:
+        logger.warning(
+            "Expired contract resolution had lookup errors for %s: %s",
+            instrument_key, "; ".join(lookup_errors[:4]),
+        )
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            f"No expired contract matched exchange token {parts[1]} for "
+            f"the available {parts[0]} underlying catalogues"
+        ),
+    )
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -267,7 +315,7 @@ def fetch_historical_candles(
     if (len(parts) == 2 and parts[0] in {"NSE_FO", "BSE_FO"}
             and parsed_expiry is not None and parsed_expiry <= _market_today()):
         resolved_key, resolved_expiry = _resolve_expired_instrument_key(
-            instrument_key, underlying_key or "", reference_date, expiry_date
+            instrument_key, underlying_key, reference_date, expiry_date
         )
         actual_to = min(to_date, resolved_expiry)
         if from_date > actual_to:
