@@ -1,17 +1,26 @@
 {
- "$schema":"https://json-schema.org/draft/2020-12/schema",
- "type":"object",
- "required":["status"],
- "properties":{
-  "status":{"type":"string","enum":["PREVIEW","SUCCESS","API_ERROR","ERROR"]},
-  "order":{"type":["object","null"]},
-  "gtt_order":{"type":["object","null"]},
-  "preview_hash":{"type":["string","null"]},
-  "confirmation_required":{"type":"boolean"},
-  "message":{"type":"string"},
-  "api_response":{},
-  "http_status":{"type":"integer"},
-  "error":{"type":"object"}
- },
- "additionalProperties":true
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["status"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["PREVIEW", "SUCCESS", "API_ERROR", "ERROR"]
+    },
+    "request": {"type": "object"},
+    "order": {"type": ["object", "null"]},
+    "instrument_metadata": {"type": ["object", "null"]},
+    "price_source": {"type": "string"},
+    "reference_ltp": {"type": ["number", "null"]},
+    "quantity_source": {"type": "string"},
+    "market_quote": {},
+    "amo_note": {"type": "string"},
+    "preview_hash": {"type": ["string", "null"]},
+    "confirmation_required": {"type": "boolean"},
+    "message": {"type": "string"},
+    "api_response": {},
+    "http_status": {"type": ["integer", "null"]},
+    "error": {"type": "object"}
+  },
+  "additionalProperties": true
 }
