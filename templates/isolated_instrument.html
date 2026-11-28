@@ -1921,11 +1921,11 @@
       "payload.trade_date_ist", "data.trade_date_ist"
     ]) || "";
     if (!tradeDate && isolateTime) {
-      var dateMatch = String(isolateTime).match(/^(\\d{4}-\\d{2}-\\d{2})/);
+      var dateMatch = String(isolateTime).match(/^(\d{4}-\d{2}-\d{2})/);
       if (dateMatch) tradeDate = dateMatch[1];
     }
     tradeDate = String(tradeDate || "").trim();
-    if (tradeDate && /^\\d{2}-\\d{2}-\\d{4}$/.test(tradeDate)) {
+    if (tradeDate && /^\d{2}-\d{2}-\d{4}$/.test(tradeDate)) {
       var dateParts = tradeDate.split("-");
       tradeDate = dateParts[2] + "-" + dateParts[1] + "-" + dateParts[0];
     }
@@ -2080,7 +2080,7 @@
       renderSupertrendPanel(panel, null, "The isolation event does not contain a complete instrument_key.");
       return;
     }
-    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(info.tradeDate || "")) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(info.tradeDate || "")) {
       renderSupertrendPanel(panel, null, "The isolation event does not contain a valid trading date.");
       return;
     }
