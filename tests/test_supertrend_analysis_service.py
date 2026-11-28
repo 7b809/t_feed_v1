@@ -110,13 +110,19 @@ class SupertrendHistoricalRoutingTests(unittest.TestCase):
         )
 
     @patch(
+        "services.supertrend_analysis_service.expired_instruments_service.get_expiries",
+        return_value={"status": "ok", "expiries": []},
+    )
+    @patch(
         "services.supertrend_analysis_service._fetch_active_candles",
         side_effect=HTTPException(
             status_code=502,
             detail="UPSTOX_INVALID_INSTRUMENT_KEY: Upstox rejected the two-part instrument key",
         ),
     )
-    def test_expired_key_without_underlying_metadata_fails_clearly(self, _active_fetch):
+    def test_expired_key_without_underlying_metadata_fails_clearly(
+        self, _active_fetch, _get_expiries
+    ):
         with self.assertRaises(HTTPException) as raised:
             fetch_historical_candles(
                 "NSE_FO|64492", self.FROM_DATE, self.TO_DATE, self.TARGET_DATE
