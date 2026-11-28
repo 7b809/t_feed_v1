@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from algoai.cli.arguments import parse_args
+from algoai.cli.runner import _script_args
 from algoai.utils.json_contract import validate_json_contract
 from algoai.utils.skill_parser import discover_skills, parse_frontmatter
 
@@ -48,6 +49,14 @@ class ArgumentTests(unittest.TestCase):
         args = parse_args(["run", "--result-format", "json", "upstox-pnl"])
         self.assertEqual(args.skill_name, "upstox-pnl")
         self.assertEqual(args.result_format, "json")
+    def test_script_args_json(self):
+        args = parse_args(["run", "upstox-orders-fetch", "--result-format", "json",
+                           "--script-args-json", '["--kind","normal","--status","open"]'])
+        self.assertEqual(_script_args(args.script_args_json),
+                         ["--kind", "normal", "--status", "open"])
+    def test_script_args_json_rejects_non_string_array(self):
+        with self.assertRaises(ValueError):
+            _script_args('[ "--quantity", 5 ]')
     def test_run_command(self):
         args = parse_args(["run", "--allow-write", "sample", "do", "this"])
         self.assertEqual(args.command, "run")
