@@ -1,0 +1,21 @@
+{
+ "$schema":"https://json-schema.org/draft/2020-12/schema",
+ "type":"object",
+ "required":["status"],
+ "properties":{
+  "status":{"type":"string","enum":["PREVIEW","SUCCESS","VERIFICATION_FAILED","ERROR"]},
+  "gtt_order_id":{"type":"string"},
+  "changes":{"type":"array","items":{"type":"object"}},
+  "quantity_preserved":{"type":"integer"},
+  "gtt_type_preserved":{"type":"string"},
+  "all_other_rules_preserved":{"type":"boolean"},
+  "state_fingerprint":{"type":"string"},
+  "confirmation_required":{"type":"boolean"},
+  "message":{"type":"string"},
+  "verification":{"type":"array","items":{"type":"object"}},
+  "api_response":{},
+  "error":{"type":"string"},
+  "modification_submitted":{"type":"boolean"}
+ },
+ "additionalProperties":true
+}
