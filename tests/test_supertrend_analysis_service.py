@@ -1,7 +1,14 @@
-"""Unit tests for the Supertrend calculation."""
+"""Unit tests for Supertrend calculation and historical candle routing."""
 import unittest
+from datetime import date
+from unittest.mock import patch
 
-from services.supertrend_analysis_service import calculate_supertrend
+from fastapi import HTTPException
+
+from services.supertrend_analysis_service import (
+    calculate_supertrend,
+    fetch_historical_candles,
+)
 
 
 class SupertrendCalculationTests(unittest.TestCase):
@@ -33,6 +40,85 @@ class SupertrendCalculationTests(unittest.TestCase):
             atr_period=3, multiplier=1,
         )
         self.assertIn("SELL", [bar["signal"] for bar in result if bar["signal"]])
+
+
+class SupertrendHistoricalRoutingTests(unittest.TestCase):
+    FROM_DATE = date(2026, 11, 13)
+    TO_DATE = date(2026, 11, 24)
+    TARGET_DATE = date(2026, 11, 23)
+
+    @patch("services.supertrend_analysis_service._fetch_active_candles", return_value=[])
+    def test_two_part_active_instrument_uses_history_v3(self, active_fetch):
+        candles, mode, actual_to = fetch_historical_candles(
+            "NSE_FO|47855", self.FROM_DATE, self.TO_DATE, self.TARGET_DATE
+        )
+        self.assertEqual(candles, [])
+        self.assertEqual(mode, "active")
+        self.assertEqual(actual_to, self.TO_DATE)
+        active_fetch.assert_called_once()
+
+    @patch("services.supertrend_analysis_service._fetch_expired_candles", return_value=[])
+    def test_already_qualified_expired_key_uses_expired_endpoint(self, expired_fetch):
+        key = "NSE_FO|54452|24-11-2026"
+        candles, mode, actual_to = fetch_historical_candles(
+            key, self.FROM_DATE, self.TO_DATE, self.TARGET_DATE
+        )
+        self.assertEqual(candles, [])
+        self.assertEqual(mode, "expired")
+        self.assertEqual(actual_to, date(2026, 11, 24))
+        expired_fetch.assert_called_once_with(key, self.FROM_DATE, self.TO_DATE)
+
+    @patch("services.supertrend_analysis_service._market_today", return_value=date(2026, 11, 28))
+    @patch("services.supertrend_analysis_service._fetch_expired_candles", return_value=[])
+    @patch("services.supertrend_analysis_service.expired_instruments_service.get_expired_option_contracts")
+    @patch("services.supertrend_analysis_service.expired_instruments_service.get_expiries")
+    @patch(
+        "services.supertrend_analysis_service._fetch_active_candles",
+        side_effect=HTTPException(
+            status_code=502,
+            detail="UPSTOX_INVALID_INSTRUMENT_KEY: Upstox rejected the two-part instrument key",
+        ),
+    )
+    def test_two_part_expired_key_is_resolved_by_exact_exchange_token(
+        self, active_fetch, get_expiries, get_contracts, expired_fetch, _today
+    ):
+        get_expiries.return_value = {"status": "ok", "expiries": ["2026-11-27"]}
+        get_contracts.return_value = {
+            "status": "ok",
+            "contracts": [{
+                "exchange_token": "64492",
+                "instrument_key": "NSE_FO|64492|27-11-2026",
+            }],
+        }
+
+        candles, mode, actual_to = fetch_historical_candles(
+            "NSE_FO|64492", self.FROM_DATE, self.TO_DATE, self.TARGET_DATE,
+            underlying_key="NSE_INDEX|Nifty 50",
+        )
+
+        self.assertEqual(candles, [])
+        self.assertEqual(mode, "expired")
+        self.assertEqual(actual_to, self.TO_DATE)
+        get_expiries.assert_called_once_with("NSE_INDEX|Nifty 50")
+        get_contracts.assert_called_once_with("NSE_INDEX|Nifty 50", "2026-11-27")
+        expired_fetch.assert_called_once_with(
+            "NSE_FO|64492|27-11-2026", self.FROM_DATE, self.TO_DATE
+        )
+
+    @patch(
+        "services.supertrend_analysis_service._fetch_active_candles",
+        side_effect=HTTPException(
+            status_code=502,
+            detail="UPSTOX_INVALID_INSTRUMENT_KEY: Upstox rejected the two-part instrument key",
+        ),
+    )
+    def test_expired_key_without_underlying_metadata_fails_clearly(self, _active_fetch):
+        with self.assertRaises(HTTPException) as raised:
+            fetch_historical_candles(
+                "NSE_FO|64492", self.FROM_DATE, self.TO_DATE, self.TARGET_DATE
+            )
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertIn("underlying_key is missing", raised.exception.detail)
 
 
 if __name__ == "__main__":
