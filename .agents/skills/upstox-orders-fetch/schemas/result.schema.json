@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["status", "kind", "filters", "count", "orders", "raw_response", "errors"],
+  "properties": {
+    "status": {"type": "string", "enum": ["success", "partial", "error"]},
+    "kind": {"type": "string", "enum": ["all", "normal", "gtt"]},
+    "filters": {"type": "object"},
+    "count": {"type": "integer", "minimum": 0},
+    "orders": {"type": "array", "items": {"type": "object"}},
+    "raw_response": {},
+    "errors": {"type": "array", "items": {"type": "object"}}
+  },
+  "additionalProperties": true
+}
