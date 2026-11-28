@@ -3,6 +3,9 @@ name: upstox-gtt-modify
 description: Safely inspect and modify one or more trigger prices (ENTRY, STOPLOSS, and/or TARGET) on an existing Upstox GTT in one modification request while retaining all other GTT rules and settings. Use when the user asks to change an existing GTT order.
 category: Orders
 access: write-capable
+execution: direct-python
+script: scripts/modify_gtt.py
+result_schema: schemas/result.schema.json
 ---
 
 # Upstox GTT Modification
@@ -34,6 +37,16 @@ Modify one or more selected trigger prices on the same existing GTT order. The s
 - Any combination of distinct supported legs can be changed together, such as STOPLOSS and TARGET.
 - Each selected leg must occur exactly once in the existing GTT.
 - Existing unselected rules, quantity, GTT type, and supported per-rule settings are retained.
+
+## Validated JSON execution
+
+The modification handler emits a machine-readable preview/result and is available through:
+
+```bash
+algoai run upstox-gtt-modify --allow-write --result-format json --script-args-json '["--gtt-order-id","<gtt_order_id>","--update","TARGET=300"]'
+```
+
+The first invocation is preview-only. After reviewing the exact preview, explicitly approve it and rerun with `--confirm --expected-state-hash <state_fingerprint>`. The CLI write permission does not replace this fingerprint-bound confirmation.
 
 ## Multi-leg preview
 
