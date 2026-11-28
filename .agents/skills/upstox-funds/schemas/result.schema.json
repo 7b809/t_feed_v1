@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Upstox Available Funds and Margin Balances",
+  "type": "object",
+  "required": ["status", "segments"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {"type": "string", "const": "success"},
+    "segments": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "available_margin",
+          "used_margin",
+          "payin_amount",
+          "span_margin",
+          "adhoc_margin",
+          "exposure_margin",
+          "notional_cash"
+        ],
+        "properties": {
+          "available_margin": {"type": ["number", "integer", "null"]},
+          "used_margin": {"type": ["number", "integer", "null"]},
+          "payin_amount": {"type": ["number", "integer", "null"]},
+          "span_margin": {"type": ["number", "integer", "null"]},
+          "adhoc_margin": {"type": ["number", "integer", "null"]},
+          "exposure_margin": {"type": ["number", "integer", "null"]},
+          "notional_cash": {"type": ["number", "integer", "null"]}
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}
