@@ -5,7 +5,7 @@
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["PREVIEW", "SUCCESS", "API_ERROR", "ERROR"]
+      "enum": ["PREVIEW", "SUCCESS", "API_ERROR", "UNSUPPORTED", "ERROR"]
     },
     "submitted": {"type": "boolean"},
     "order": {"type": ["object", "null"]},
