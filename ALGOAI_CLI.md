@@ -12,7 +12,8 @@ The modular CLI retains the existing launch_upstox_agy.py entry point and ~/.loc
     algoai run upstox-funds --result-format json
     algoai run upstox-orders-fetch --result-format json --script-args-json '["--kind","all"]'
     algoai run upstox-portfolio --result-format json --script-args-json '["--kind","holdings"]'
-    algoai run upstox-order --allow-write --result-format json --script-args-json '["--instrument","<instrument_key>","--quantity","1","--order-type","LIMIT","--price","100"]'\n    algoai run upstox-gtt --allow-write --result-format json --script-args-json '["--instrument","<instrument_key>","--quantity","1","--entry-trigger","100","--sl-trigger","95","--target-trigger","110"]'\n    algoai run upstox-margin --result-format json --script-args-json '["--kind","brokerage","--instrument","NSE_EQ|<ISIN>","--quantity","1","--transaction-type","BUY","--product","D","--price","100"]'
+    algoai run upstox-order --allow-write --result-format json --script-args-json '["--instrument","<instrument_key>","--quantity","1","--order-type","LIMIT","--price","100"]'
+    algoai run upstox-gtt --allow-write --result-format json --script-args-json '["--instrument","<instrument_key>","--quantity","1","--entry-trigger","100","--sl-trigger","95","--target-trigger","110"]'\n    algoai run upstox-margin --result-format json --script-args-json '["--kind","brokerage","--instrument","NSE_EQ|<ISIN>","--quantity","1","--transaction-type","BUY","--product","D","--price","100"]'
     algoai run upstox-gtt-modify --allow-write --result-format json --script-args-json '["--gtt-order-id","<id>","--update","TARGET=300"]'
     algoai --skip-permissions --prompt "Existing free-form prompt"
 
@@ -30,7 +31,7 @@ The CLI runs the declared Python script with the same injected Upstox access tok
 
 Read-only JSON skills include funds, order fetch (normal and GTT), portfolio holdings/positions, and margin/brokerage calculations. Normal order placement and GTT placement have preview-first JSON handlers: --allow-write plus the exact preview hash is required for execution. GTT modification also has a direct JSON handler and requires --allow-write, its preview, exact state_fingerprint confirmation, re-fetch and verification.
 
-Normal order placement and GTT placement remain on their existing AGY workflows until their scripts are converted to safe preview-by-default handlers. Do not use --skip-permissions or --allow-write as a substitute for explicit approval of the exact live order.
+Normal order placement and GTT placement now use direct JSON handlers that are preview-only by default. Do not use --skip-permissions or --allow-write as a substitute for explicit approval of the exact live order and preview hash.
 
 ## Skill discovery
 
