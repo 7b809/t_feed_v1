@@ -1750,26 +1750,16 @@
     return String(v);
   }
 
-  // Build a chart URL keyed on the instrument token.
-  // Source = UPSTOX_APP_V2, so we default to Upstox Pro's chart route
-  // which accepts Upstox `instrument_key` values (EXCHANGE_SEGMENT|TOKEN).
-  // Adjust the base URL here if your environment uses a different host.
-  function chartUrl(token, symbol) {
-  var t = token ? String(token).trim() : "";
-  var s = symbol ? String(symbol).trim() : "";
-  // Prefer the numeric exchange token. If what we got looks like
-  // "NSE_FO|47855", strip everything up to the pipe to get "47855".
-  console.log("chartUrl() token:", t, "symbol:", s);
-  if (t) {
-    var pipeIdx = t.indexOf("|");
-    var numeric = pipeIdx !== -1 ? t.slice(pipeIdx + 1) : t;
-    return "/chart/" + encodeURIComponent(numeric);
+  // The chart route expects the complete Upstox instrument_key:
+  // /chart/{instrument_key:path}, e.g. /chart/NSE_FO%7C64473.
+  // Never strip the exchange segment or fall back to a trading symbol.
+  function chartUrl(instrumentKey) {
+    var key = instrumentKey ? String(instrumentKey).trim() : "";
+    if (!key || key.indexOf("|") <= 0 || !key.split("|").slice(1).join("|").trim()) {
+      return null;
+    }
+    return "/chart/" + encodeURIComponent(key);
   }
-  if (s) {
-    return "/chart/" + encodeURIComponent(s);
-  }
-  return null;
-}
 
   // ---- extraction --------------------------------------------------------
   function readRawJson(card) {
@@ -1797,22 +1787,21 @@
       "data.trading_symbol", "data.symbol"
     ]) || headSymbol;
 
+    // Keep the full Upstox instrument key. Numeric exchange_token values
+    // are not valid path parameters for this app's /chart/{instrument_key:path}.
     var token = firstOf(data, [
-  // Numeric exchange token — preferred for /chart/{token}
-  "exchange_token", "exchangeToken",
-  "instrument.exchange_token", "instrument.exchangeToken",
-  "event.exchange_token", "event.exchangeToken",
-  "payload.exchange_token", "payload.exchangeToken",
-  "data.exchange_token", "data.exchangeToken",
-
-  // Fall back to full instrument_key / instrument_token if exchange_token missing
-  "instrument_token", "instrumentToken", "token",
-  "instrument_key", "instrumentKey",
-  "instrument.token", "instrument.instrument_token", "instrument.instrument_key",
-  "event.instrument_token", "event.instrumentToken", "event.instrument_key",
-  "payload.instrument_token", "payload.token", "payload.instrument_key",
-  "data.instrument_token", "data.token", "data.instrument_key"
-]) || "";
+      "instrument_key", "instrumentKey",
+      "instrument.instrument_key", "instrument.instrumentKey",
+      "event.instrument_key", "event.instrumentKey",
+      "payload.instrument_key", "payload.instrumentKey",
+      "data.instrument_key", "data.instrumentKey",
+      // Accept aliases only when they already contain the full EXCHANGE|TOKEN key.
+      "instrument_token", "instrumentToken", "token",
+      "instrument.token", "instrument.instrument_token",
+      "event.instrument_token", "event.instrumentToken",
+      "payload.instrument_token", "payload.token",
+      "data.instrument_token", "data.token"
+    ]) || "";
 
     var isolateTime = firstOf(data, [
       "isolate_time", "isolateTime",
@@ -1919,17 +1908,15 @@
     wrap.appendChild(copyBtn);
 
     // Chart link
-    var url = chartUrl(info.token, info.symbol);
+    var url = chartUrl(info.token);
     if (url) {
       var chart = document.createElement("a");
       chart.className = "pv-event-action-btn chart";
       chart.href = url;
       chart.target = "_blank";
       chart.rel = "noopener noreferrer";
-      chart.title = info.token
-        ? "Open chart for instrument token " + info.token
-        : "Open chart for " + info.symbol;
-      chart.dataset.instrumentToken = info.token || "";
+      chart.title = "Open chart for " + info.token;
+      chart.dataset.instrumentKey = info.token || "";
       chart.innerHTML = '<i class="bi bi-graph-up-arrow"></i> Chart';
       wrap.appendChild(chart);
     }
