@@ -1701,7 +1701,7 @@
      EVENT CARD ENRICHER
      Replaces the old expandable JSON footer with:
        · Highlight chips (isolate time · symbol · opposite symbol)
-       · "Copy raw" button (writes JSON doc to clipboard)
+       · "Copy raw" button (writes formatted JSON doc to clipboard)
        · "Chart" link (built from instrument token)
      ============================================================ -->
 <script>
@@ -1750,30 +1750,76 @@
     return String(v);
   }
 
+  // Parses strings that may contain a primary JSON object followed by
+  // "\n\nFull source document:\n" and a second JSON object.
+  function parseRawSections(raw) {
+    if (!raw || typeof raw !== "string") {
+      return { primary: null, fullDoc: null, formattedText: "" };
+    }
+
+    var trimmed = raw.trim();
+    var marker = "Full source document:";
+    var idx = trimmed.indexOf(marker);
+
+    if (idx === -1) {
+      try {
+        var parsedSingle = JSON.parse(trimmed);
+        return {
+          primary: parsedSingle,
+          fullDoc: null,
+          formattedText: JSON.stringify(parsedSingle, null, 2)
+        };
+      } catch (e) {
+        return { primary: null, fullDoc: null, formattedText: raw };
+      }
+    }
+
+    var firstPart = trimmed.slice(0, idx).trim();
+    var secondPart = trimmed.slice(idx + marker.length).trim();
+
+    var primary = null;
+    var fullDoc = null;
+
+    try { if (firstPart) primary = JSON.parse(firstPart); } catch (e) { /* keep null */ }
+    try { if (secondPart) fullDoc = JSON.parse(secondPart); } catch (e) { /* keep null */ }
+
+    var sections = [];
+    if (primary) {
+      sections.push(JSON.stringify(primary, null, 2));
+    } else if (firstPart) {
+      sections.push(firstPart);
+    }
+
+    if (fullDoc) {
+      sections.push("Full source document:\n" + JSON.stringify(fullDoc, null, 2));
+    } else if (secondPart) {
+      sections.push("Full source document:\n" + secondPart);
+    }
+
+    return {
+      primary: primary,
+      fullDoc: fullDoc,
+      formattedText: sections.join("\n\n") || raw
+    };
+  }
+
   // The chart route expects the complete Upstox instrument_key:
   // /chart/{instrument_key:path}, e.g. /chart/NSE_FO%7C64473.
   // Never strip the exchange segment or fall back to a trading symbol.
   function chartUrl(instrumentKey) {
     var key = instrumentKey ? String(instrumentKey).trim() : "";
-    if (!key || key.indexOf("|") <= 0 || !key.split("|").slice(1).join("|").trim()) {
-      return null;
-    }
+    if (!key) return null;
     return "/chart/" + encodeURIComponent(key);
   }
 
   // ---- extraction --------------------------------------------------------
   function readRawJson(card) {
-    // Current event cards serialize the complete Mongo document directly
-    // into data-pv-raw-json. getAttribute() returns the browser-decoded
-    // attribute value, so JSON entities such as &quot; are handled safely.
     var attributeJson = card.getAttribute("data-pv-raw-json");
     if (attributeJson) {
       card.dataset.pvRawJson = attributeJson;
       return attributeJson;
     }
 
-    // Backward compatibility with older cards that rendered a hidden
-    // .pv-event-json element.
     var jsonEl = card.querySelector(".pv-event-json");
     if (jsonEl) {
       var txt = (jsonEl.textContent || "").trim();
@@ -1786,10 +1832,8 @@
   }
 
   function extractInfo(card, rawJson) {
-    var data = {};
-    if (rawJson) {
-      try { data = JSON.parse(rawJson) || {}; } catch (e) { data = {}; }
-    }
+    var parsed = parseRawSections(rawJson);
+    var data = parsed.fullDoc || parsed.primary || {};
     var headSymbol = (card.querySelector(".pv-event-symbol") || {}).textContent || "";
 
     var symbol = firstOf(data, [
@@ -1798,18 +1842,17 @@
       "instrument.trading_symbol", "instrument.tradingSymbol",
       "event.trading_symbol", "event.symbol",
       "payload.trading_symbol", "payload.symbol",
-      "data.trading_symbol", "data.symbol"
+      "data.trading_symbol", "data.symbol",
+      "explanation.option_snapshot.trading_symbol"
     ]) || headSymbol;
 
-    // Keep the full Upstox instrument key. Numeric exchange_token values
-    // are not valid path parameters for this app's /chart/{instrument_key:path}.
     var token = firstOf(data, [
       "instrument_key", "instrumentKey",
       "instrument.instrument_key", "instrument.instrumentKey",
       "event.instrument_key", "event.instrumentKey",
       "payload.instrument_key", "payload.instrumentKey",
       "data.instrument_key", "data.instrumentKey",
-      // Accept aliases only when they already contain the full EXCHANGE|TOKEN key.
+      "explanation.option_snapshot.instrument_key",
       "instrument_token", "instrumentToken", "token",
       "instrument.token", "instrument.instrument_token",
       "event.instrument_token", "event.instrumentToken",
@@ -1818,6 +1861,7 @@
     ]) || "";
 
     var isolateTime = firstOf(data, [
+      "isolation_touch_time", "isolation_created_at",
       "isolate_time", "isolateTime",
       "isolated_at", "isolatedAt",
       "isolated_time", "isolatedTime",
@@ -1828,6 +1872,7 @@
     ]) || "";
 
     var opposite = firstOf(data, [
+      "opposite_leg",
       "opposite_symbols", "oppositeSymbols",
       "opposite_symbol", "oppositeSymbol",
       "opposite_instruments", "oppositeInstruments",
@@ -1841,8 +1886,9 @@
       token:       token  ? String(token).trim()  : "",
       isolateTime: isolateTime ? String(isolateTime).trim() : "",
       opposite:    formatOpposite(opposite),
-      raw:         rawJson,
-      data:        data
+      raw:         parsed.formattedText || rawJson,
+      data:        data,
+      parsed:      parsed
     };
   }
 
@@ -1882,11 +1928,11 @@
     var wrap = document.createElement("div");
     wrap.className = "pv-event-actions";
 
-    // Copy raw doc
+    // Copy raw doc (formatted JSON)
     var copyBtn = document.createElement("button");
     copyBtn.type = "button";
     copyBtn.className = "pv-event-action-btn copy";
-    copyBtn.title = "Copy raw event document";
+    copyBtn.title = "Copy formatted JSON event document";
     copyBtn.innerHTML = '<i class="bi bi-clipboard"></i> Copy raw';
     copyBtn.addEventListener("click", function () {
       var text = info.raw || "";
@@ -1943,10 +1989,8 @@
     if (!card) return;
     var foot = card.querySelector(".pv-event-foot");
 
-    // Already processed and no fresh re-render → skip
     if (card.dataset.pvProcessed === "1" && !foot) return;
 
-    // Clean up previous additions (re-render case)
     Array.prototype.forEach.call(
       card.querySelectorAll(".pv-event-actions, .pv-event-highlights"),
       function (el) { el.parentNode && el.parentNode.removeChild(el); }
@@ -1955,7 +1999,6 @@
     var rawJson = readRawJson(card);
     var info = extractInfo(card, rawJson);
 
-    // Replace foot with actions
     var actions = buildActions(info);
     if (foot) {
       foot.parentNode.insertBefore(actions, foot);
@@ -1964,7 +2007,6 @@
       card.appendChild(actions);
     }
 
-    // Insert highlights into the card head (after the badges)
     var head = card.querySelector(".pv-event-card-head");
     if (head) {
       var highlights = buildHighlights(info);
