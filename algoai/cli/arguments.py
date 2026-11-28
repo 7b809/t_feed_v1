@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import List, Optional
 
+
 def _add_run_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("-m", "--model", default=None)
     parser.add_argument("--skip-permissions", action="store_true")
@@ -11,9 +12,12 @@ def _add_run_options(parser: argparse.ArgumentParser) -> None:
                         help="AGY transport/output format (not the skill result schema).")
     parser.add_argument("--result-format", choices=["text", "json"], default="text",
                         help="Skill result format; json emits only schema-validated JSON.")
+    parser.add_argument("--script-args-json", default=None,
+                        help="JSON array of strings passed to a declared direct-Python skill handler.")
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("-y", "--elapsed-log", action="store_true")
     parser.add_argument("--progress-interval", type=int, default=5)
+
 
 def parse_legacy_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="algoai",
@@ -26,6 +30,7 @@ def parse_legacy_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     args.prompt = args.flag_prompt if args.flag_prompt is not None else args.positional_prompt
     args.command = "prompt"
     return args
+
 
 def parse_subcommand_args(argv: List[str]) -> argparse.Namespace:
     command = argv[0]
@@ -60,6 +65,7 @@ def parse_subcommand_args(argv: List[str]) -> argparse.Namespace:
         args.prompt = " ".join(args.context).strip() or None
         return args
     raise ValueError(f"Unsupported command: {command}")
+
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     import sys
