@@ -404,8 +404,14 @@ def main() -> int:
             status_code = getattr(exc, "status", None)
             raw = getattr(exc, "body", None)
             try:
-                detail = json.loads(raw) if isinstance(raw, str) else to_plain(raw)
-            except (json.JSONDecodeError, TypeError):
+                if isinstance(raw, bytes):
+                    raw_text = raw.decode("utf-8", errors="replace")
+                    detail = json.loads(raw_text)
+                elif isinstance(raw, str):
+                    detail = json.loads(raw)
+                else:
+                    detail = to_plain(raw)
+            except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
                 detail = {"body": str(raw) if raw is not None else str(exc)}
             return emit({
                 "status": "API_ERROR",
