@@ -82,7 +82,12 @@ class SupertrendHistoricalRoutingTests(unittest.TestCase):
     def test_two_part_expired_key_is_resolved_by_exact_exchange_token(
         self, active_fetch, get_expiries, get_contracts, expired_fetch, _today
     ):
-        get_expiries.return_value = {"status": "ok", "expiries": ["2026-11-27"]}
+        get_expiries.side_effect = [
+            {"status": "ok", "expiries": []},
+            {"status": "ok", "expiries": []},
+            {"status": "ok", "expiries": ["2026-11-27"]},
+            {"status": "ok", "expiries": []},
+        ]
         get_contracts.return_value = {
             "status": "ok",
             "contracts": [{
@@ -93,14 +98,13 @@ class SupertrendHistoricalRoutingTests(unittest.TestCase):
 
         candles, mode, actual_to = fetch_historical_candles(
             "NSE_FO|64492", self.FROM_DATE, self.TO_DATE, self.TARGET_DATE,
-            underlying_key="NSE_INDEX|Nifty 50",
         )
 
         self.assertEqual(candles, [])
         self.assertEqual(mode, "expired")
         self.assertEqual(actual_to, self.TO_DATE)
-        get_expiries.assert_called_once_with("NSE_INDEX|Nifty 50")
-        get_contracts.assert_called_once_with("NSE_INDEX|Nifty 50", "2026-11-27")
+        self.assertEqual(get_expiries.call_count, 3)
+        get_contracts.assert_called_once_with("NSE_INDEX|NIFTY MID SELECT", "2026-11-27")
         expired_fetch.assert_called_once_with(
             "NSE_FO|64492|27-11-2026", self.FROM_DATE, self.TO_DATE
         )
@@ -117,8 +121,8 @@ class SupertrendHistoricalRoutingTests(unittest.TestCase):
             fetch_historical_candles(
                 "NSE_FO|64492", self.FROM_DATE, self.TO_DATE, self.TARGET_DATE
             )
-        self.assertEqual(raised.exception.status_code, 422)
-        self.assertIn("underlying_key is missing", raised.exception.detail)
+        self.assertEqual(raised.exception.status_code, 404)
+        self.assertIn("No expired contract matched", raised.exception.detail)
 
 
 if __name__ == "__main__":
