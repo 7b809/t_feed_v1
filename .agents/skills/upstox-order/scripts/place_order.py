@@ -132,9 +132,14 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict | No
 
     # Expiry is a single date/keyword in this API; never send a comma-separated list.
     expiry_values: list[str | None] = [expiry_value]
-    if segment == "FO" and not expiry_value:
-        expiry_values.extend(["current_week", "next_week", "current_month",
-                              "next_month", "far_month"])
+    if segment == "FO":
+        # Try the parsed exact date first, then individual expiry buckets if
+        # Instrument Search does not return the exact contract for that date.
+        expiry_values.extend(
+            value for value in
+            ["current_week", "next_week", "current_month", "next_month", "far_month"]
+            if value not in expiry_values
+        )
 
     for search_query in queries:
         for expiry in expiry_values:
