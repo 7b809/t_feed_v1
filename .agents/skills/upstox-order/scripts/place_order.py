@@ -8,8 +8,6 @@ import math
 import os
 import re
 import sys
-import urllib.error
-import urllib.request
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any
@@ -111,7 +109,7 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict | No
                              symbol_upper)
     month_codes = {
         "F": 1, "G": 2, "H": 3, "J": 4, "K": 5, "M": 6,
-        "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 11,
+        "N": 7, "Q": 8, "U": 9, "V": 10, "X": 11, "Z": 12,
         "A": 1, "B": 2, "C": 3, "D": 12,
     }
     if expiry_match and expiry_match.group(2) in month_codes:
@@ -284,11 +282,7 @@ def main() -> int:
             )
 
         client = get_client()
-        quote = None
-        quote_raw = None
-        if args.order_type == "LIMIT" and str(args.price).lower() == "market":
-            quote, quote_raw = fetch_quote(client, args.instrument)
-        metadata = fetch_instrument_metadata(client, args.instrument, quote)
+        # Always resolve the canonical symbol from LTP before metadata lookup.\n        quote, quote_raw = fetch_quote(client, args.instrument)\n        metadata = fetch_instrument_metadata(client, args.instrument, quote)
         lot_size = metadata["lot_size"]
 
         if args.lots is not None:
@@ -351,10 +345,14 @@ def main() -> int:
             "market_quote": quote_raw,
             "preview_hash": fingerprint,
             "confirmation_required": True,
+            "amo_note": (\n                "AMO is requested by default. Upstox determines whether the request is "
+                "treated as AMO from the market session; an AMO request during active "
+                "market hours may be rejected or treated as a regular order. Check the "
+                "session before confirming."\n            ),
             "message": (
                 "No order was placed. Review the exact order and preview_hash. "
-                "For confirmation, repeat the command with the resolved --quantity "
-                "and numeric --price shown in this preview, plus --confirm and the hash."
+                "For confirmation, repeat with the resolved --quantity and numeric "
+                "--price shown here, plus --confirm and the hash."
             ),
         }
         if not args.confirm:
@@ -370,19 +368,7 @@ def main() -> int:
         token = os.getenv("UPSTOX_ACCESS_TOKEN", "").strip()
         if not token:
             raise RuntimeError("UPSTOX_ACCESS_TOKEN is not set in the process environment.")
-        req = urllib.request.Request(
-            "https://api.upstox.com/v2/order/place",
-            data=json.dumps(payload).encode(),
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-                "Authorization": f"Bearer {token}",
-            },
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=15) as response:
-                body = json.loads(response.read().decode("utf-8"))
+        # Use the project-verified SDK V3 order endpoint and typed request model.\n        import upstox_client\n        body_model = upstox_client.PlaceOrderV3Request(**payload)\n        try:\n            response = upstox_client.OrderApiV3(client).place_order(body_model)\n            body = to_plain(response)
             return emit({
                 "status": "SUCCESS",
                 "order": payload,
@@ -393,18 +379,13 @@ def main() -> int:
                     "Upstox accepted the order request. This does not confirm an execution/fill."
                 ),
             })
-        except urllib.error.HTTPError as exc:
-            raw = exc.read().decode("utf-8", errors="replace")
-            try:
-                detail = json.loads(raw)
-            except json.JSONDecodeError:
-                detail = {"body": raw}
+        except Exception as exc:\n            status_code = getattr(exc, "status", None)\n            raw = getattr(exc, "body", None)\n            try:\n                detail = json.loads(raw) if isinstance(raw, str) else to_plain(raw)\n            except (json.JSONDecodeError, TypeError):\n                detail = {"body": str(raw) if raw is not None else str(exc)}
             return emit({
                 "status": "API_ERROR",
                 "order": payload,
                 "instrument_metadata": metadata,
                 "preview_hash": fingerprint,
-                "http_status": exc.code,
+                "http_status": status_code,
                 "api_response": detail,
             }, 1)
 
