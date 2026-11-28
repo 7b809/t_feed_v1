@@ -762,7 +762,9 @@ body { background: var(--bg); color: var(--text); overflow: hidden; }
 {% block content %}
 {% set _sym = (instrument.get('trading_symbol') or '') | string | trim %}
 {% set _sym_ok = _sym and not _sym.isdigit() %}
-{% set display_symbol = _sym if _sym_ok else (instrument_name or instrument_key) %}
+{% set _override = (instrument_name or '') | string | trim %}
+{# Priority: ?symbol= override → resolved trading_symbol → raw instrument_key #}
+{% set display_symbol = _override if _override else (_sym if _sym_ok else instrument_key) %}
 
 <div class="sub-header px-3 d-flex align-items-center gap-2">
   <div class="global-search">

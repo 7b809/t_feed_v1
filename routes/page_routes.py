@@ -179,10 +179,24 @@ def charts_page(request: Request) -> HTMLResponse:
 
 
 @router.get("/chart/{instrument_key:path}", response_class=HTMLResponse)
-def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
+def chart_page(
+    request: Request,
+    instrument_key: str,
+    symbol: str | None = None,          # ← NEW: optional ?symbol= override
+) -> HTMLResponse:
     """Chart page."""
     instrument = _build_instrument_context(instrument_key)
-    instrument_name = instrument.get("trading_symbol") or instrument_key
+
+    # Prefer the ?symbol= hint from the URL (e.g. when the enricher opens
+    # /chart/NSE_FO%7C47855?symbol=NIFTY 25900 CE 01 DEC 26 from the
+    # isolation dashboard). Fall back to the Upstox-resolved name, then
+    # to the raw key.
+    query_symbol = (symbol or "").strip()
+    instrument_name = (
+        query_symbol
+        or instrument.get("trading_symbol")
+        or instrument_key
+    )
 
     return templates.TemplateResponse(
         request=request,
@@ -195,12 +209,10 @@ def chart_page(request: Request, instrument_key: str) -> HTMLResponse:
             "instrument": instrument,
             "instruments": _build_side_panel_instruments(),
             "total_candles": 0,
-            # NEW — single-source-of-truth for the SR Params card
             "sr_left_bars": config.LIVE_SR_LEFT_BARS,
             "sr_right_bars": config.LIVE_SR_RIGHT_BARS,
         },
     )
-
 
 @router.get("/isolated", response_class=HTMLResponse)
 def isolated_page(request: Request) -> HTMLResponse:
