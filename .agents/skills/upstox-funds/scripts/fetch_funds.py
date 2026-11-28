@@ -54,8 +54,10 @@ def main() -> int:
     try:
         configuration = upstox_client.Configuration()
         configuration.access_token = token
-        with upstox_client.ApiClient(configuration) as api_client:
-            response = upstox_client.UserApi(api_client).get_user_fund_margin_v3()
+        # Upstox Python SDK ApiClient is not a context manager in all
+        # supported SDK versions; instantiate it directly.
+        api_client = upstox_client.ApiClient(configuration)
+        response = upstox_client.UserApi(api_client).get_user_fund_margin_v3()
         data = _get(response, "data")
         if data is None:
             raise RuntimeError("Upstox funds response did not contain data.")
