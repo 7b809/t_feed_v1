@@ -2322,38 +2322,50 @@
     return wrap;
   }
 
-  // ---- post-processing ---------------------------------------------------
-  function processCard(card) {
-    if (!card) return;
-    var foot = card.querySelector(".pv-event-foot");
+// ---- post-processing ---------------------------------------------------
+function processCard(card) {
+  if (!card) return;
 
-    if (card.dataset.pvProcessed === "1" && !foot) return;
+  var foot = card.querySelector(".pv-event-foot");
 
-    Array.prototype.forEach.call(
-      card.querySelectorAll(".pv-event-actions, .pv-event-highlights"),
-      function (el) { el.parentNode && el.parentNode.removeChild(el); }
-    );
+  // Already processed and no stale footer left behind → nothing to do
+  if (card.dataset.pvProcessed === "1" && !foot) return;
 
-    var rawJson = readRawJson(card);
-    var info = extractInfo(card, rawJson);
+  // Remove any previously injected / duplicate action + highlight blocks
+  Array.prototype.forEach.call(
+    card.querySelectorAll(".pv-event-actions, .pv-event-highlights"),
+    function (el) { el.parentNode && el.parentNode.removeChild(el); }
+  );
 
-    var actions = buildActions(info, card);
-    if (foot) {
-      foot.parentNode.insertBefore(actions, foot);
-      foot.parentNode.removeChild(foot);
+  var rawJson = readRawJson(card);
+  var info = extractInfo(card, rawJson);
+
+  // ---- Actions go at the TOP of the card ----
+  var actions = buildActions(info, card);
+  if (actions) {
+    if (card.firstChild) {
+      card.insertBefore(actions, card.firstChild);
     } else {
       card.appendChild(actions);
     }
-
-    var head = card.querySelector(".pv-event-card-head");
-    if (head) {
-      var highlights = buildHighlights(info);
-      if (highlights.children.length) head.appendChild(highlights);
-    }
-
-    card.dataset.pvProcessed = "1";
   }
 
+  // Old footer is now redundant → remove it
+  if (foot && foot.parentNode) {
+    foot.parentNode.removeChild(foot);
+  }
+
+  // ---- Highlights stay attached to the card head ----
+  var head = card.querySelector(".pv-event-card-head");
+  if (head) {
+    var highlights = buildHighlights(info);
+    if (highlights && highlights.children.length) {
+      head.appendChild(highlights);
+    }
+  }
+
+  card.dataset.pvProcessed = "1";
+}
   function processAll() {
     var cards = list.querySelectorAll(".pv-event-card");
     Array.prototype.forEach.call(cards, processCard);
