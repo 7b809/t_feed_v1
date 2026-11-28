@@ -17,7 +17,7 @@ This document describes the Upstox agent skills currently present in this reposi
 | `upstox-orders-fetch` | Fetch normal orders, GTT orders, or a specific order; filter results | Read-only | `.agents/skills/upstox-orders-fetch/SKILL.md` |
 | `upstox-gtt-cleanup` | Cancel untriggered GTTs and exit positions only when triggered-entry fills reconcile exactly | Writes cancellations and market exits; preview + exact fingerprint confirmation | `.agents/skills/upstox-gtt-cleanup/SKILL.md` |
 | `upstox-normal-order-cleanup` | Cancel pending normal orders and exit positions only when today's trades reconcile exactly | Writes cancellations and market exits; preview + exact fingerprint confirmation | `.agents/skills/upstox-normal-order-cleanup/SKILL.md` |
-| `upstox-pnl` | Fetch today's positions and P&L | Read-only | `.agents/skills/upstox-pnl/SKILL.md` |
+| `upstox-pnl` | Fetch today's positions and P&L | Read-only | `.agents/skills/upstox-pnl/SKILL.md` |\n| `upstox-portfolio` | Fetch complete holdings or current positions | Read-only JSON handler | `.agents/skills/upstox-portfolio/SKILL.md` |\n| `upstox-margin` | Calculate required margin or brokerage charges | Read-only JSON handler | `.agents/skills/upstox-margin/SKILL.md` |
 
 The named skills after the general `upstox` skill are focused workflows. The general skill also contains shared API guidance and reference documents; it is not limited to a single script.
 
@@ -60,7 +60,7 @@ algoai --skip-permissions --prompt "Use the upstox skill and its instrument sear
 
 **Use it for:** Placing one normal Upstox MARKET or LIMIT order using the dedicated `place_order.py` script.
 
-**Script:** `.agents/skills/upstox-order/scripts/place_order.py`
+**Script:** `.agents/skills/upstox-order/scripts/place_order.py`\n\nThe direct JSON handler is preview-only by default. It requires explicit `--confirm --expected-preview-hash <hash>` to submit, and the hash must match the exact order payload.
 
 **Supported order modes described by the skill:**
 - MARKET: `--order-type MARKET --price 0`
@@ -84,7 +84,7 @@ algoai --skip-permissions --prompt "Use the upstox-order skill to prepare a MARK
 
 **Use it for:** Placing a standard GTT order with an instrument, quantity, entry trigger, stop-loss trigger and target trigger.
 
-**Script:** `.agents/skills/upstox-gtt/scripts/place_gtt.py`
+**Script:** `.agents/skills/upstox-gtt/scripts/place_gtt.py`\n\nThe direct JSON handler is preview-only by default. It requires explicit `--confirm --expected-preview-hash <hash>` to submit, and the hash must match the exact GTT payload.
 
 **Inputs used by the script:**
 - `--instrument "<instrument_key>"`
@@ -380,3 +380,26 @@ Apply these rules across the Upstox workflows:
 ---
 
 **Maintenance:** Update this catalog whenever a skill directory, its `SKILL.md`, supported script options, or reference documents are added, removed or changed. Treat each skill's own `SKILL.md` as the authoritative operational instruction; this catalog is the navigation and prompt-example guide.
+
+
+## 15. Dedicated JSON portfolio and margin handlers
+
+### `upstox-portfolio`
+
+Fetch holdings or positions with complete raw API responses:
+
+```bash
+algoai run upstox-portfolio --result-format json --script-args-json '["--kind","holdings"]'
+algoai run upstox-portfolio --result-format json --script-args-json '["--kind","positions"]'
+```
+
+### `upstox-margin`
+
+Calculate required margin or estimated brokerage using explicit instrument, quantity, transaction side, product and price:
+
+```bash
+algoai run upstox-margin --result-format json --script-args-json '["--kind","required-margin","--instrument","<instrument_key>","--quantity","<qty>","--transaction-type","BUY","--product","I","--price","<price>"]'
+algoai run upstox-margin --result-format json --script-args-json '["--kind","brokerage","--instrument","<instrument_key>","--quantity","<qty>","--transaction-type","BUY","--product","D","--price","<price>"]'
+```
+
+These are calculation/read operations only. The margin API uses POST for calculation; it does not place an order.
