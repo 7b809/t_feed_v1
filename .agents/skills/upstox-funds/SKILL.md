@@ -10,7 +10,7 @@ result_schema: schemas/result.schema.json
 
 # Upstox Available Funds Skill
 
-Fetch the current funds/margin balance from Upstox using `UserApi.get_user_fund_margin_v3()`.
+Fetch the current funds/margin balance from Upstox using `UserApi.get_user_fund_margin_v3()`. The v3 payload is returned under `funds.available_to_trade` and `funds.unavailable_to_trade`.
 
 ## Security and execution
 - Read `UPSTOX_ACCESS_TOKEN` only from the process environment.
@@ -19,5 +19,6 @@ Fetch the current funds/margin balance from Upstox using `UserApi.get_user_fund_
 - This is a read-only API operation. Never place, modify, or cancel orders.
 - For `--result-format json`, the launcher executes the declared Python script directly and validates its output against `schemas/result.schema.json`.
 - Return structured JSON for API/response-shape failures using status=error, a clear message, error type, and the raw Upstox response when one was received. Do not emit these expected operational failures as unstructured stderr text.
-- Preserve every segment returned by the API. Do not assume only equity and commodity segments exist.
-- Report the API's available/used margin and other returned fund fields without calculating or inventing values.
+- Preserve the complete nested `data` object under `funds`, including `available_to_trade`, `unavailable_to_trade`, all nested cash/pledge/margin fields, and any future fields returned by Upstox.
+- Do not flatten the payload into legacy equity/commodity fields or insert null placeholders for fields that are not present.
+- Preserve the complete JSON-compatible Upstox response under `raw_response` for debugging. Never include access tokens, authorization headers, or SDK configuration objects.
