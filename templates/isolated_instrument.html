@@ -291,7 +291,7 @@
   overflow-wrap:anywhere;font-variant-numeric:tabular-nums;
 }
 
-/* ---------- Trigger card (highlighted) ---------- */
+/* ---------- Trigger card ---------- */
 .pv-trigger-card{
   border:2px solid #a5f3fc;
   background:linear-gradient(180deg,#ffffff 0%,#ecfeff 100%);
@@ -354,9 +354,7 @@
 .pv-level:nth-child(4n+3){background:linear-gradient(180deg,#ecfdf5,#d1fae5);border-color:#a7f3d0}
 .pv-level:nth-child(4n+4){background:linear-gradient(180deg,#fffbeb,#fef3c7);border-color:#fde68a}
 
-/* ============================================================
-   Collapsible, row-grouped opening-range levels
-   ============================================================ */
+/* Collapsible, row-grouped opening-range levels */
 #pv-levels-section .pv-section-head{
   cursor:pointer;user-select:none;transition:background .2s;
 }
@@ -544,7 +542,6 @@
 
 /* ============================================================
    MOBILE / TABLET  →  Today's Orders become scroll-free flex cards
-   No grid, no absolute positioning → no overlap on any device
    ============================================================ */
 @media (max-width:900px){
   .pv-orders-card .pv-table-wrap{
@@ -552,15 +549,12 @@
     -webkit-overflow-scrolling:auto;
     padding:14px 16px 16px;
   }
-
   .pv-table{
     display:block;width:100%;min-width:0;
     border-collapse:separate;border-spacing:0;font-size:.8rem;
   }
   .pv-table thead{display:none}
   .pv-table tbody{display:block}
-
-  /* --- each row is a flex-wrap container --- */
   .pv-table tbody tr{
     position:relative;
     display:flex;
@@ -581,8 +575,6 @@
     background:linear-gradient(180deg,#2563eb,#7c3aed);
     pointer-events:none;
   }
-
-  /* --- base cell --- */
   .pv-table td,
   .pv-table td.num{
     display:flex;
@@ -600,12 +592,9 @@
     overflow-wrap:anywhere;
     word-break:break-word;
   }
-
-  /* --- labels above values --- */
   .pv-table td::before{
     font-size:.56rem;font-weight:850;letter-spacing:.1em;
-    text-transform:uppercase;line-height:1;
-    color:currentColor;opacity:.62;
+    text-transform:uppercase;line-height:1;color:currentColor;opacity:.62;
   }
   .pv-table td:nth-child(1)::before,
   .pv-table td:nth-child(2)::before{content:none}
@@ -619,74 +608,47 @@
   .pv-table td:nth-child(9)::before{content:"P&L points"}
   .pv-table td:nth-child(10)::before{content:"P&L %"}
 
-  /* ---------- header line: instrument (grow) + state (fixed) ---------- */
   .pv-table td:nth-child(1){
     flex: 1 1 0;
-    padding:0 0 12px 0;
-    border-radius:0;
-    font-size:1rem;
-    font-weight:850;
-    line-height:1.25;
-    gap:3px;
-    overflow-wrap:anywhere;
-    word-break:break-word;
+    padding:0 0 12px 0;border-radius:0;
+    font-size:1rem;font-weight:850;line-height:1.25;gap:3px;
+    overflow-wrap:anywhere;word-break:break-word;
   }
-  .pv-table td:nth-child(1) strong{
-    display:block;overflow-wrap:anywhere;word-break:break-word;
-  }
+  .pv-table td:nth-child(1) strong{display:block;overflow-wrap:anywhere;word-break:break-word}
   .pv-table td:nth-child(2){
-    flex: 0 1 auto;
-    max-width: 60%;
-    padding:0 0 12px 0;
-    border-radius:0;
-    align-items:flex-end;
-    justify-content:flex-start;
+    flex: 0 1 auto;max-width: 60%;
+    padding:0 0 12px 0;border-radius:0;
+    align-items:flex-end;justify-content:flex-start;
   }
   .pv-table td:nth-child(2) .pv-pill{
-    font-size:.6rem;
-    padding:6px 10px;
-    border-radius:8px;
-    max-width:100%;
-    overflow:hidden;
-    text-overflow:ellipsis;
+    font-size:.6rem;padding:6px 10px;border-radius:8px;
+    max-width:100%;overflow:hidden;text-overflow:ellipsis;
   }
+  .pv-table td:nth-child(n+3){flex: 1 1 calc(50% - 5px)}
 
-  /* ---------- data cells: 2 per row ---------- */
-  .pv-table td:nth-child(n+3){
-    flex: 1 1 calc(50% - 5px);
-  }
-
-  /* --- highlighted values --- */
   .pv-table td:nth-child(3),
   .pv-table td:nth-child(7){
     background:linear-gradient(180deg,#f8fafc,#eef2f7);
-    color:#334155;
-    font-size:.86rem;
-    font-weight:800;
-    letter-spacing:.01em;
+    color:#334155;font-size:.86rem;font-weight:800;letter-spacing:.01em;
   }
   .pv-table td:nth-child(4){
     background:linear-gradient(180deg,#eff6ff,#dbeafe);
-    border:1px solid #bfdbfe;
-    color:#1d4ed8;
+    border:1px solid #bfdbfe;color:#1d4ed8;
     font-size:1.06rem;font-weight:850;
   }
   .pv-table td:nth-child(5){
     background:linear-gradient(180deg,#fef2f2,#fee2e2);
-    border:1px solid #fecaca;
-    color:#b91c1c;
+    border:1px solid #fecaca;color:#b91c1c;
     font-size:1.02rem;font-weight:850;
   }
   .pv-table td:nth-child(6){
     background:linear-gradient(180deg,#ecfdf5,#d1fae5);
-    border:1px solid #a7f3d0;
-    color:#047857;
+    border:1px solid #a7f3d0;color:#047857;
     font-size:1.02rem;font-weight:850;
   }
   .pv-table td:nth-child(8){
     background:linear-gradient(180deg,#f5f3ff,#ede9fe);
-    border:1px solid #ddd6fe;
-    color:#5b21b6;
+    border:1px solid #ddd6fe;color:#5b21b6;
     font-size:1.06rem;font-weight:850;
   }
   .pv-table td:nth-child(9),
@@ -696,8 +658,7 @@
     font-size:1.02rem;font-weight:850;
   }
   .pv-table td:nth-child(9) .pv-row-inr{
-    font-size:.68rem !important;
-    margin-top:2px !important;
+    font-size:.68rem !important;margin-top:2px !important;
   }
 }
 
@@ -736,7 +697,6 @@
   .pv-table td:nth-child(1){padding:0 0 12px 0;font-size:.94rem}
   .pv-table td:nth-child(2){padding:0 0 12px 0}
 
-  /* grouped levels — mobile flow */
   .pv-levels .pv-level-row-items .pv-level{
     flex:1 1 calc(33.333% - 5px);
     min-width:0;padding:8px 9px;
@@ -761,14 +721,17 @@
   .pv-table td:nth-child(8){font-size:1rem}
   .pv-table td:nth-child(n+3){flex:1 1 calc(50% - 4px)}
 
-  /* grouped levels — 2 per row on very small screens */
   .pv-levels .pv-level-row-items .pv-level{
     flex:1 1 calc(50% - 4px);
     font-size:.6rem;
   }
 }
 
-/* ---------- Isolation event archive ---------- */
+/* ============================================================
+   ISOLATION EVENT ARCHIVE  —  horizontal scroll with date headers
+   ============================================================ */
+
+/* --- Toolbar / tabs / filter tools --- */
 .pv-archive-toolbar{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
 .pv-archive-tabs{display:inline-flex;gap:5px;padding:4px;background:#eef2ff;border:1px solid #dbe3f4;border-radius:12px}
 .pv-archive-tab{border:0;border-radius:9px;padding:9px 14px;background:transparent;color:#475569;font-size:.78rem;font-weight:850;cursor:pointer}
@@ -778,29 +741,296 @@
 .pv-archive-tools button,.pv-page-btn{border:1px solid #c7d2fe;background:#eef2ff;color:#3730a3;padding:9px 13px;border-radius:10px;font-size:.76rem;font-weight:800;cursor:pointer}
 .pv-archive-tools button:disabled,.pv-page-btn:disabled{opacity:.4;cursor:not-allowed}
 .pv-archive-meta{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;color:#64748b;font-size:.73rem;margin:14px 0}
-.pv-archive-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}
-.pv-archive-date{grid-column:1/-1;padding:8px 12px;border-radius:10px;background:#eef2ff;color:#3730a3;font-size:.72rem;font-weight:900;letter-spacing:.05em}
-.pv-event-card{min-width:0;border:1px solid #dbe3ef;border-radius:15px;background:#fff;box-shadow:0 3px 12px rgba(15,23,42,.045);overflow:hidden}
-.pv-event-card-head{padding:15px 16px;background:linear-gradient(135deg,#f8fafc,#eef2ff);border-bottom:1px solid #e2e8f0}
+
+/* --- Horizontal scroller wrapper with floating nav arrows --- */
+.pv-archive-scroller{
+  position:relative;
+  display:flex;
+  align-items:stretch;
+  gap:8px;
+}
+
+/* --- The actual scroll viewport --- */
+.pv-archive-list{
+  flex:1 1 auto;
+  display:flex;
+  flex-direction:row;
+  align-items:flex-start;
+  gap:16px;
+  min-width:0;
+  overflow-x:auto;
+  overflow-y:hidden;
+  scroll-snap-type:x proximity;
+  scroll-behavior:smooth;
+  padding:6px 4px 14px;
+  scrollbar-width:thin;
+  scrollbar-color:#a5b4fc #eef2ff;
+  -webkit-overflow-scrolling:touch;
+  touch-action:pan-x;
+  min-height:200px;
+  outline:none;
+}
+.pv-archive-list:focus-visible{
+  box-shadow:0 0 0 3px rgba(99,102,241,.35);
+  border-radius:14px;
+}
+
+.pv-archive-list::-webkit-scrollbar{height:10px}
+.pv-archive-list::-webkit-scrollbar-track{background:#eef2ff;border-radius:10px;margin:0 4px}
+.pv-archive-list::-webkit-scrollbar-thumb{
+  background:linear-gradient(90deg,#818cf8,#6366f1);
+  border-radius:10px;
+  border:2px solid #eef2ff;
+}
+.pv-archive-list::-webkit-scrollbar-thumb:hover{
+  background:linear-gradient(90deg,#6366f1,#4f46e5);
+}
+
+/* --- Date group: [horizontal date header] on top of [row of cards] --- */
+.pv-archive-group{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  flex:0 0 auto;
+  scroll-snap-align:start;
+}
+
+.pv-archive-group-cards{
+  display:flex;
+  flex-direction:row;
+  align-items:stretch;
+  gap:12px;
+}
+
+/* Horizontal date label — normal rotation */
+.pv-archive-date{
+  display:inline-flex;
+  align-self:flex-start;
+  padding:8px 14px;
+  border-radius:10px;
+  background:linear-gradient(90deg,#eef2ff,#dbe3ff);
+  border:1px solid #c7d2fe;
+  color:#3730a3;
+  font-size:.68rem;
+  font-weight:900;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  white-space:nowrap;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.7), 0 1px 3px rgba(15,23,42,.05);
+}
+
+/* Fallback: if the archive JS renders a date marker directly under
+   #pv-archive-list (before our grouping JS re-runs) */
+.pv-archive-list > .pv-archive-date{
+  align-self:center;
+  flex:0 0 auto;
+  scroll-snap-align:start;
+}
+
+/* --- Compact event card --- */
+.pv-event-card{
+  flex:0 0 280px;
+  width:280px;
+  min-width:0;
+  border:1px solid #dbe3ef;
+  border-radius:15px;
+  background:#fff;
+  box-shadow:0 3px 12px rgba(15,23,42,.045);
+  overflow:hidden;
+  scroll-snap-align:start;
+  transition:transform .15s, box-shadow .2s, border-color .2s;
+  display:flex;
+  flex-direction:column;
+}
+.pv-event-card:hover{
+  transform:translateY(-2px);
+  box-shadow:0 14px 28px rgba(15,23,42,.12);
+  border-color:#c7d2fe;
+}
+
+/* --- Event card internals --- */
+.pv-event-card-head{padding:14px 14px 13px;background:linear-gradient(135deg,#f8fafc,#eef2ff);border-bottom:1px solid #e2e8f0}
 .pv-event-card-top{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap}
-.pv-event-time{font-size:.68rem;color:#64748b;font-weight:750}
-.pv-event-symbol{font-size:1rem;font-weight:900;color:#0f172a;margin-top:8px;overflow-wrap:anywhere}
-.pv-event-key{font-size:.67rem;color:#64748b;margin-top:4px;overflow-wrap:anywhere}
-.pv-event-badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
-.pv-event-badge{display:inline-flex;padding:5px 8px;border-radius:7px;background:#e0e7ff;color:#3730a3;font-size:.63rem;font-weight:900;letter-spacing:.025em}
-.pv-event-badge.ce{background:#dcfce7;color:#166534}.pv-event-badge.pe{background:#fee2e2;color:#991b1b}
-.pv-event-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:13px 15px}
-.pv-event-metric{padding:9px 10px;border:1px solid #edf0f5;border-radius:10px;background:#fbfcfe;min-width:0}
-.pv-event-metric span{display:block;color:#64748b;font-size:.59rem;font-weight:850;letter-spacing:.06em;text-transform:uppercase}
-.pv-event-metric strong{display:block;color:#0f172a;font-size:.81rem;font-weight:900;margin-top:5px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
-.pv-event-foot{padding:0 15px 14px}
-.pv-event-foot details{border-top:1px solid #edf0f5;padding-top:10px}
-.pv-event-foot summary{cursor:pointer;color:#4f46e5;font-size:.72rem;font-weight:850}
-.pv-event-json{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;padding:12px;margin-top:10px;border-radius:10px;background:#0f172a;color:#dbeafe;font:11px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
+.pv-event-time{font-size:.66rem;color:#64748b;font-weight:750}
+.pv-event-symbol{font-size:.95rem;font-weight:900;color:#0f172a;margin-top:7px;overflow-wrap:anywhere;line-height:1.25}
+.pv-event-key{font-size:.65rem;color:#64748b;margin-top:4px;overflow-wrap:anywhere;line-height:1.4}
+.pv-event-badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:9px}
+.pv-event-badge{display:inline-flex;padding:4px 7px;border-radius:7px;background:#e0e7ff;color:#3730a3;font-size:.6rem;font-weight:900;letter-spacing:.025em}
+.pv-event-badge.ce{background:#dcfce7;color:#166534}
+.pv-event-badge.pe{background:#fee2e2;color:#991b1b}
+.pv-event-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:11px 13px}
+.pv-event-metric{padding:8px 9px;border:1px solid #edf0f5;border-radius:9px;background:#fbfcfe;min-width:0}
+.pv-event-metric span{display:block;color:#64748b;font-size:.56rem;font-weight:850;letter-spacing:.06em;text-transform:uppercase;overflow-wrap:anywhere}
+.pv-event-metric strong{display:block;color:#0f172a;font-size:.76rem;font-weight:900;margin-top:4px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+
+/* Legacy foot — hidden; JS replaces it with the new action bar */
+.pv-event-foot{display:none !important}
+.pv-event-foot details{border-top:1px solid #edf0f5;padding-top:9px}
+.pv-event-foot summary{cursor:pointer;color:#4f46e5;font-size:.7rem;font-weight:850}
+.pv-event-json{display:none !important}
+
+/* ============================================================
+   NEW · Highlight chips + action bar inside each event card
+   ============================================================ */
+
+/* Highlight row (below badges, inside the card head) */
+.pv-event-highlights{
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+  margin-top:10px;
+}
+
+.pv-event-chip{
+  display:inline-flex;
+  align-items:center;
+  gap:5px;
+  padding:5px 9px;
+  border-radius:8px;
+  font-size:.62rem;
+  font-weight:850;
+  letter-spacing:.02em;
+  line-height:1.3;
+  max-width:100%;
+  overflow-wrap:anywhere;
+  word-break:break-word;
+}
+.pv-event-chip i{
+  font-size:.72rem;
+  flex-shrink:0;
+  opacity:.85;
+}
+.pv-event-chip.chip-time{
+  background:linear-gradient(135deg,#fef3c7,#fde68a);
+  color:#92400e;
+  border:1px solid #fcd34d;
+  box-shadow:0 2px 6px rgba(217,119,6,.1);
+}
+.pv-event-chip.chip-symbol{
+  background:linear-gradient(135deg,#dbeafe,#bfdbfe);
+  color:#1d4ed8;
+  border:1px solid #93c5fd;
+  box-shadow:0 2px 6px rgba(37,99,235,.1);
+}
+.pv-event-chip.chip-opposite{
+  background:linear-gradient(135deg,#fce7f3,#fbcfe8);
+  color:#9d174d;
+  border:1px solid #f9a8d4;
+  box-shadow:0 2px 6px rgba(219,39,119,.1);
+}
+
+/* Action bar (replaces the old JSON foot) */
+.pv-event-actions{
+  display:flex;
+  gap:8px;
+  padding:10px 13px 12px;
+  margin-top:auto;
+  border-top:1px solid #edf0f5;
+  background:linear-gradient(180deg,#ffffff,#f8fafd);
+  flex-wrap:wrap;
+}
+
+.pv-event-action-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:5px;
+  padding:8px 11px;
+  border-radius:9px;
+  font-size:.7rem;
+  font-weight:850;
+  cursor:pointer;
+  text-decoration:none;
+  border:1px solid transparent;
+  transition:transform .15s, box-shadow .2s, background .2s, border-color .2s;
+  flex:1 1 auto;
+  min-width:0;
+}
+.pv-event-action-btn i{font-size:.82rem;flex-shrink:0}
+.pv-event-action-btn:active{transform:scale(.97)}
+
+.pv-event-action-btn.copy{
+  background:#eef2ff;
+  border-color:#c7d2fe;
+  color:#3730a3;
+}
+.pv-event-action-btn.copy:hover{
+  background:#e0e7ff;
+  transform:translateY(-1px);
+  box-shadow:0 4px 12px rgba(55,48,163,.15);
+}
+.pv-event-action-btn.copy.copied{
+  background:linear-gradient(135deg,#dcfce7,#bbf7d0);
+  border-color:#86efac;
+  color:#166534;
+}
+
+.pv-event-action-btn.chart{
+  background:linear-gradient(135deg,#dcfce7,#bbf7d0);
+  border-color:#86efac;
+  color:#166534;
+}
+.pv-event-action-btn.chart:hover{
+  background:linear-gradient(135deg,#bbf7d0,#86efac);
+  transform:translateY(-1px);
+  box-shadow:0 4px 12px rgba(5,150,105,.18);
+}
+
+/* --- Empty state --- */
+.pv-archive-list > .pv-archive-empty{
+  flex:1 1 100%;
+  min-width:100%;
+  align-self:stretch;
+}
 .pv-archive-empty{padding:30px 18px;text-align:center;border:1px dashed #cbd5e1;border-radius:14px;background:#f8fafc;color:#64748b;font-size:.82rem}
+
+/* --- Scroll nav arrows --- */
+.pv-archive-nav{
+  flex:0 0 auto;
+  align-self:center;
+  width:34px;
+  height:34px;
+  border-radius:50%;
+  border:1px solid #c7d2fe;
+  background:#fff;
+  color:#4338ca;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  font-size:.8rem;
+  cursor:pointer;
+  box-shadow:0 4px 10px rgba(15,23,42,.08);
+  transition:transform .15s, box-shadow .2s, background .2s, opacity .2s;
+}
+.pv-archive-nav:hover{background:#eef2ff;transform:translateY(-1px);box-shadow:0 6px 14px rgba(15,23,42,.12)}
+.pv-archive-nav:active{transform:scale(.95)}
+.pv-archive-nav:disabled{opacity:.3;cursor:not-allowed;transform:none;box-shadow:none;background:#f8fafc}
+
+/* --- Pagination --- */
 .pv-archive-pagination{display:flex;justify-content:center;align-items:center;gap:12px;margin-top:18px}
 .pv-archive-page-label{color:#64748b;font-size:.75rem;font-weight:800;font-variant-numeric:tabular-nums}
-@media(max-width:760px){.pv-archive-list{grid-template-columns:1fr}.pv-archive-toolbar{align-items:flex-start}.pv-archive-tools{width:100%}.pv-archive-tools input{flex:1;min-width:0}}
+
+/* --- Archive responsive --- */
+@media(max-width:900px){
+  .pv-event-card{flex:0 0 250px;width:250px}
+  .pv-archive-group{gap:8px}
+  .pv-archive-group-cards{gap:10px}
+}
+@media(max-width:760px){
+  .pv-archive-toolbar{align-items:flex-start}
+  .pv-archive-tools{width:100%}
+  .pv-archive-tools input{flex:1;min-width:0}
+  .pv-event-card{flex:0 0 230px;width:230px}
+  .pv-archive-nav{width:30px;height:30px;font-size:.7rem}
+  .pv-archive-date{font-size:.62rem;padding:7px 11px}
+  .pv-event-action-btn{font-size:.66rem;padding:7px 9px}
+  .pv-event-chip{font-size:.58rem;padding:4px 7px}
+}
+@media(max-width:480px){
+  .pv-event-card{flex:0 0 210px;width:210px}
+  .pv-archive-date{font-size:.58rem;padding:6px 10px}
+  .pv-event-action-btn{font-size:.62rem;padding:6px 8px;gap:4px}
+}
 
 </style>
 {% endblock %}
@@ -903,7 +1133,21 @@
         <span id="pv-archive-summary">Checking today's saved isolation records…</span>
         <span id="pv-archive-updated">—</span>
       </div>
-      <div class="pv-archive-list" id="pv-archive-list" aria-live="polite"></div>
+
+      <!-- Horizontal scroller with prev/next arrows -->
+      <div class="pv-archive-scroller">
+        <button class="pv-archive-nav" id="pv-archive-scroll-left" type="button"
+                aria-label="Scroll events left" title="Scroll left">
+          <i class="bi bi-chevron-left"></i>
+        </button>
+        <div class="pv-archive-list" id="pv-archive-list"
+             aria-live="polite" tabindex="0" aria-orientation="horizontal"></div>
+        <button class="pv-archive-nav" id="pv-archive-scroll-right" type="button"
+                aria-label="Scroll events right" title="Scroll right">
+          <i class="bi bi-chevron-right"></i>
+        </button>
+      </div>
+
       <div class="pv-archive-pagination" id="pv-archive-pagination" hidden>
         <button class="pv-page-btn" id="pv-archive-prev" type="button">Previous</button>
         <span class="pv-archive-page-label" id="pv-archive-page-label">Page 1</span>
@@ -1039,7 +1283,7 @@
 <script src="/static/js/isolation_events_dashboard.js"></script>
 
 <!-- ============================================================
-     Lot-aware profit calculator (runs after dashboard renders)
+     Lot-aware profit calculator
      ============================================================ -->
 <script>
 (function () {
@@ -1295,6 +1539,454 @@
   }
 
   schedule();
+})();
+</script>
+
+<!-- ============================================================
+     Horizontal scroller arrows for the isolation event archive
+     ============================================================ -->
+<script>
+(function () {
+  "use strict";
+
+  var list  = document.getElementById("pv-archive-list");
+  var left  = document.getElementById("pv-archive-scroll-left");
+  var right = document.getElementById("pv-archive-scroll-right");
+  if (!list || !left || !right) return;
+
+  function updateArrows() {
+    var maxScroll = list.scrollWidth - list.clientWidth;
+    var scrollable = maxScroll > 4;
+    left.disabled  = !scrollable || list.scrollLeft <= 2;
+    right.disabled = !scrollable || list.scrollLeft >= maxScroll - 2;
+  }
+
+  function scrollByDir(dir) {
+    var step = Math.max(260, Math.floor(list.clientWidth * 0.8));
+    if (typeof list.scrollBy === "function") {
+      list.scrollBy({ left: dir * step, behavior: "smooth" });
+    } else {
+      list.scrollLeft += dir * step;
+    }
+  }
+
+  left.addEventListener("click",  function () { scrollByDir(-1); });
+  right.addEventListener("click", function () { scrollByDir(1);  });
+
+  list.addEventListener("scroll", updateArrows, { passive: true });
+  window.addEventListener("resize", updateArrows);
+
+  if (typeof MutationObserver !== "undefined") {
+    new MutationObserver(function () {
+      setTimeout(updateArrows, 30);
+    }).observe(list, { childList: true, subtree: true });
+  }
+
+  list.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowRight") { e.preventDefault(); scrollByDir(1);  }
+    if (e.key === "ArrowLeft")  { e.preventDefault(); scrollByDir(-1); }
+  });
+
+  setTimeout(updateArrows, 60);
+  setTimeout(updateArrows, 400);
+})();
+</script>
+
+<!-- ============================================================
+     Group cards by trading-date header (date on top of its cards)
+     ============================================================ -->
+<script>
+(function () {
+  "use strict";
+
+  var list = document.getElementById("pv-archive-list");
+  if (!list) return;
+
+  var groupingInProgress = false;
+
+  function createGroup(dateText) {
+    var group = document.createElement("div");
+    group.className = "pv-archive-group";
+
+    if (dateText) {
+      var header = document.createElement("div");
+      header.className = "pv-archive-date";
+      header.textContent = dateText;
+      group.appendChild(header);
+    }
+
+    var cardsWrap = document.createElement("div");
+    cardsWrap.className = "pv-archive-group-cards";
+    group.appendChild(cardsWrap);
+
+    return group;
+  }
+
+  function groupCards() {
+    if (groupingInProgress) return;
+
+    var children = Array.prototype.slice.call(list.children);
+    if (!children.length) return;
+
+    var hasFlatDate = false;
+    var hasEmpty    = false;
+    children.forEach(function (c) {
+      if (c.classList.contains("pv-archive-date")) hasFlatDate = true;
+      if (c.classList.contains("pv-archive-empty")) hasEmpty   = true;
+    });
+
+    if (!hasFlatDate || hasEmpty) return;
+
+    groupingInProgress = true;
+
+    var flatNodes = [];
+    children.forEach(function (child) {
+      if (child.classList.contains("pv-archive-group")) {
+        var dateEl = child.querySelector(".pv-archive-date");
+        if (dateEl) {
+          var mk = document.createElement("div");
+          mk.className = "pv-archive-date";
+          mk.textContent = dateEl.textContent;
+          flatNodes.push(mk);
+        }
+        var cardsWrap = child.querySelector(".pv-archive-group-cards");
+        if (cardsWrap) {
+          Array.prototype.slice.call(cardsWrap.children).forEach(function (c) {
+            flatNodes.push(c);
+          });
+        }
+      } else {
+        flatNodes.push(child);
+      }
+    });
+
+    var groups = [];
+    var currentGroup = null;
+
+    flatNodes.forEach(function (node) {
+      if (node.classList.contains("pv-archive-date")) {
+        currentGroup = createGroup(node.textContent);
+        groups.push(currentGroup);
+      } else if (node.classList.contains("pv-event-card")) {
+        if (!currentGroup) {
+          currentGroup = createGroup(null);
+          groups.push(currentGroup);
+        }
+        currentGroup.querySelector(".pv-archive-group-cards").appendChild(node);
+      } else {
+        groups.push(node);
+      }
+    });
+
+    while (list.firstChild) list.removeChild(list.firstChild);
+    groups.forEach(function (g) {
+      if (g && g.nodeType) list.appendChild(g);
+    });
+
+    groupingInProgress = false;
+  }
+
+  if (typeof MutationObserver !== "undefined") {
+    new MutationObserver(function () {
+      setTimeout(groupCards, 0);
+    }).observe(list, { childList: true });
+  }
+
+  setTimeout(groupCards, 0);
+  setTimeout(groupCards, 120);
+})();
+</script>
+
+<!-- ============================================================
+     EVENT CARD ENRICHER
+     Replaces the old expandable JSON footer with:
+       · Highlight chips (isolate time · symbol · opposite symbol)
+       · "Copy raw" button (writes JSON doc to clipboard)
+       · "Chart" link (built from instrument token)
+     ============================================================ -->
+<script>
+(function () {
+  "use strict";
+
+  var list = document.getElementById("pv-archive-list");
+  if (!list) return;
+
+  // ---- helpers -----------------------------------------------------------
+  function getPath(obj, path) {
+    if (!obj) return undefined;
+    var parts = path.split(".");
+    var cur = obj;
+    for (var i = 0; i < parts.length; i++) {
+      if (cur == null) return undefined;
+      cur = cur[parts[i]];
+    }
+    return cur;
+  }
+  function firstOf(data, paths) {
+    for (var i = 0; i < paths.length; i++) {
+      var v = getPath(data, paths[i]);
+      if (v != null && v !== "") return v;
+    }
+    return null;
+  }
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c];
+    });
+  }
+  function formatOpposite(v) {
+    if (v == null) return "";
+    if (Array.isArray(v)) {
+      return v.map(function (x) {
+        if (x && typeof x === "object") {
+          return x.symbol || x.trading_symbol || x.tradingSymbol || "";
+        }
+        return String(x);
+      }).filter(Boolean).join(" · ");
+    }
+    if (typeof v === "object") {
+      return v.symbol || v.trading_symbol || v.tradingSymbol || "";
+    }
+    return String(v);
+  }
+
+  // Build a chart URL keyed on the instrument token.
+  // Source = UPSTOX_APP_V2, so we default to Upstox Pro's chart route
+  // which accepts Upstox `instrument_key` values (EXCHANGE_SEGMENT|TOKEN).
+  // Adjust the base URL here if your environment uses a different host.
+  function chartUrl(token, symbol) {
+  var t = token ? String(token).trim() : "";
+  var s = symbol ? String(symbol).trim() : "";
+  // Prefer the numeric exchange token. If what we got looks like
+  // "NSE_FO|47855", strip everything up to the pipe to get "47855".
+  console.log("chartUrl() token:", t, "symbol:", s);
+  if (t) {
+    var pipeIdx = t.indexOf("|");
+    var numeric = pipeIdx !== -1 ? t.slice(pipeIdx + 1) : t;
+    return "/chart/" + encodeURIComponent(numeric);
+  }
+  if (s) {
+    return "/chart/" + encodeURIComponent(s);
+  }
+  return null;
+}
+
+  // ---- extraction --------------------------------------------------------
+  function readRawJson(card) {
+    var jsonEl = card.querySelector(".pv-event-json");
+    if (jsonEl) {
+      var txt = (jsonEl.textContent || "").trim();
+      if (txt) card.dataset.pvRawJson = txt;
+    }
+    return card.dataset.pvRawJson || "";
+  }
+
+  function extractInfo(card, rawJson) {
+    var data = {};
+    if (rawJson) {
+      try { data = JSON.parse(rawJson) || {}; } catch (e) { data = {}; }
+    }
+    var headSymbol = (card.querySelector(".pv-event-symbol") || {}).textContent || "";
+
+    var symbol = firstOf(data, [
+      "trading_symbol", "tradingSymbol", "symbol",
+      "instrument_symbol", "instrumentSymbol",
+      "instrument.trading_symbol", "instrument.tradingSymbol",
+      "event.trading_symbol", "event.symbol",
+      "payload.trading_symbol", "payload.symbol",
+      "data.trading_symbol", "data.symbol"
+    ]) || headSymbol;
+
+    var token = firstOf(data, [
+  // Numeric exchange token — preferred for /chart/{token}
+  "exchange_token", "exchangeToken",
+  "instrument.exchange_token", "instrument.exchangeToken",
+  "event.exchange_token", "event.exchangeToken",
+  "payload.exchange_token", "payload.exchangeToken",
+  "data.exchange_token", "data.exchangeToken",
+
+  // Fall back to full instrument_key / instrument_token if exchange_token missing
+  "instrument_token", "instrumentToken", "token",
+  "instrument_key", "instrumentKey",
+  "instrument.token", "instrument.instrument_token", "instrument.instrument_key",
+  "event.instrument_token", "event.instrumentToken", "event.instrument_key",
+  "payload.instrument_token", "payload.token", "payload.instrument_key",
+  "data.instrument_token", "data.token", "data.instrument_key"
+]) || "";
+
+    var isolateTime = firstOf(data, [
+      "isolate_time", "isolateTime",
+      "isolated_at", "isolatedAt",
+      "isolated_time", "isolatedTime",
+      "isolation_time", "isolationTime",
+      "event.isolate_time", "event.isolated_at",
+      "payload.isolate_time", "payload.isolated_at",
+      "data.isolate_time", "data.isolated_at"
+    ]) || "";
+
+    var opposite = firstOf(data, [
+      "opposite_symbols", "oppositeSymbols",
+      "opposite_symbol", "oppositeSymbol",
+      "opposite_instruments", "oppositeInstruments",
+      "opposite", "paired_symbol", "pairedSymbol",
+      "event.opposite_symbols", "event.opposite_symbol",
+      "payload.opposite_symbols"
+    ]);
+
+    return {
+      symbol:      symbol ? String(symbol).trim() : "",
+      token:       token  ? String(token).trim()  : "",
+      isolateTime: isolateTime ? String(isolateTime).trim() : "",
+      opposite:    formatOpposite(opposite),
+      raw:         rawJson,
+      data:        data
+    };
+  }
+
+  // ---- builders ----------------------------------------------------------
+  function buildHighlights(info) {
+    var wrap = document.createElement("div");
+    wrap.className = "pv-event-highlights";
+
+    if (info.isolateTime) {
+      var t = document.createElement("span");
+      t.className = "pv-event-chip chip-time";
+      t.title = "Isolate time: " + info.isolateTime;
+      t.innerHTML = '<i class="bi bi-clock-history"></i> ' + escapeHtml(info.isolateTime);
+      wrap.appendChild(t);
+    }
+
+    if (info.symbol) {
+      var s = document.createElement("span");
+      s.className = "pv-event-chip chip-symbol";
+      s.title = "Instrument symbol: " + info.symbol;
+      s.innerHTML = '<i class="bi bi-bullseye"></i> ' + escapeHtml(info.symbol);
+      wrap.appendChild(s);
+    }
+
+    if (info.opposite) {
+      var o = document.createElement("span");
+      o.className = "pv-event-chip chip-opposite";
+      o.title = "Opposite symbol(s): " + info.opposite;
+      o.innerHTML = '<i class="bi bi-arrow-left-right"></i> ' + escapeHtml(info.opposite);
+      wrap.appendChild(o);
+    }
+
+    return wrap;
+  }
+
+  function buildActions(info) {
+    var wrap = document.createElement("div");
+    wrap.className = "pv-event-actions";
+
+    // Copy raw doc
+    var copyBtn = document.createElement("button");
+    copyBtn.type = "button";
+    copyBtn.className = "pv-event-action-btn copy";
+    copyBtn.title = "Copy raw event document";
+    copyBtn.innerHTML = '<i class="bi bi-clipboard"></i> Copy raw';
+    copyBtn.addEventListener("click", function () {
+      var text = info.raw || "";
+      function done() {
+        copyBtn.classList.add("copied");
+        copyBtn.innerHTML = '<i class="bi bi-check2"></i> Copied!';
+        setTimeout(function () {
+          copyBtn.classList.remove("copied");
+          copyBtn.innerHTML = '<i class="bi bi-clipboard"></i> Copy raw';
+        }, 1500);
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(fallback);
+      } else {
+        fallback();
+      }
+      function fallback() {
+        try {
+          var ta = document.createElement("textarea");
+          ta.value = text;
+          ta.setAttribute("readonly", "");
+          ta.style.position = "fixed";
+          ta.style.top = "-1000px";
+          ta.style.opacity = "0";
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand("copy");
+          document.body.removeChild(ta);
+          done();
+        } catch (e) { /* no-op */ }
+      }
+    });
+    wrap.appendChild(copyBtn);
+
+    // Chart link
+    var url = chartUrl(info.token, info.symbol);
+    if (url) {
+      var chart = document.createElement("a");
+      chart.className = "pv-event-action-btn chart";
+      chart.href = url;
+      chart.target = "_blank";
+      chart.rel = "noopener noreferrer";
+      chart.title = info.token
+        ? "Open chart for instrument token " + info.token
+        : "Open chart for " + info.symbol;
+      chart.dataset.instrumentToken = info.token || "";
+      chart.innerHTML = '<i class="bi bi-graph-up-arrow"></i> Chart';
+      wrap.appendChild(chart);
+    }
+
+    return wrap;
+  }
+
+  // ---- post-processing ---------------------------------------------------
+  function processCard(card) {
+    if (!card) return;
+    var foot = card.querySelector(".pv-event-foot");
+
+    // Already processed and no fresh re-render → skip
+    if (card.dataset.pvProcessed === "1" && !foot) return;
+
+    // Clean up previous additions (re-render case)
+    Array.prototype.forEach.call(
+      card.querySelectorAll(".pv-event-actions, .pv-event-highlights"),
+      function (el) { el.parentNode && el.parentNode.removeChild(el); }
+    );
+
+    var rawJson = readRawJson(card);
+    var info = extractInfo(card, rawJson);
+
+    // Replace foot with actions
+    var actions = buildActions(info);
+    if (foot) {
+      foot.parentNode.insertBefore(actions, foot);
+      foot.parentNode.removeChild(foot);
+    } else {
+      card.appendChild(actions);
+    }
+
+    // Insert highlights into the card head (after the badges)
+    var head = card.querySelector(".pv-event-card-head");
+    if (head) {
+      var highlights = buildHighlights(info);
+      if (highlights.children.length) head.appendChild(highlights);
+    }
+
+    card.dataset.pvProcessed = "1";
+  }
+
+  function processAll() {
+    var cards = list.querySelectorAll(".pv-event-card");
+    Array.prototype.forEach.call(cards, processCard);
+  }
+
+  if (typeof MutationObserver !== "undefined") {
+    new MutationObserver(function () {
+      setTimeout(processAll, 0);
+    }).observe(list, { childList: true, subtree: true });
+  }
+
+  setTimeout(processAll, 0);
+  setTimeout(processAll, 120);
+  setTimeout(processAll, 500);
 })();
 </script>
 {% endblock %}
