@@ -269,6 +269,7 @@ from routes.page_routes import router as page_router
 from routes.performance_routes import router as performance_router
 from routes.readiness_routes import router as readiness_router
 from routes.simulation_routes import router as simulation_router
+from routes.admin_supertrend_routes import router as admin_supertrend_router
 from routes.upstox_routes import router as upstox_router
 from routes.live_sr_routes import router as live_sr_router
 from routes.live_sr_calc_routes import router as live_sr_calc_router
@@ -1312,6 +1313,7 @@ app.include_router(isolation_receiver_router)
 _AUTH = [Depends(require_any_auth)] if _PROD_MODE else []
 
 app.include_router(admin_router, dependencies=_AUTH)
+app.include_router(admin_supertrend_router, dependencies=_AUTH)
 app.include_router(folder_router, dependencies=_AUTH)
 app.include_router(log_router, dependencies=_AUTH)
 # Isolation router enforces admin auth on write operations itself. Its
