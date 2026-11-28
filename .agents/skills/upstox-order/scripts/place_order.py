@@ -218,7 +218,10 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict | No
         if raw_lot_size in (None, "", 0) and segment == "FO":
             raise ValueError("F&O lot_size is missing from instrument metadata.")
         lot_size = int(raw_lot_size or 1)  # EQ may default to one share if omitted.
-        tick_size = float(item["tick_size"])
+        tick_size_raw = float(item["tick_size"])
+        # Upstox NSE/BSE instrument metadata expresses tick_size in paise
+        # (e.g. 5.0 means ₹0.05). Convert to rupees before price rounding.
+        tick_size = tick_size_raw / 100.0 if exchange in {"NSE", "BSE"} and tick_size_raw >= 1 else tick_size_raw
     except (TypeError, ValueError, KeyError) as exc:
         raise ValueError(
             f"Instrument metadata is missing valid lot_size/tick_size for "
@@ -236,6 +239,8 @@ def fetch_instrument_metadata(client: Any, instrument_key: str, quote: dict | No
         "instrument_type": item.get("instrument_type"),
         "lot_size": lot_size,
         "tick_size": tick_size,
+        "tick_size_raw": tick_size_raw,
+        "tick_size_source_unit": "PAISE" if exchange in {"NSE", "BSE"} and tick_size_raw >= 1 else "RUPEES",
         "freeze_quantity": item.get("freeze_quantity"),
         "expiry": item.get("expiry"),
         "underlying_symbol": item.get("underlying_symbol"),
@@ -353,11 +358,35 @@ def main() -> int:
                 "status": "PREVIEW",
                 **details,
                 "submitted": False,
-                "message": "Preview only. No order was submitted.",
+                "message": (
+                    "Preview only. No order was submitted. Upstox API does not support "
+                    "AMO submissions; an AMO preview is informational and must be placed "
+                    "manually in Upstox mobile/web."
+                    if is_amo else "Preview only. No order was submitted."
+                ),
             })
 
-        # No --preview means submit immediately. The is_amo flag is false
-        # unless explicitly supplied as is_amo=true / --is-amo true.
+        # Upstox API explicitly rejects AMO requests with UDAPI1162. Do not
+        # submit, retry as a regular order, or silently change is_amo.
+        if is_amo:
+            return emit({
+                "status": "UNSUPPORTED",
+                **details,
+                "submitted": False,
+                "error": {
+                    "code": "UDAPI1162",
+                    "message": (
+                        "AMO orders are not supported through the Upstox API. "
+                        "Place this AMO manually using Upstox mobile or web."
+                    ),
+                },
+                "message": (
+                    "No order was submitted. The API does not support AMO. "
+                    "The order was NOT converted to a normal order."
+                ),
+            }, 1)
+
+        # No --preview means submit a normal order immediately.
         import upstox_client
         try:
             body_model = upstox_client.PlaceOrderV3Request(**payload)
