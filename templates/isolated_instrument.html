@@ -1855,6 +1855,22 @@
       "data.instrument_token", "data.token"
     ]) || "";
 
+    var underlyingKey = firstOf(data, [
+      "underlying_key", "underlyingKey", "underlying_instrument_key",
+      "underlyingInstrumentKey", "underlying.instrument_key",
+      "instrument.underlying_key", "instrument.underlyingKey",
+      "event.underlying_key", "payload.underlying_key", "data.underlying_key",
+      "explanation.option_snapshot.underlying_key",
+      "explanation.option_snapshot.underlying_instrument_key"
+    ]) || "";
+
+    var expiryDate = firstOf(data, [
+      "expiry_date", "expiryDate", "expiry", "instrument.expiry_date",
+      "instrument.expiry", "event.expiry_date", "payload.expiry_date",
+      "data.expiry_date", "explanation.option_snapshot.expiry_date",
+      "explanation.option_snapshot.expiry"
+    ]) || "";
+
     var isolateTime = firstOf(data, [
       "isolation_touch_time", "isolation_created_at",
       "isolate_time", "isolateTime",
@@ -1909,6 +1925,8 @@
     return {
       symbol:        symbol ? String(symbol).trim() : "",
       token:         token  ? String(token).trim()  : "",
+      underlyingKey: underlyingKey ? String(underlyingKey).trim() : "",
+      expiryDate:    expiryDate ? String(expiryDate).trim() : "",
       tradeDate:     tradeDate,
       isolateTime:   isolateTime ? String(isolateTime).trim() : "",
       opposite:      formatOpposite(opposite),
@@ -2140,6 +2158,8 @@
         instrument_key: info.token,
         target_date: info.tradeDate
       });
+      if (info.underlyingKey) params.set("underlying_key", info.underlyingKey);
+      if (info.expiryDate) params.set("expiry_date", info.expiryDate);
       var response = await fetch("/admin/supertrend/analysis?" + params.toString(), {
         method: "GET",
         headers: {Accept: "application/json"},
