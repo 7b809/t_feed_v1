@@ -1,24 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["status", "kind", "request", "data", "raw_response", "errors", "error"],
+  "required": ["status", "kind", "request", "instrument_metadata", "data", "raw_response", "errors", "error"],
   "properties": {
     "status": {"type": "string", "enum": ["success", "partial", "error"]},
     "kind": {"type": "string", "enum": ["required-margin", "brokerage", "both"]},
     "request": {
       "type": "object",
-      "required": ["instrument", "quantity", "transaction_type", "product", "requested_price", "price", "price_source"],
+      "required": ["instrument", "quantity", "lots", "transaction_type", "product", "requested_price", "price", "price_source", "quantity_source"],
       "properties": {
         "instrument": {"type": "string"},
-        "quantity": {"type": "integer"},
+        "quantity": {"type": ["integer", "null"]},
+        "lots": {"type": ["integer", "null"]},
         "transaction_type": {"type": "string", "enum": ["BUY", "SELL"]},
-        "product": {"type": "string"},
+        "product": {"type": "string", "enum": ["I", "D", "CO", "OCO", "MTF"]},
         "requested_price": {"type": "string"},
         "price": {"type": ["number", "null"]},
-        "price_source": {"type": ["string", "null"], "enum": ["LIVE_LTP", "PROVIDED", null]}
+        "price_source": {"type": ["string", "null"], "enum": ["LIVE_LTP", "PROVIDED", null]},
+        "quantity_source": {"type": ["string", "null"], "enum": ["LOTS", "EXPLICIT_QUANTITY", "DEFAULT_ONE_LOT", null]}
       },
       "additionalProperties": true
     },
+    "instrument_metadata": {"type": ["object", "null"]},
     "data": {},
     "raw_response": {},
     "errors": {"type": "array", "items": {"type": "object"}},
